@@ -111,6 +111,12 @@ def db(monkeypatch):
         "enforce_driver_plan_read_access",
         lambda u, p: 1,
     )
+    # company_id dinámico del contexto (no literal 3)
+    monkeypatch.setattr(
+        svc,
+        "_authorized_company_id_for_plan",
+        lambda u, p: 7,
+    )
     monkeypatch.setattr(
         svc,
         "_resolve_client",
@@ -213,7 +219,7 @@ def test_authorized_approve_then_reuse_verified(db):
     ver = loc_repo.get_verified_location(cur, 1001)
     assert ver is not None
     assert abs(float(ver["latitude"]) - (-41.4710)) < 1e-6
-    assert ver["company_id"] == 3
+    assert int(ver["company_id"]) == 7
     cur.close()
 
     enriched = svc.enrich_client_location_fields(
@@ -293,10 +299,10 @@ def test_confirm_missing_object_no_confirm(db, monkeypatch):
     photo = loc_repo.insert_facade_photo(
         cur,
         client_id=1001,
-        company_id=3,
+        company_id=7,
         dispatch_plan_id=1,
         customer_key="id:1001",
-        object_key="operaciones/clientes/3/1001/fachadas/deadbeef.jpg",
+        object_key="operaciones/clientes/7/1001/fachadas/deadbeef.jpg",
         content_type="image/jpeg",
         size_bytes=None,
         sha256=None,
@@ -331,10 +337,10 @@ def test_confirm_other_client_forbidden(db, monkeypatch):
     photo = loc_repo.insert_facade_photo(
         cur,
         client_id=9999,
-        company_id=3,
+        company_id=7,
         dispatch_plan_id=1,
         customer_key="id:9999",
-        object_key="operaciones/clientes/3/9999/fachadas/x.jpg",
+        object_key="operaciones/clientes/7/9999/fachadas/x.jpg",
         content_type="image/jpeg",
         size_bytes=10,
         sha256=None,
@@ -377,10 +383,10 @@ def test_confirm_rejects_fake_content_without_confirming(db, monkeypatch):
     photo = loc_repo.insert_facade_photo(
         cur,
         client_id=1001,
-        company_id=3,
+        company_id=7,
         dispatch_plan_id=1,
         customer_key="id:1001",
-        object_key="operaciones/clientes/3/1001/fachadas/fake.jpg",
+        object_key="operaciones/clientes/7/1001/fachadas/fake.jpg",
         content_type="image/jpeg",
         size_bytes=24,
         sha256=None,
@@ -438,10 +444,10 @@ def test_confirm_validates_rewrites_and_is_idempotent(db, monkeypatch):
     photo = loc_repo.insert_facade_photo(
         cur,
         client_id=1001,
-        company_id=3,
+        company_id=7,
         dispatch_plan_id=1,
         customer_key="id:1001",
-        object_key="operaciones/clientes/3/1001/fachadas/ok.jpg",
+        object_key="operaciones/clientes/7/1001/fachadas/ok.jpg",
         content_type="image/jpeg",
         size_bytes=len(jpeg),
         sha256=None,
@@ -484,10 +490,10 @@ def test_confirm_rejects_object_key_for_other_client_prefix(db, monkeypatch):
     photo = loc_repo.insert_facade_photo(
         cur,
         client_id=1001,
-        company_id=3,
+        company_id=7,
         dispatch_plan_id=1,
         customer_key="id:1001",
-        object_key="operaciones/clientes/3/9999/fachadas/hijack.jpg",
+        object_key="operaciones/clientes/7/9999/fachadas/hijack.jpg",
         content_type="image/jpeg",
         size_bytes=10,
         sha256=None,
@@ -509,6 +515,70 @@ def test_confirm_rejects_object_key_for_other_client_prefix(db, monkeypatch):
     assert ei.value.status_code == 400
     again = loc_repo.get_facade_photo(cur, int(photo["id"]))
     assert again["upload_confirmed"] is False
+    cur.close()
+
+
+def test_confirm_rejects_other_company_id(db, monkeypatch):
+    from backend.services import object_storage_service as storage
+
+    monkeypatch.setattr(storage, "is_r2_configured", lambda: True)
+    cur = db.cursor()
+    photo = loc_repo.insert_facade_photo(
+        cur,
+        client_id=1001,
+        company_id=3,  # distinta a company autorizada (=7)
+        dispatch_plan_id=1,
+        customer_key="id:1001",
+        object_key="operaciones/clientes/3/1001/fachadas/cross.jpg",
+        content_type="image/jpeg",
+        size_bytes=10,
+        sha256=None,
+        width=None,
+        height=None,
+        captured_by_user_id=7,
+        validation_status="upload_pending",
+        upload_confirmed=False,
+        idempotency_key="p-cross-co",
+    )
+    db.commit()
+    with pytest.raises(HTTPException) as ei:
+        svc.confirm_facade_upload(
+            user={"id": 7},
+            plan_id=1,
+            customer_key="id:1001",
+            photo_id=int(photo["id"]),
+        )
+    assert ei.value.status_code == 403
+    again = loc_repo.get_facade_photo(cur, int(photo["id"]))
+    assert again["upload_confirmed"] is False
+    cur.close()
+
+
+def test_propose_persists_authorized_company_id(db):
+    out = svc.propose_location(
+        user={"id": 7},
+        plan_id=1,
+        customer_key="id:1001",
+        latitude=-41.473,
+        longitude=-72.943,
+        accuracy_m=9,
+        confirm_low_accuracy=True,
+        confirm_significant_move=True,
+    )
+    assert int(out["proposal"]["company_id"]) == 7
+    cur = db.cursor()
+    ver_before = loc_repo.get_verified_location(cur, 1001)
+    assert ver_before is None
+    cur.close()
+    approved = svc.review_proposal_erp(
+        user={"id": 99},
+        proposal_id=int(out["proposal"]["id"]),
+        approve=True,
+    )
+    assert approved["proposal"]["status"] == "approved"
+    cur = db.cursor()
+    ver = loc_repo.get_verified_location(cur, 1001)
+    assert int(ver["company_id"]) == 7
     cur.close()
 
 

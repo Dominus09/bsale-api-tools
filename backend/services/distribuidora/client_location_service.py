@@ -11,10 +11,12 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from backend.auth.multiapp import company_allowed, get_scope
 from backend.db import get_connection
 from backend.repositories.distribuidora import client_location_repo as loc_repo
 from backend.repositories.distribuidora import dispatch_plan_load_batch_repo as events_repo
 from backend.services import object_storage_service as storage
+from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
 from backend.services.distribuidora import dispatch_plan_pwa_driver_read_service as read_svc
 from backend.utils.json_safe import serialize_value
 
@@ -150,6 +152,75 @@ def _staff_label(user: dict[str, Any] | None) -> str | None:
     if not user:
         return None
     return str(user.get("email") or user.get("name") or user.get("sub") or "").strip() or None
+
+
+def _authorized_company_id_for_plan(user: dict[str, Any], plan_id: int) -> int:
+    """company_id real del contexto autorizado (nunca un literal fijo).
+
+    Precedencia:
+    1) simple_planning_sessions del plan
+    2) company_id dominante en documentos OC del plan
+    3) única empresa del alcance del usuario
+    """
+    scope = get_scope(user)
+    if scope.load_failed or getattr(scope, "companies_unverified", False):
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo verificar empresas autorizadas",
+        )
+
+    company_id: int | None = None
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        company_id, _office_id = driver_svc.resolve_plan_company_office(cur, int(plan_id))
+        if company_id is None:
+            try:
+                cur.execute(
+                    """
+                    SELECT d.company_id
+                    FROM distribuidora.dispatch_plan_orders dpo
+                    JOIN distribuidora.documents d
+                      ON d.document_id = dpo.oc_document_id
+                    WHERE dpo.dispatch_plan_id = %s
+                      AND d.company_id IS NOT NULL
+                    GROUP BY d.company_id
+                    ORDER BY COUNT(*) DESC, d.company_id ASC
+                    LIMIT 1
+                    """,
+                    (int(plan_id),),
+                )
+                row = cur.fetchone()
+                if row and row[0] is not None:
+                    company_id = int(row[0])
+            except Exception:
+                # Tabla ausente / fallo puntual: no inventar company_id.
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        cur.close()
+    finally:
+        conn.close()
+
+    if company_id is None and scope.company_ids is not None and len(scope.company_ids) == 1:
+        company_id = int(scope.company_ids[0])
+
+    if company_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No se pudo determinar company_id del despacho autorizado; "
+                "no se registra ubicación ni fotografía."
+            ),
+        )
+    if not company_allowed(scope, int(company_id)):
+        raise HTTPException(status_code=403, detail="Empresa no autorizada")
+    return int(company_id)
+
+
+def _facade_object_prefix(*, company_id: int, client_id: int) -> str:
+    return f"operaciones/clientes/{int(company_id)}/{int(client_id)}/fachadas/"
 
 
 def schema_status() -> dict[str, Any]:
@@ -370,11 +441,12 @@ def propose_location(
                     }
                 )
 
+        company_id = _authorized_company_id_for_plan(user, int(plan_id))
         loc_repo.supersede_pending(cur, client_id)
         proposal = loc_repo.insert_proposal(
             cur,
             client_id=client_id,
-            company_id=3,
+            company_id=company_id,
             dispatch_plan_id=int(plan_id),
             customer_key=customer_key.strip(),
             proposed_lat=lat,
@@ -491,13 +563,14 @@ def prepare_facade_upload(
                         "r2": storage.status_payload(),
                     }
                 )
+        company_id = _authorized_company_id_for_plan(user, int(plan_id))
         object_key = storage.build_facade_object_key(
-            company_id=3, client_id=client_id, ext=ext
+            company_id=company_id, client_id=client_id, ext=ext
         )
         photo = loc_repo.insert_facade_photo(
             cur,
             client_id=client_id,
-            company_id=3,
+            company_id=company_id,
             dispatch_plan_id=int(plan_id),
             customer_key=customer_key.strip(),
             object_key=object_key,
@@ -588,8 +661,9 @@ def upload_facade_bytes(
                 return serialize_value(
                     {"idempotent": True, "photo": existing, "message_es": "Foto ya registrada."}
                 )
+        company_id = _authorized_company_id_for_plan(user, int(plan_id))
         object_key = storage.build_facade_object_key(
-            company_id=3, client_id=client_id, ext=ext
+            company_id=company_id, client_id=client_id, ext=ext
         )
         try:
             storage.put_bytes(object_key=object_key, body=data, content_type=mime)
@@ -601,7 +675,7 @@ def upload_facade_bytes(
         photo = loc_repo.insert_facade_photo(
             cur,
             client_id=client_id,
-            company_id=3,
+            company_id=company_id,
             dispatch_plan_id=int(plan_id),
             customer_key=customer_key.strip(),
             object_key=object_key,
@@ -708,9 +782,16 @@ def confirm_facade_upload(
                 }
             )
 
+        company_id = _authorized_company_id_for_plan(user, int(plan_id))
+        photo_company = int(photo.get("company_id") or 0)
+        if photo_company != company_id:
+            raise HTTPException(
+                status_code=403,
+                detail="La fotografía no pertenece a la empresa autorizada del despacho",
+            )
         object_key = str(photo["object_key"])
         # El object_key se generó server-side con company/client; rechazar claves ajenas.
-        expected_prefix = f"operaciones/clientes/3/{client_id}/fachadas/"
+        expected_prefix = _facade_object_prefix(company_id=company_id, client_id=client_id)
         if not object_key.startswith(expected_prefix) or ".." in object_key:
             raise HTTPException(status_code=400, detail="Clave de objeto inválida para este cliente")
 
@@ -898,7 +979,7 @@ def review_proposal_erp(
             loc_repo.upsert_verified_location(
                 cur,
                 client_id=int(updated["client_id"]),
-                company_id=int(updated.get("company_id") or 3),
+                company_id=int(updated["company_id"]),
                 latitude=float(updated["proposed_lat"]),
                 longitude=float(updated["proposed_lng"]),
                 accuracy_m=updated.get("accuracy_m"),

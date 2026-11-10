@@ -110,3 +110,51 @@ def test_normalize_rejects_non_image():
     with pytest.raises(Exception) as ei:
         svc._normalize_facade_image(b"%PDF-1.4 fake", "image/jpeg")
     assert ei.value.status_code == 400
+
+
+def test_facade_prefix_uses_company_id():
+    assert svc._facade_object_prefix(company_id=7, client_id=1001) == (
+        "operaciones/clientes/7/1001/fachadas/"
+    )
+    assert "clientes/3/" not in svc._facade_object_prefix(company_id=12, client_id=1)
+
+
+def test_authorized_company_id_rejects_disallowed(monkeypatch):
+    class _Scope:
+        load_failed = False
+        companies_unverified = False
+        company_ids = (3,)
+
+    class _Cur:
+        def close(self):
+            return None
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+        def close(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    monkeypatch.setattr(svc, "get_scope", lambda u: _Scope())
+    monkeypatch.setattr(svc, "company_allowed", lambda scope, cid: False)
+    monkeypatch.setattr(
+        svc.driver_svc,
+        "resolve_plan_company_office",
+        lambda cur, plan_id: (9, 1),
+    )
+    monkeypatch.setattr(svc, "get_connection", lambda: _Conn())
+    with pytest.raises(Exception) as ei:
+        svc._authorized_company_id_for_plan({"id": 1}, 1)
+    assert ei.value.status_code == 403
+
+
+def test_object_key_uses_dynamic_company():
+    from backend.services import object_storage_service as storage
+
+    key = storage.build_facade_object_key(company_id=7, client_id=55, ext="jpg")
+    assert key.startswith("operaciones/clientes/7/55/fachadas/")
+    assert "/clientes/3/" not in key
