@@ -135,6 +135,8 @@ DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
     "055_client_location_photos.sql",
     # P4 visitas de entrega / evidencias. Aplicar solo vía runner explícito.
     "056_delivery_visits_evidence.sql",
+    # P4 complemento: guards de cierre / conformidad.
+    "057_delivery_visit_closure_guards.sql",
 )
 
 _ENSURE_SCHEMA_NOOP_WARNED = False

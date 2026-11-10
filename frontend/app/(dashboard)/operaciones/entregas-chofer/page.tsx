@@ -108,34 +108,59 @@ export default function EntregasChoferPage() {
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-left">
               <tr>
-                <th className="p-2">ID</th>
-                <th className="p-2">Plan</th>
                 <th className="p-2">Cliente</th>
+                <th className="p-2">Chofer</th>
                 <th className="p-2">Estado</th>
-                <th className="p-2">Inicio</th>
-                <th className="p-2">Declarado</th>
-                <th className="p-2">Pendiente</th>
+                <th className="p-2">Revisión</th>
+                <th className="p-2">Inicio / Término</th>
+                <th className="p-2">Docs</th>
+                <th className="p-2">Unid. ent/pend</th>
+                <th className="p-2">Cobranza decl.</th>
+                <th className="p-2">Firma</th>
+                <th className="p-2">Evidencias</th>
               </tr>
             </thead>
             <tbody>
               {items.map((it) => (
                 <tr key={it.id} className="border-t">
-                  <td className="p-2">{it.id}</td>
-                  <td className="p-2">{it.dispatch_plan_id}</td>
-                  <td className="p-2">{it.customer_key}</td>
+                  <td className="p-2">
+                    <div>{it.customer_key}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Plan {it.dispatch_plan_id} · #{it.id}
+                    </div>
+                  </td>
+                  <td className="p-2">{it.driver_user_id}</td>
                   <td className="p-2">
                     {STATUS_ES[it.status] || it.status}
-                    {it.result_reason ? ` · ${it.result_reason}` : ""}
+                    {it.result_reason ? (
+                      <div className="text-xs text-muted-foreground">{it.result_reason}</div>
+                    ) : null}
                   </td>
-                  <td className="p-2 whitespace-nowrap">
+                  <td className="p-2">
+                    {it.closure_review_status === "pending_review"
+                      ? "Pendiente revisión"
+                      : it.closure_review_status === "verified"
+                        ? "Verificada"
+                        : "—"}
+                  </td>
+                  <td className="p-2 whitespace-nowrap text-xs">
                     {it.started_at_local?.slice(0, 16) || "—"}
+                    <br />
+                    {it.ended_at_local?.slice(0, 16) || "—"}
+                  </td>
+                  <td className="p-2">{it.document_count ?? "—"}</td>
+                  <td className="p-2">
+                    {it.delivered_units ?? 0}/{it.pending_units ?? 0}
                   </td>
                   <td className="p-2">
                     {new Intl.NumberFormat("es-CL").format(it.declared_collected || 0)}
+                    <div className="text-xs text-muted-foreground">
+                      pend.{" "}
+                      {new Intl.NumberFormat("es-CL").format(it.pending_balance_sum || 0)}
+                    </div>
                   </td>
-                  <td className="p-2">
-                    {new Intl.NumberFormat("es-CL").format(it.pending_balance_sum || 0)}
-                  </td>
+                  <td className="p-2">{it.conformity_status || "—"}</td>
+                  <td className="p-2">{it.evidence_count ?? 0}</td>
                 </tr>
               ))}
             </tbody>

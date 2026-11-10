@@ -61,6 +61,7 @@ def main() -> int:
         "backend/tests/test_delivery_visit_p4.py",
         "backend/tests/test_delivery_visit_p4_isolated_pg.py",
         "backend/tests/test_delivery_whatsapp_report.py",
+        "backend/tests/test_delivery_visit_closure.py",
         "backend/tests/test_pwa_driver_p2_navigation.py",
         "backend/tests/test_schema_bootstrap.py",
         "-vv",

@@ -48,6 +48,7 @@ ORDER_LOAD_FILE = "053_dispatch_plan_order_load_assignments.sql"
 PEONETAS_FILE = "054_dispatch_plan_peonetas_recorded.sql"
 CLIENT_LOCATION_FILE = "055_client_location_photos.sql"
 DELIVERY_VISITS_FILE = "056_delivery_visits_evidence.sql"
+DELIVERY_CLOSURE_FILE = "057_delivery_visit_closure_guards.sql"
 
 
 # --------------------------------------------------------------------- lexer
@@ -285,12 +286,12 @@ def test_every_sql_file_is_registered_or_explicitly_excluded():
     assert list(DISTRIBUIDORA_SCHEMA_FILES) == sorted(DISTRIBUIDORA_SCHEMA_FILES)
     assert len(set(DISTRIBUIDORA_SCHEMA_FILES)) == len(DISTRIBUIDORA_SCHEMA_FILES)
     assert DISTRIBUIDORA_SCHEMA_FILES[-6:] == (
-        SIMPLE_SESSIONS_FILE,
         DRIVER_USER_FILE,
         ORDER_LOAD_FILE,
         PEONETAS_FILE,
         CLIENT_LOCATION_FILE,
         DELIVERY_VISITS_FILE,
+        DELIVERY_CLOSURE_FILE,
     )
 
 

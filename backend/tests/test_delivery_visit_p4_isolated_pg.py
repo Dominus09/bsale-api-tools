@@ -16,6 +16,7 @@ from backend.services.distribuidora import delivery_visit_service as svc
 DSN = (os.getenv("SIMPLE_PLANNING_TEST_DSN") or "").strip()
 ROOT = Path(__file__).resolve().parents[2]
 SQL_056 = ROOT / "backend" / "sql" / "distribuidora" / "056_delivery_visits_evidence.sql"
+SQL_057 = ROOT / "backend" / "sql" / "distribuidora" / "057_delivery_visit_closure_guards.sql"
 
 pytestmark = pytest.mark.skipif(
     not DSN,
@@ -80,9 +81,10 @@ def _bootstrap(conn):
         """
     )
     conn.commit()
-    raw = SQL_056.read_text(encoding="utf-8")
-    for stmt in _split_sql(raw):
-        cur.execute(stmt)
+    for path in (SQL_056, SQL_057):
+        raw = path.read_text(encoding="utf-8")
+        for stmt in _split_sql(raw):
+            cur.execute(stmt)
     conn.commit()
     cur.execute(
         "INSERT INTO distribuidora.dispatch_plan (id, planning_code) VALUES (10, 'PLAN-TEST-P4')"
@@ -171,12 +173,14 @@ def test_start_resume_finalize_idempotent(isolated_db, monkeypatch):
     assert replay["idempotent_replay"] is True
     assert replay["visit"]["id"] == visit_id
 
+    # Cierre "completed" ahora exige líneas + conformidad (probado en otro test).
+    # Aquí validamos cancelación simple / no delivered path no aplica; usamos cancel.
     closed = svc.finalize_visit(
         user=_user(),
         plan_id=10,
         visit_id=visit_id,
         expected_version=version,
-        status="completed",
+        status="cancelled",
         latitude=-42.47,
         longitude=-73.76,
         accuracy_m=15.0,
@@ -184,14 +188,14 @@ def test_start_resume_finalize_idempotent(isolated_db, monkeypatch):
     )
     assert closed["finalized"] is True
     assert closed["persisted"] is True
-    assert closed["visit"]["status"] == "completed"
+    assert closed["visit"]["status"] == "cancelled"
 
     again = svc.finalize_visit(
         user=_user(),
         plan_id=10,
         visit_id=visit_id,
         expected_version=version,
-        status="completed",
+        status="cancelled",
     )
     assert again["idempotent_replay"] is True
     assert again["finalized"] is False
@@ -286,7 +290,7 @@ def test_version_conflict(isolated_db, monkeypatch):
             plan_id=10,
             visit_id=visit_id,
             expected_version=99,
-            status="partial",
+            status="cancelled",
         )
     assert ei.value.status_code == 409
 
@@ -362,14 +366,55 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
     )
     assert col["persisted"] is True
 
+    # Incidencia: evidencia excepción (sin R2) → pending_review
+    exc = svc.register_evidence_exception(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        evidence_kind="closed_store",
+        exception_note="Camara no disponible en prueba aislada",
+        latitude=-42.0,
+        longitude=-73.0,
+    )
+    assert exc["persisted"] is True
+
+    # No delivered: líneas con entregado>0 bloquearían; limpiamos vía status none
+    # Re-guardar líneas en 0 entregado
+    svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=100,
+        document_number=9001,
+        document_type="boleta",
+        document_total=12000,
+        result_status="none",
+        notes=None,
+        lines=[
+            {
+                "variant_id": 1,
+                "product_name": "Prod A",
+                "planned_units": 4,
+                "delivered_units": 0,
+                "undelivered_reason": "physical_shortage",
+            }
+        ],
+    )
+
     closed = svc.finalize_visit(
         user=_user(),
         plan_id=10,
         visit_id=vid,
         expected_version=ver,
-        status="partial",
+        status="not_delivered",
+        result_reason="closed_store",
+        result_note="Local cerrado prueba",
+        latitude=-42.0,
+        longitude=-73.0,
     )
     assert closed["finalized"] is True
+    assert closed["closure_review_status"] == "pending_review"
 
     report = svc.build_whatsapp_report(
         user=_user(),
@@ -380,9 +425,8 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
         driver_name="Chofer Test",
     )
     assert "Cliente Test" in report["report_text"]
-    assert "ENTREGA PARCIAL" in report["report_text"] or "PARCIAL" in report["header"]
+    assert "LOCAL CERRADO" in report["report_text"] or "CERRADO" in report["header"]
     assert report["share"]["delivery_claimed"] is False
     assert report["share"]["auto_send"] is False
-    assert "Pago verificado: no" in report["report_text"]
     assert "-42.0" not in report["report_text"]
     assert "group_invite_link" in report["omitted"]

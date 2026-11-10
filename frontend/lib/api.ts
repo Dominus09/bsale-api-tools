@@ -7699,10 +7699,17 @@ export type DeliveryVisitErpItem = {
   driver_user_id: number
   status: string
   result_reason?: string | null
+  result_note?: string | null
   started_at_local?: string | null
   ended_at_local?: string | null
   declared_collected?: number
   pending_balance_sum?: number
+  closure_review_status?: string | null
+  evidence_count?: number
+  conformity_status?: string | null
+  delivered_units?: number
+  pending_units?: number
+  document_count?: number
 }
 
 export async function getDeliveryVisitsErp(
