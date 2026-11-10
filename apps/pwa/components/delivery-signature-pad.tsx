@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { ApiError, submitVisitConformity } from "@/lib/api"
+import { receptorNameIsValid, resolveReceptorName } from "@/lib/receptor-name"
 
 type Props = {
   planId: number
@@ -10,8 +11,14 @@ type Props = {
   onDone: () => void
 }
 
+/**
+ * Hotfix iOS: Safari Autofill / QuickType puede pintar el nombre en el DOM
+ * sin disparar onChange de React. Al enviar se leía el state vacío y el backend
+ * respondía "Nombre del receptor requerido". Se lee el valor del input en submit.
+ */
 export function DeliverySignaturePad(props: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const nameRef = useRef<HTMLInputElement | null>(null)
   const drawing = useRef(false)
   const [name, setName] = useState("")
   const [refuse, setRefuse] = useState(false)
@@ -37,6 +44,12 @@ export function DeliverySignaturePad(props: Props) {
     ctx.lineCap = "round"
     ctx.lineJoin = "round"
   }, [])
+
+  function syncNameFromDom(): string {
+    const resolved = resolveReceptorName(nameRef.current?.value, name)
+    if (resolved !== name) setName(resolved)
+    return resolved
+  }
 
   function pos(e: React.PointerEvent<HTMLCanvasElement>) {
     const c = canvasRef.current!
@@ -92,6 +105,17 @@ export function DeliverySignaturePad(props: Props) {
     setBusy(true)
     setErr(null)
     try {
+      const receptorName = syncNameFromDom()
+      if (!receptorNameIsValid(receptorName, refuse)) {
+        setErr("Nombre del receptor requerido")
+        setBusy(false)
+        return
+      }
+      if (refuse && !refuseReason.trim()) {
+        setErr("Motivo de negativa requerido")
+        setBusy(false)
+        return
+      }
       let blob: Blob | null = null
       if (!refuse) {
         if (!hasStroke) {
@@ -107,7 +131,7 @@ export function DeliverySignaturePad(props: Props) {
       }
       const gps = await captureGps()
       await submitVisitConformity(props.planId, props.visitId, {
-        receptor_name: name,
+        receptor_name: receptorName,
         refused: refuse,
         refuse_reason: refuse ? refuseReason : undefined,
         latitude: gps?.lat,
@@ -115,6 +139,7 @@ export function DeliverySignaturePad(props: Props) {
         accuracy_m: gps?.accuracy,
         signatureBlob: blob,
       })
+      setErr(null)
       props.onDone()
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "No se pudo guardar conformidad")
@@ -128,15 +153,26 @@ export function DeliverySignaturePad(props: Props) {
       <div className="card" style={{ padding: 12 }}>
         <strong style={{ fontSize: "0.9rem" }}>Resumen a confirmar</strong>
         <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: "0.85rem" }}>
-          {props.summaryLines.map((l) => (
-            <li key={l}>{l}</li>
+          {props.summaryLines.map((l, i) => (
+            <li key={`${i}-${l.slice(0, 24)}`}>{l}</li>
           ))}
         </ul>
       </div>
 
       <label className="field">
         Nombre del receptor
-        <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
+        <input
+          ref={nameRef}
+          name="receptor_name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onInput={(e) => setName((e.target as HTMLInputElement).value)}
+          onBlur={() => syncNameFromDom()}
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint="done"
+        />
       </label>
 
       <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>

@@ -889,6 +889,13 @@ def declare_collection(
     decl = float(declared_amount) if declared_amount is not None else None
     if decl is not None and decl < 0:
         raise HTTPException(status_code=400, detail="Monto declarado inválido")
+    if method_n == "pending" and decl is not None and decl > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Pago pendiente no admite monto recibido positivo",
+        )
+    if method_n == "pending" and decl is None:
+        decl = 0.0
     pending = None
     if doc_amt is not None and decl is not None:
         pending = round(doc_amt - decl, 2)
