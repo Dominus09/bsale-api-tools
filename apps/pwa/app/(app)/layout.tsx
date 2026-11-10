@@ -2,30 +2,24 @@
 
 import Link from "next/link"
 import { AuthGate } from "@/components/auth-gate"
-import { clearSession } from "@/lib/auth"
+import { AppMenu } from "@/components/app-menu"
+import { LocalToolsProvider } from "@/components/local-tools-context"
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
-  function logout() {
-    clearSession()
-    window.location.href = "/login"
-  }
-
   return (
     <AuthGate>
-      <header className="topbar">
-        <div>
-          <h1>
-            <Link href="/despachos">Mis despachos</Link>
-          </h1>
-          <div className="muted" style={{ fontSize: "0.75rem" }}>
-            Solo lectura · Chofer
+      <LocalToolsProvider>
+        <header className="topbar">
+          <div className="topbar-title">
+            <h1>
+              <Link href="/despachos">Mis despachos</Link>
+            </h1>
+            <div className="muted topbar-sub">Entregas y evidencias · Chofer</div>
           </div>
-        </div>
-        <button type="button" className="btn btn-ghost" style={{ width: "auto" }} onClick={logout}>
-          Salir
-        </button>
-      </header>
-      <div className="main">{children}</div>
+          <AppMenu />
+        </header>
+        <div className="main">{children}</div>
+      </LocalToolsProvider>
     </AuthGate>
   )
 }

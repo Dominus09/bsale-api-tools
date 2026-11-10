@@ -34,6 +34,27 @@ def test_continental_prefers_directions():
     assert nav["warning_es"] is None
 
 
+def test_quellon_and_castro_are_not_false_islands():
+    """Quellón/Castro no deben advertir isla solo por latitud austral o ciudad."""
+    for city, lat, lng in (
+        ("Quellón", -43.12, -73.62),
+        ("Castro", -42.47, -73.76),
+        ("Quellon", -43.12, -73.62),
+    ):
+        nav = svc.build_client_navigation(lat, lng, city=city, client_name="Cliente")
+        assert nav["likely_no_road_route"] is False
+        assert nav["warning_es"] is None
+        assert nav["google_maps_url"] == nav["google_maps_directions_url"]
+
+
+def test_southern_lat_alone_is_not_island():
+    nav = svc.build_client_navigation(-43.9, -73.7, city=None, client_name="Sin ciudad")
+    assert nav["likely_no_road_route"] is False
+    assert nav["warning_es"] is None
+    # Sin ciudad: marcador exacto, sin afirmar isla.
+    assert nav["google_maps_url"] == nav["google_maps_place_url"]
+
+
 def test_navigation_rejects_bad_coords():
     with pytest.raises(ValueError):
         svc.build_client_navigation(float("nan"), -73.0)

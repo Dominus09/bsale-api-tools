@@ -234,27 +234,25 @@ def _oc_number_by_oc_id(plan_id: int) -> dict[int, Any]:
         conn.close()
 
 
-_ISLAND_CITY_HINTS = (
+# Solo destinos con evidencia confiable de falta de ruta terrestre continua.
+# NO usar latitud sola ni Quellón/Castro/Ancud (hay conexión vial).
+_MELINKA_CITY_HINTS = (
     "melinka",
-    "achao",
-    "quellón",
-    "quellon",
-    "castro",
-    "dalcahue",
-    "curaco",
-    "quinchao",
-    "chaulínec",
-    "chaulinec",
+    "repollal",
 )
 
 
-def likely_island_destination(city: str | None, lat: float | None) -> bool:
+def likely_island_destination(city: str | None, lat: float | None = None) -> bool:
+    """True solo si la ciudad identifica Melinka/Repollal.
+
+    ``lat`` se ignora a propósito: coords australes fuera de Melinka no deben
+    disparar advertencia de isla (p. ej. Quellón/Castro en un plan mixto).
+    """
+    _ = lat
     c = (city or "").strip().lower()
-    if c and any(h in c for h in _ISLAND_CITY_HINTS):
-        return True
-    if lat is not None and math.isfinite(lat) and lat < -43.5:
-        return True
-    return False
+    if not c:
+        return False
+    return any(h in c for h in _MELINKA_CITY_HINTS)
 
 
 def build_client_navigation(
@@ -276,7 +274,11 @@ def build_client_navigation(
     directions = (
         f"https://www.google.com/maps/dir/?api=1&destination={encoded}&travelmode=driving"
     )
-    island = likely_island_destination(city, lat)
+    melinka = likely_island_destination(city, lat)
+    city_known = bool((city or "").strip())
+    # Sin ciudad: marcador exacto sin afirmar isla. Melinka: marcador + aviso.
+    # Quellón/Castro/Ancud y resto continental: directions.
+    prefer_exact = melinka or not city_known
     return {
         "available": True,
         "destination_latitude": lat,
@@ -284,13 +286,12 @@ def build_client_navigation(
         "destination_label": client_name or None,
         "google_maps_place_url": place,
         "google_maps_directions_url": directions,
-        # Destino insular: preferir marcador exacto (evitar ruta continental engañosa).
-        "google_maps_url": place if island else directions,
-        "likely_no_road_route": island,
+        "google_maps_url": place if prefer_exact else directions,
+        "likely_no_road_route": melinka,
         "warning_es": (
-            "Destino insular o sin ruta terrestre continua. Se muestra la ubicación exacta; "
-            "la ruta vehicular de Google puede detenerse en el continente (p. ej. Ancud)."
-            if island
+            "Destino Melinka (archipiélago de las Guaitecas): se muestra la ubicación "
+            "exacta; la ruta vehicular de Google puede detenerse en el continente."
+            if melinka
             else None
         ),
         "note_es": (
@@ -822,7 +823,7 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
             "read_only": True,
             "sources": {
                 **bundle["sources"],
-                "rut": "bsale.clients.code / rut_clean (company_id=3)",
+                "rut": "bsale.clients.code / rut_clean (empresa del documento)",
                 "seller": "dispatch_plan_picking_clients.seller_name (documento/OC)",
                 "boxes": (
                     "units_per_box estructurado (variants/products_master); "

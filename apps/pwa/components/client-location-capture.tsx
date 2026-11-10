@@ -1,11 +1,15 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   ApiError,
   proposeClientLocation,
   uploadFacadePhoto,
 } from "@/lib/api"
+import {
+  type LocalToolAction,
+  useLocalTools,
+} from "@/components/local-tools-context"
 
 type LocReg = {
   status?: string
@@ -13,6 +17,8 @@ type LocReg = {
   can_register?: boolean
   pending_proposal_id?: number | null
   verified?: boolean
+  low_accuracy?: boolean
+  accuracy_m?: number | null
 }
 
 type Facade = {
@@ -71,15 +77,22 @@ export function ClientLocationCapture(props: Props) {
   } | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
+  const [focus, setFocus] = useState<"gps" | "photo" | "history" | null>(null)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const sending = useRef(false)
+  const gpsRef = useRef<HTMLDivElement>(null)
+  const photoRef = useRef<HTMLDivElement>(null)
+  const { registerTools, consumePendingAction } = useLocalTools()
 
   const loc = props.locationRegistration
   const canReg = Boolean(loc?.can_register)
+  const photoSrc = previewUrl || props.facade?.url || props.facadePhoto || null
 
   const captureGps = () => {
     setErr(null)
     setMsg(null)
+    setFocus("gps")
     if (!navigator.geolocation) {
       setErr("Este dispositivo no ofrece geolocalización.")
       return
@@ -100,8 +113,10 @@ export function ClientLocationCapture(props: Props) {
         setBusy(null)
         if (e.code === e.PERMISSION_DENIED) {
           setErr("Permiso de ubicación denegado. Actívelo en Ajustes del teléfono.")
+        } else if (e.code === e.POSITION_UNAVAILABLE) {
+          setErr("GPS sin señal suficiente. Reintente al aire libre.")
         } else {
-          setErr(e.message || "No se pudo obtener GPS. Reintente al aire libre.")
+          setErr("No se pudo obtener GPS. Reintente.")
         }
       },
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
@@ -128,14 +143,13 @@ export function ClientLocationCapture(props: Props) {
         idempotency_key: idem,
       })) as {
         requires_confirmation?: boolean
-        reason?: string
         message_es?: string
-        proposal?: unknown
+        reason?: string
       }
       if (res.requires_confirmation) {
         const ok = window.confirm(res.message_es || "¿Confirmar de todos modos?")
         if (!ok) {
-          setMsg(res.message_es || "Confirmación requerida")
+          setMsg(res.message_es || "Confirmación pendiente")
           return
         }
         await submitGps({
@@ -158,6 +172,7 @@ export function ClientLocationCapture(props: Props) {
   const onPickFile = async (file: File | null) => {
     if (!file) return
     setErr(null)
+    setFocus("photo")
     try {
       const blob = await compressImage(file)
       if (previewUrl) URL.revokeObjectURL(previewUrl)
@@ -194,21 +209,69 @@ export function ClientLocationCapture(props: Props) {
     }
   }
 
-  const photoSrc = previewUrl || props.facade?.url || props.facadePhoto || null
+  const runTool = (action: LocalToolAction) => {
+    if (action === "gps") {
+      setFocus("gps")
+      setTimeout(() => gpsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50)
+      captureGps()
+      return
+    }
+    if (action === "photo") {
+      setFocus("photo")
+      setTimeout(() => {
+        photoRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+        fileRef.current?.click()
+      }, 50)
+      return
+    }
+    if (action === "history") {
+      setHistoryOpen(true)
+      setFocus("history")
+      setTimeout(() => gpsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50)
+      return
+    }
+    if (action === "navigate" && props.navigationUrl) {
+      window.open(props.navigationUrl, "_blank", "noopener,noreferrer")
+    }
+  }
+
+  useEffect(() => {
+    registerTools({
+      available: true,
+      addressLabel: [props.address, props.city].filter(Boolean).join(" · ") || null,
+      locationLabel: loc?.label_es || null,
+      canNavigate: Boolean(props.navigationUrl),
+      navigationUrl: props.navigationUrl || null,
+      run: runTool,
+    })
+    const pending = consumePendingAction()
+    if (pending) runTool(pending)
+    return () => registerTools(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    props.planId,
+    props.customerKey,
+    props.navigationUrl,
+    props.address,
+    props.city,
+    loc?.label_es,
+  ])
 
   return (
     <div className="stack-gap">
-      <div className="card">
-        <h3 style={{ margin: "0 0 8px", fontSize: "1rem" }}>Ubicación del local</h3>
-        <p className="muted" style={{ margin: "0 0 6px", fontSize: "0.85rem" }}>
-          {props.address || "Sin dirección"}
-          {props.city ? ` · ${props.city}` : ""}
+      <div
+        ref={gpsRef}
+        className={`card tool-panel${focus === "gps" || focus === "history" ? " highlight" : ""}`}
+      >
+        <h3 style={{ margin: "0 0 6px", fontSize: "0.95rem" }}>Ubicación del local</h3>
+        <p className="muted" style={{ margin: "0 0 4px", fontSize: "0.82rem" }}>
+          {[props.address, props.city].filter(Boolean).join(" · ") || "Sin dirección"}
         </p>
         <p className="muted" style={{ margin: "0 0 6px", fontSize: "0.8rem" }}>
           {props.latitude == null || props.longitude == null
             ? "Sin coordenadas"
             : `${Number(props.latitude).toFixed(5)}, ${Number(props.longitude).toFixed(5)}`}
-          {props.coordinatesSource ? ` · fuente: ${props.coordinatesSource}` : ""}
+          {props.coordinatesSource ? ` · ${props.coordinatesSource}` : ""}
         </p>
         <p style={{ margin: "0 0 10px", fontSize: "0.85rem" }}>
           Estado: <strong>{loc?.label_es || "—"}</strong>
@@ -251,7 +314,6 @@ export function ClientLocationCapture(props: Props) {
           {props.navigationUrl ? (
             <a
               className="btn btn-ghost"
-              style={{ textAlign: "center" }}
               href={props.navigationUrl}
               target="_blank"
               rel="noopener noreferrer"
@@ -260,10 +322,22 @@ export function ClientLocationCapture(props: Props) {
             </a>
           ) : null}
         </div>
+        {historyOpen ? (
+          <div className="banner banner-info" style={{ marginTop: 10 }}>
+            {loc?.pending_proposal_id
+              ? `Hay una propuesta pendiente (#${loc.pending_proposal_id}). La aprobación se realiza en ERP.`
+              : loc?.verified
+                ? "Ubicación verificada disponible para próximas rutas."
+                : "Sin historial de propuestas en esta ficha. Las aprobaciones se consultan en ERP."}
+          </div>
+        ) : null}
       </div>
 
-      <div className="card">
-        <h3 style={{ margin: "0 0 8px", fontSize: "1rem" }}>Fotografía del establecimiento</h3>
+      <div
+        ref={photoRef}
+        className={`card tool-panel${focus === "photo" ? " highlight" : ""}`}
+      >
+        <h3 style={{ margin: "0 0 8px", fontSize: "0.95rem" }}>Fotografía del establecimiento</h3>
         <div className="facade-ph" aria-hidden={!photoSrc}>
           {photoSrc ? (
             // eslint-disable-next-line @next/next/no-img-element

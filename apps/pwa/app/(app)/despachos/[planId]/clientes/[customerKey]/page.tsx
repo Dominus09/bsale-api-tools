@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { ApiError, getMyCliente } from "@/lib/api"
 import { formatRutDisplay } from "@/lib/format-rut"
 import { ClientLocationCapture } from "@/components/client-location-capture"
@@ -33,6 +33,7 @@ export default function ClienteFichaPage() {
   const [openDocs, setOpenDocs] = useState<Record<string, boolean>>({})
   const [openSku, setOpenSku] = useState<Record<string, boolean>>({})
   const [reloadToken, setReloadToken] = useState(0)
+  const [lightbox, setLightbox] = useState<string | null>(null)
 
   useEffect(() => {
     if (!Number.isFinite(planId) || planId < 1 || !customerKey) {
@@ -69,6 +70,15 @@ export default function ClienteFichaPage() {
     }
   }, [planId, customerKey, reloadToken])
 
+  const totals = useMemo(() => {
+    if (!data) return { count: 0, amount: 0 }
+    const amount = (data.documents || []).reduce(
+      (acc, d) => acc + (typeof d.document_total === "number" ? d.document_total : 0),
+      0,
+    )
+    return { count: data.document_count || data.documents?.length || 0, amount }
+  }, [data])
+
   if (error) {
     return (
       <div className="stack-gap">
@@ -86,6 +96,8 @@ export default function ClienteFichaPage() {
 
   const c = data.client
   const nav = data.navigation
+  const facadeUrl = c.facade?.url || c.facade_photo || null
+  const locLabel = c.location_registration?.label_es || "Ubicación no disponible"
 
   return (
     <div className="stack-gap">
@@ -94,49 +106,87 @@ export default function ClienteFichaPage() {
       </Link>
 
       <div className="card">
-        <h2 style={{ marginBottom: 4 }}>{c.client_name || "Sin nombre"}</h2>
-        {c.fantasy_name ? (
-          <p className="muted" style={{ margin: "0 0 8px" }}>
-            {c.fantasy_name}
-          </p>
-        ) : null}
-
-        <div className="meta-row">
-          <span className="muted">RUT</span>
-          <span>{formatRutDisplay(c.rut) || "—"}</span>
-        </div>
-        <div className="meta-row">
-          <span className="muted">Vendedor</span>
-          <span>{c.seller_name || "—"}</span>
-        </div>
-        <div className="meta-row">
-          <span className="muted">Teléfono</span>
-          <span>
-            {c.phone ? (
-              <a href={`tel:${c.phone}`} style={{ color: "var(--accent)" }}>
-                {c.phone}
-              </a>
+        <div className="ficha-head">
+          <button
+            type="button"
+            className="facade-thumb"
+            onClick={() => facadeUrl && setLightbox(facadeUrl)}
+            aria-label={facadeUrl ? "Ampliar fachada" : "Sin fachada"}
+            disabled={!facadeUrl}
+          >
+            {facadeUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={facadeUrl} alt="" />
             ) : (
-              "—"
+              "Sin foto"
             )}
-          </span>
-        </div>
-        {(c.load_groups || []).length > 0 ? (
-          <div className="group-row" style={{ marginTop: 10 }}>
-            {(c.load_groups || []).map((g) => (
-              <span key={`${g.load_batch_id}-${g.name}`} className="pill">
-                {g.name || `Grupo ${g.load_batch_id}`}
+          </button>
+          <div className="ficha-head-main">
+            <h2>{c.client_name || "Sin nombre"}</h2>
+            {c.fantasy_name ? (
+              <p className="muted" style={{ margin: "0 0 6px", fontSize: "0.85rem" }}>
+                {c.fantasy_name}
+              </p>
+            ) : null}
+            <div className="meta-row">
+              <span className="muted">RUT</span>
+              <span>{formatRutDisplay(c.rut) || "—"}</span>
+            </div>
+            <div className="meta-row">
+              <span className="muted">Vendedor</span>
+              <span>{c.seller_name || "—"}</span>
+            </div>
+            <div className="meta-row">
+              <span className="muted">Teléfono</span>
+              <span>
+                {c.phone ? (
+                  <a href={`tel:${c.phone}`} style={{ color: "var(--accent)" }}>
+                    {c.phone}
+                  </a>
+                ) : (
+                  "—"
+                )}
               </span>
-            ))}
+            </div>
+            <div className="meta-row">
+              <span className="muted">Dirección</span>
+              <span style={{ textAlign: "right" }}>
+                {[c.address, c.city].filter(Boolean).join(", ") || "—"}
+              </span>
+            </div>
           </div>
-        ) : null}
+        </div>
+
+        <div className="ficha-summary">
+          <span className={`pill${c.location_registration?.verified ? " pill-ok" : ""}`}>
+            {locLabel}
+          </span>
+          <span className="pill">
+            {totals.count} doc. · {money(totals.amount)}
+          </span>
+          {(c.load_groups || []).map((g) => (
+            <span key={`${g.load_batch_id}-${g.name}`} className="pill">
+              {g.name || `Grupo ${g.load_batch_id}`}
+            </span>
+          ))}
+        </div>
 
         {c.observations ? (
-          <p className="muted" style={{ marginTop: 12 }}>
+          <p className="muted" style={{ marginTop: 10, marginBottom: 0, fontSize: "0.85rem" }}>
             Obs.: {c.observations}
           </p>
         ) : null}
       </div>
+
+      {nav?.warning_es ? (
+        <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
+          {nav.warning_es}
+        </div>
+      ) : null}
+
+      <button type="button" className="btn btn-primary" disabled title="Módulo de visita en commit C">
+        Comenzar entrega
+      </button>
 
       <ClientLocationCapture
         planId={planId}
@@ -153,12 +203,6 @@ export default function ClienteFichaPage() {
         warnAccuracyM={data.p3?.gps_warn_accuracy_m}
         onChanged={() => setReloadToken((n) => n + 1)}
       />
-
-      {nav?.warning_es ? (
-        <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
-          {nav.warning_es}
-        </p>
-      ) : null}
 
       <div>
         <h3 style={{ margin: "0 0 8px", fontSize: "1rem" }}>
@@ -246,6 +290,19 @@ export default function ClienteFichaPage() {
           })}
         </div>
       </div>
+
+      {lightbox ? (
+        <div className="lightbox" role="dialog" aria-modal="true">
+          <button
+            type="button"
+            className="drawer-backdrop"
+            aria-label="Cerrar imagen"
+            onClick={() => setLightbox(null)}
+          />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={lightbox} alt="Fachada ampliada" />
+        </div>
+      ) : null}
     </div>
   )
 }
