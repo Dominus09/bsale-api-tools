@@ -29,14 +29,22 @@ export function clearSession() {
   localStorage.removeItem(USER_ID_KEY)
 }
 
+/** Auth sin Content-Type: obligatorio para FormData (multipart + boundary del browser). */
 export function authHeaders(): HeadersInit {
   const token = getToken()
   const headers: Record<string, string> = {
     Accept: "application/json",
-    "Content-Type": "application/json",
   }
   if (token) headers.Authorization = `Bearer ${token}`
   return headers
+}
+
+/** Auth + JSON: solo para cuerpos application/json. */
+export function jsonAuthHeaders(): HeadersInit {
+  return {
+    ...authHeaders(),
+    "Content-Type": "application/json",
+  }
 }
 
 export function isUnauthorized(status: number): boolean {

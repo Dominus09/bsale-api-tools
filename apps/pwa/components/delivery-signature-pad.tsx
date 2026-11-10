@@ -2,10 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { ApiError, submitVisitConformity } from "@/lib/api"
-import {
-  receptorNameIsValid,
-  resolveReceptorNameFromForm,
-} from "@/lib/receptor-name"
+import { receptorNameIsValid } from "@/lib/receptor-name"
 
 type Props = {
   planId: number
@@ -15,23 +12,27 @@ type Props = {
   onToggleDetail?: () => void
   detailOpen?: boolean
   onDone: () => void
+  blockReason?: string | null
 }
 
 /**
- * Hotfix iOS: Autofill puede pintar el nombre sin onChange.
- * Submit resuelve: ref DOM → FormData → state.
+ * P4.3 — Conformidad.
+ *
+ * Causa raíz previa: authHeaders forzaba Content-Type: application/json sobre
+ * FormData → FastAPI no parseaba receptor_name (vacío) aunque el input mostrara texto.
+ * Aquí el input es no controlado + confirmación explícita del nombre.
  */
 export function DeliverySignaturePad(props: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nameRef = useRef<HTMLInputElement | null>(null)
-  const formRef = useRef<HTMLFormElement | null>(null)
   const drawing = useRef(false)
-  const [name, setName] = useState("")
+  const [confirmedName, setConfirmedName] = useState<string | null>(null)
   const [refuse, setRefuse] = useState(false)
   const [refuseReason, setRefuseReason] = useState("")
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [hasStroke, setHasStroke] = useState(false)
+  const [nameLocked, setNameLocked] = useState(false)
 
   useEffect(() => {
     const c = canvasRef.current
@@ -51,14 +52,27 @@ export function DeliverySignaturePad(props: Props) {
     ctx.lineJoin = "round"
   }, [])
 
-  function syncNameFromDom(): string {
-    const resolved = resolveReceptorNameFromForm(
-      nameRef.current,
-      name,
-      formRef.current,
-    )
-    if (resolved !== name) setName(resolved)
-    return resolved
+  function readDomName(): string {
+    return String(nameRef.current?.value || "").trim()
+  }
+
+  function confirmReceptorName() {
+    const n = readDomName()
+    if (!receptorNameIsValid(n, false)) {
+      setErr("Nombre del receptor requerido")
+      setConfirmedName(null)
+      setNameLocked(false)
+      return
+    }
+    setConfirmedName(n)
+    setNameLocked(true)
+    setErr(null)
+  }
+
+  function unlockName() {
+    setNameLocked(false)
+    setConfirmedName(null)
+    requestAnimationFrame(() => nameRef.current?.focus())
   }
 
   function pos(e: React.PointerEvent<HTMLCanvasElement>) {
@@ -113,10 +127,21 @@ export function DeliverySignaturePad(props: Props) {
 
   async function submit(e?: React.FormEvent) {
     e?.preventDefault()
+    if (props.blockReason) {
+      setErr(props.blockReason)
+      return
+    }
     setBusy(true)
     setErr(null)
     try {
-      const receptorName = syncNameFromDom()
+      // Prioridad: nombre confirmado → DOM no controlado (nunca solo React state).
+      const fromDom = readDomName()
+      const receptorName = (confirmedName || fromDom).trim()
+      if (!refuse && !confirmedName) {
+        setErr("Confirme el nombre del receptor antes de firmar")
+        setBusy(false)
+        return
+      }
       if (!receptorNameIsValid(receptorName, refuse)) {
         setErr("Nombre del receptor requerido")
         setBusy(false)
@@ -141,7 +166,7 @@ export function DeliverySignaturePad(props: Props) {
         })
       }
       const gps = await captureGps()
-      await submitVisitConformity(props.planId, props.visitId, {
+      const res = await submitVisitConformity(props.planId, props.visitId, {
         receptor_name: receptorName,
         refused: refuse,
         refuse_reason: refuse ? refuseReason : undefined,
@@ -150,6 +175,10 @@ export function DeliverySignaturePad(props: Props) {
         accuracy_m: gps?.accuracy,
         signatureBlob: blob,
       })
+      if (!res || (res as { persisted?: boolean }).persisted === false) {
+        setErr("El servidor no confirmó la conformidad")
+        return
+      }
       setErr(null)
       props.onDone()
     } catch (err) {
@@ -160,7 +189,7 @@ export function DeliverySignaturePad(props: Props) {
   }
 
   return (
-    <form ref={formRef} className="stack-gap" onSubmit={(ev) => void submit(ev)}>
+    <form className="stack-gap" onSubmit={(ev) => void submit(ev)}>
       <div className="card" style={{ padding: 12 }}>
         <strong style={{ fontSize: "0.9rem" }}>Resumen a confirmar</strong>
         <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: "0.85rem" }}>
@@ -180,21 +209,53 @@ export function DeliverySignaturePad(props: Props) {
         ) : null}
       </div>
 
+      {props.blockReason ? (
+        <div className="banner banner-error">{props.blockReason}</div>
+      ) : null}
+
       <label className="field">
         Nombre del receptor
         <input
           ref={nameRef}
           name="receptor_name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onInput={(e) => setName((e.target as HTMLInputElement).value)}
-          onBlur={() => syncNameFromDom()}
-          autoComplete="off"
+          type="text"
+          defaultValue=""
+          readOnly={nameLocked && !refuse}
+          autoComplete="name"
           autoCorrect="off"
           spellCheck={false}
           enterKeyHint="done"
+          inputMode="text"
         />
       </label>
+      {!refuse ? (
+        <div className="btn-row">
+          {!nameLocked ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={confirmReceptorName}
+              disabled={busy}
+            >
+              Confirmar nombre del receptor
+            </button>
+          ) : (
+            <>
+              <span className="pill pill-ok">
+                Nombre confirmado ({confirmedName?.length || 0} caracteres)
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-compact"
+                onClick={unlockName}
+                disabled={busy}
+              >
+                Corregir nombre
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
 
       <label className="field" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
         <input
@@ -261,7 +322,11 @@ export function DeliverySignaturePad(props: Props) {
         </>
       )}
 
-      <button type="submit" className="btn btn-primary" disabled={busy}>
+      <button
+        type="submit"
+        className="btn btn-primary"
+        disabled={busy || Boolean(props.blockReason)}
+      >
         {busy ? "Guardando…" : refuse ? "Registrar negativa" : "Confirmar conformidad"}
       </button>
       {err ? <div className="banner banner-error">{err}</div> : null}

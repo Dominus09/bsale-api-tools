@@ -1,4 +1,11 @@
-import { authHeaders, clearSession, isUnauthorized, type AuthMe } from "./auth"
+import {
+  authHeaders,
+  clearSession,
+  isUnauthorized,
+  jsonAuthHeaders,
+  type AuthMe,
+} from "./auth"
+import { multipartAuthHeaders } from "./multipart-headers"
 import { getApiBase } from "./api-base"
 
 export class ApiError extends Error {
@@ -27,7 +34,7 @@ async function parseError(res: Response): Promise<string> {
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${getApiBase()}${path}`, {
     ...init,
-    headers: { ...authHeaders(), ...(init?.headers || {}) },
+    headers: { ...jsonAuthHeaders(), ...(init?.headers || {}) },
   })
   if (isUnauthorized(res.status)) {
     clearSession()
@@ -102,6 +109,7 @@ export type DriverClientCard = {
 
 export type DriverProduct = {
   description: string
+  commercial_name?: string
   name_short?: string
   producto?: string
   variante?: string
@@ -524,7 +532,11 @@ export async function uploadVisitEvidence(
   if (opts.idempotency_key) fd.append("idempotency_key", opts.idempotency_key)
   const res = await fetch(
     `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/evidencia`,
-    { method: "POST", headers: { ...authHeaders() }, body: fd },
+    {
+      method: "POST",
+      headers: multipartAuthHeaders(authHeaders()),
+      body: fd,
+    },
   )
   if (isUnauthorized(res.status)) {
     clearSession()
@@ -568,24 +580,49 @@ export async function submitVisitConformity(
     signatureBlob?: Blob | null
   },
 ): Promise<Record<string, unknown>> {
+  const name = String(opts.receptor_name || "").trim()
   const fd = new FormData()
-  fd.append("receptor_name", opts.receptor_name || "")
+  fd.append("receptor_name", name)
   fd.append("refused", opts.refused ? "true" : "false")
   if (opts.refuse_reason) fd.append("refuse_reason", opts.refuse_reason)
   if (opts.latitude != null) fd.append("latitude", String(opts.latitude))
   if (opts.longitude != null) fd.append("longitude", String(opts.longitude))
   if (opts.accuracy_m != null) fd.append("accuracy_m", String(opts.accuracy_m))
   if (opts.signatureBlob) fd.append("signature", opts.signatureBlob, "firma.jpg")
+  const headers = multipartAuthHeaders(authHeaders())
+  // Diagnóstico seguro: sin nombre real ni JWT.
+  if (typeof console !== "undefined" && console.info) {
+    console.info("[pwa:conformidad]", {
+      endpoint: "conformidad",
+      name_present: name.length > 0,
+      name_len: name.length,
+      refused: Boolean(opts.refused),
+      has_signature: Boolean(opts.signatureBlob),
+      content_type_forced: Boolean(
+        headers["Content-Type"] || headers["content-type"],
+      ),
+    })
+  }
   const res = await fetch(
     `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/conformidad`,
-    { method: "POST", headers: { ...authHeaders() }, body: fd },
+    { method: "POST", headers, body: fd },
   )
   if (isUnauthorized(res.status)) {
     clearSession()
     if (typeof window !== "undefined") window.location.href = "/login?expired=1"
     throw new ApiError(401, "Sesión expirada")
   }
-  if (!res.ok) throw new ApiError(res.status, await parseError(res))
+  if (!res.ok) {
+    if (typeof console !== "undefined" && console.info) {
+      console.info("[pwa:conformidad]", {
+        http_status: res.status,
+        error_kind: "http",
+        name_present: name.length > 0,
+        name_len: name.length,
+      })
+    }
+    throw new ApiError(res.status, await parseError(res))
+  }
   return res.json()
 }
 
@@ -646,7 +683,7 @@ export async function uploadFacadePhoto(
     `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/foto-fachada`,
     {
       method: "POST",
-      headers: { ...authHeaders() },
+      headers: multipartAuthHeaders(authHeaders()),
       body: fd,
     },
   )
