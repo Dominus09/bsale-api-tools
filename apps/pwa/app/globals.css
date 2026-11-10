@@ -646,3 +646,61 @@ input {
   background: var(--surface-2);
   line-height: 1.35;
 }
+
+/* P4.1 circuito modular de entrega */
+.step-chrome {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100%;
+}
+
+.step-chrome-head {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.step-chrome-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.step-chrome-client {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.step-chrome-client strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pill-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.step-chrome-footer {
+  position: sticky;
+  bottom: 0;
+  margin-top: auto;
+  padding: 10px 0 calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
