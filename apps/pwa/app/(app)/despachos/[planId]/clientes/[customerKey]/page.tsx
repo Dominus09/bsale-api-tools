@@ -230,6 +230,28 @@ export default function ClienteFichaPage() {
         onChanged={() => setReloadToken((n) => n + 1)}
       />
 
+      {!adminReview &&
+      (data.capabilities?.start_delivery_visit ||
+        data.active_visit?.status === "in_progress" ||
+        data.capabilities?.create_new_visit_after_close) ? (
+        <div className="btn-row">
+          <Link
+            href={`/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/entrega/incidencia?reason=closed_store`}
+            className="btn btn-danger"
+            style={{ textAlign: "center" }}
+          >
+            Local cerrado
+          </Link>
+          <Link
+            href={`/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/entrega/incidencia?reason=rejected_order`}
+            className="btn btn-secondary"
+            style={{ textAlign: "center" }}
+          >
+            Pedido rechazado
+          </Link>
+        </div>
+      ) : null}
+
       <DeliveryLocalToolsHost
         planId={planId}
         customerKey={customerKey}

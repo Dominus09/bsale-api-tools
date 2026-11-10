@@ -143,8 +143,11 @@ export type DriverClientCard = {
   route_order?: number | null
   visit_id?: number | null
   visit_status?: string | null
+  result_reason?: string | null
   attention_status?: string | null
   attention_label_es?: string | null
+  semaphore_color?: string | null
+  semaphore_code?: string | null
   admin_review_pending?: boolean
 }
 
@@ -212,8 +215,11 @@ export type DriverMapMarker = {
   amount_total?: number | null
   visit_id?: number | null
   visit_status?: string | null
+  result_reason?: string | null
   attention_status?: string | null
   attention_label_es?: string | null
+  semaphore_color?: string | null
+  semaphore_code?: string | null
   load_groups: LoadGroupRef[]
   distance_m?: number | null
   navigation?: {
@@ -581,6 +587,9 @@ export async function uploadVisitEvidence(
     latitude?: number | null
     longitude?: number | null
     accuracy_m?: number | null
+    gps_captured_at?: string | null
+    proximity_exception_code?: string | null
+    proximity_exception_note?: string | null
     idempotency_key?: string
   },
 ): Promise<Record<string, unknown>> {
@@ -590,6 +599,13 @@ export async function uploadVisitEvidence(
   if (opts.latitude != null) fd.append("latitude", String(opts.latitude))
   if (opts.longitude != null) fd.append("longitude", String(opts.longitude))
   if (opts.accuracy_m != null) fd.append("accuracy_m", String(opts.accuracy_m))
+  if (opts.gps_captured_at) fd.append("gps_captured_at", opts.gps_captured_at)
+  if (opts.proximity_exception_code) {
+    fd.append("proximity_exception_code", opts.proximity_exception_code)
+  }
+  if (opts.proximity_exception_note) {
+    fd.append("proximity_exception_note", opts.proximity_exception_note)
+  }
   if (opts.idempotency_key) fd.append("idempotency_key", opts.idempotency_key)
   const res = await fetchOnce(
     `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/evidencia`,

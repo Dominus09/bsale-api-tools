@@ -17,6 +17,7 @@ import { buildResultadoSummary } from "@/lib/resultado-summary"
 import { resolveVisitRecovery } from "@/lib/visit-recovery"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
+import { resolveSemaphore } from "@/lib/semaphore"
 
 type VisitDetailPayload = Awaited<ReturnType<typeof getVisitDetail>>
 
@@ -105,12 +106,12 @@ function ResultadoInner() {
   const closed = isClosedVisitStatus(status)
   const review = visit?.closure_review_status
 
+  const sem = resolveSemaphore({
+    status,
+    resultReason: visit?.result_reason,
+  })
   const statusTone =
-    status === "completed"
-      ? "ok"
-      : status === "partial" || status === "not_delivered"
-        ? "warn"
-        : "neutral"
+    sem.color === "green" ? "ok" : sem.color === "yellow" ? "warn" : sem.color === "red" ? "bad" : "neutral"
 
   if (loadingVisit || session.loading) {
     return <div className="empty">Cargando resultado…</div>
@@ -152,13 +153,7 @@ function ResultadoInner() {
         </h2>
         <p style={{ margin: "0 0 10px", fontWeight: 650 }}>{session.clientName}</p>
         <div className="ficha-summary" style={{ justifyContent: "center" }}>
-          <span
-            className={`pill${
-              statusTone === "ok" ? " pill-ok" : statusTone === "warn" ? " pill-warn" : ""
-            }`}
-          >
-            {visitStatusLabel(status)}
-          </span>
+          <span className={`sem-pill ${sem.cssClass}`}>{sem.labelEs}</span>
           <span className="pill">Visita #{visitId}</span>
           {review ? (
             <span className="pill">

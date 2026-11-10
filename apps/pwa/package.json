@@ -6,7 +6,7 @@
     "dev": "next dev -p 3001",
     "prebuild": "node scripts/copy-maplibre-worker.cjs",
     "build": "node scripts/copy-maplibre-worker.cjs && next build --webpack && node scripts/copy-standalone-assets.cjs",
-    "test:map": "node --experimental-strip-types --test lib/map-errors.test.mjs lib/navigation.test.mjs lib/receptor-name.test.mjs lib/delivery-flow.test.mjs lib/delivery-lines-ui.test.mjs lib/delivery-collection.test.mjs lib/delivery-focus.test.mjs lib/multipart-headers.test.mjs lib/clp-input.test.mjs lib/active-collections.test.mjs lib/family-whatsapp.test.mjs lib/api-proxy-target.test.mjs lib/delivery-labels.test.mjs lib/finalize-visit-nav.test.mjs lib/visit-recovery.test.mjs lib/resultado-summary.test.mjs lib/plan-buckets.test.mjs lib/box-units.test.mjs lib/picking-amount.test.mjs lib/api-409.test.mjs",
+    "test:map": "node --experimental-strip-types --test lib/map-errors.test.mjs lib/navigation.test.mjs lib/receptor-name.test.mjs lib/delivery-flow.test.mjs lib/delivery-lines-ui.test.mjs lib/delivery-collection.test.mjs lib/delivery-focus.test.mjs lib/multipart-headers.test.mjs lib/clp-input.test.mjs lib/active-collections.test.mjs lib/family-whatsapp.test.mjs lib/api-proxy-target.test.mjs lib/delivery-labels.test.mjs lib/finalize-visit-nav.test.mjs lib/visit-recovery.test.mjs lib/resultado-summary.test.mjs lib/plan-buckets.test.mjs lib/box-units.test.mjs lib/picking-amount.test.mjs lib/api-409.test.mjs lib/semaphore.test.mjs",
     "probe:upstream": "node scripts/probe-api-upstream.mjs",
     "start": "node .next/standalone/server.js",
     "lint": "eslint ."

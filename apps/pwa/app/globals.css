@@ -1237,11 +1237,72 @@ input {
   margin-top: 8px;
 }
 
-.map-marker-pending,
-.map-marker-active,
-.map-marker-done,
+.map-marker-pending {
+  background: #64748b;
+}
+.map-marker-neutral {
+  background: #64748b;
+}
+.map-marker-active {
+  background: #3b82f6;
+}
+.map-marker-done {
+  background: #22c55e;
+}
 .map-marker-issue {
+  background: #f59e0b;
+}
+.map-marker-pending.sem-red,
+.map-marker.sem-red {
   background: var(--accent);
+}
+
+.sem-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  border: 1px solid var(--border);
+}
+.sem-pill::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.sem-green {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.4);
+}
+.sem-yellow {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.4);
+}
+.sem-red {
+  color: #ffb4bc;
+  background: rgba(196, 41, 60, 0.16);
+  border-color: rgba(196, 41, 60, 0.45);
+}
+.sem-active {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+.sem-neutral {
+  color: var(--muted);
+  background: var(--surface-2);
+}
+
+.btn-danger {
+  background: var(--accent);
+  border-color: var(--accent-strong);
+  color: #fff;
 }
 
 .client-card-name {
@@ -1337,6 +1398,12 @@ input {
   background: rgba(245, 158, 11, 0.16);
   border-color: rgba(245, 158, 11, 0.45);
   color: #fcd34d;
+}
+
+.result-badge-bad {
+  background: rgba(196, 41, 60, 0.18);
+  border-color: rgba(196, 41, 60, 0.5);
+  color: #ffb4bc;
 }
 
 .result-badge-neutral {

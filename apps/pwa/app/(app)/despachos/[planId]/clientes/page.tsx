@@ -7,6 +7,7 @@ import { ApiError, listMyClientes, type DriverClientCard } from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDistanceM, haversineMeters } from "@/lib/geo"
 import { asAmount } from "@/lib/money-display"
+import { resolveSemaphore } from "@/lib/semaphore"
 
 type Filter = "all" | "pending" | "delivered"
 type SortMode = "route" | "near" | "name"
@@ -309,17 +310,19 @@ export default function ClientesPage() {
                 <span>{amount != null ? moneyCLP(amount) : "Monto —"}</span>
               </div>
 
-              {c.attention_label_es ? (
-                <div className="group-row" style={{ marginTop: 6 }}>
-                  <span
-                    className={`pill${
-                      c.attention_status && c.attention_status !== "pending" ? " pill-ok" : ""
-                    }`}
-                  >
-                    {c.attention_label_es}
-                  </span>
-                </div>
-              ) : null}
+              {(() => {
+                const sem = resolveSemaphore({
+                  status: c.attention_status,
+                  resultReason: c.result_reason,
+                  semaphoreColor: c.semaphore_color,
+                  attentionLabel: c.attention_label_es,
+                })
+                return (
+                  <div className="group-row" style={{ marginTop: 6 }}>
+                    <span className={`sem-pill ${sem.cssClass}`}>{sem.labelEs}</span>
+                  </div>
+                )
+              })()}
 
               <div className={obs ? "obs-block" : "obs-block obs-empty"}>
                 {obs ? `Obs: ${obs}` : "Sin observaciones"}

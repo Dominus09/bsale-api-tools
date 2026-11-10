@@ -8,6 +8,7 @@ import { ApiError, getMyMapa, type DriverMapMarker } from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDistanceM } from "@/lib/geo"
 import { asAmount } from "@/lib/money-display"
+import { resolveSemaphore } from "@/lib/semaphore"
 
 type UserLoc = { lat: number; lng: number; accuracy: number | null }
 
@@ -261,21 +262,21 @@ export default function MapaPage() {
                 {[selected.address, selected.city].filter(Boolean).join(", ") || "Sin dirección"}
               </p>
               <div className="map-sheet-meta">
+                {(() => {
+                  const sem = resolveSemaphore({
+                    status: selected.attention_status,
+                    resultReason: selected.result_reason,
+                    semaphoreColor: selected.semaphore_color,
+                    attentionLabel: selected.attention_label_es,
+                  })
+                  return <span className={`sem-pill ${sem.cssClass}`}>{sem.labelEs}</span>
+                })()}
                 {distLabel ? <span className="pill">{distLabel}</span> : null}
                 <span className="pill">
                   {selected.document_count} doc{selected.document_count === 1 ? "" : "s"}
                 </span>
                 <span className="pill">
                   {amount != null ? moneyCLP(amount) : "Monto —"}
-                </span>
-                <span
-                  className={`pill${
-                    selected.attention_status && selected.attention_status !== "pending"
-                      ? " pill-ok"
-                      : ""
-                  }`}
-                >
-                  {selected.attention_label_es || "Pendiente"}
                 </span>
                 <span className="pill pill-ok">GPS disponible</span>
               </div>

@@ -9,6 +9,7 @@ import {
   classifyMapTimeout,
   type ClassifiedMapFailure,
 } from "@/lib/map-errors"
+import { mapMarkerClass, resolveSemaphore } from "@/lib/semaphore"
 
 type Props = {
   markers: DriverMapMarker[]
@@ -143,11 +144,17 @@ export function DeliveryMap({
           markers.forEach((m, index) => {
             const el = document.createElement("button")
             el.type = "button"
-            el.className = "map-marker map-marker-pending"
+            const sem = resolveSemaphore({
+              status: m.attention_status,
+              resultReason: m.result_reason,
+              semaphoreColor: m.semaphore_color,
+              attentionLabel: m.attention_label_es,
+            })
+            el.className = `${mapMarkerClass(sem.color)} ${sem.cssClass}`
             el.textContent = String(stopNumber(m, index))
             el.setAttribute(
               "aria-label",
-              `${m.client_name || "Cliente"} · ${m.attention_label_es || "Pendiente"}`,
+              `${m.client_name || "Cliente"} · ${sem.labelEs}`,
             )
             el.addEventListener("click", (ev) => {
               ev.stopPropagation()
