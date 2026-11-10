@@ -104,7 +104,9 @@ def test_partial_highlights_pending_reasons():
     assert "ENTREGA PARCIAL" in text
     assert "Faltante físico" in text
     assert "Transferencia informada" in text
-    assert "Pago verificado: no" in text
+    assert "Cobranza declarada" in text
+    assert "Pago confirmado" not in text.lower()
+    assert "verificado administrativamente: no" in text
 
 
 def test_share_url_has_no_group_id():

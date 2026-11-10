@@ -735,6 +735,16 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
     if client is None:
         raise HTTPException(status_code=404, detail="Cliente no pertenece a este despacho")
 
+    # Conflictos OC↔grupo: informar sin autocorregir.
+    oc_groups: dict[int, set[int]] = {}
+    for d0 in client.get("documents") or []:
+        oc0 = d0.get("oc_document_id")
+        lg0 = d0.get("load_group") or {}
+        bid0 = lg0.get("load_batch_id")
+        if oc0 is None or bid0 is None:
+            continue
+        oc_groups.setdefault(int(oc0), set()).add(int(bid0))
+
     documents_out: list[dict[str, Any]] = []
     for doc in client.get("documents") or []:
         rel = doc.get("related_document_id")
@@ -746,12 +756,25 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
         doc_group = doc.get("load_group")
         # No repetir grupo en cada línea si todo el documento comparte el mismo.
         products = [_product_payload(p, load_group=None) for p in products_raw]
+        conflict = None
+        oc_id = doc.get("oc_document_id")
+        if oc_id is not None and int(oc_id) in oc_groups and len(oc_groups[int(oc_id)]) > 1:
+            conflict = {
+                "code": "oc_load_group_mismatch",
+                "message_es": (
+                    "La OC vinculada aparece en más de un grupo de carga. "
+                    "Revisar en ERP; no se corrige automáticamente."
+                ),
+                "oc_document_id": int(oc_id),
+                "load_batch_ids": sorted(oc_groups[int(oc_id)]),
+            }
         documents_out.append(
             {
                 **doc,
                 "load_group": doc_group,
                 "products": products,
                 "product_count": len(products),
+                "group_assignment_conflict": conflict,
             }
         )
 

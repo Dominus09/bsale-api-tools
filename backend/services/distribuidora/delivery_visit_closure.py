@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from fastapi import HTTPException
@@ -131,6 +133,27 @@ def assert_finalize_ready(
                 raise HTTPException(
                     status_code=422, detail="Nombre del receptor requerido"
                 )
+            # La firma debe corresponder al resumen actual (anti-reuso / anti-cambio silencioso)
+            current_summary = build_conformity_summary(
+                visit=visit, docs=docs, lines=lines
+            )
+            current_sha = hashlib.sha256(
+                json.dumps(current_summary, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            signed_sha = (conf.get("accepted_summary_sha256") or "").strip()
+            if not signed_sha or signed_sha != current_sha:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "La conformidad firmada no coincide con las cantidades "
+                        "actuales; vuelva a firmar tras el cambio"
+                    ),
+                )
+            signed_ver = conf.get("visit_version_at_sign")
+            if signed_ver is not None and int(signed_ver) != int(visit.get("version") or 1):
+                # Permite si el sha coincide (versión puede haber subido por eventos no-línea)
+                # pero exige sha; si además el sha falla ya se bloqueó arriba.
+                notes.append("version_firma_distinta_sha_ok")
 
     elif status == "not_delivered":
         reason = (result_reason or "").strip()
@@ -186,12 +209,39 @@ def assert_finalize_ready(
     return {"closure_review_status": review, "notes": notes}
 
 
+def _num(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_conformity_summary(
     *,
     visit: dict[str, Any],
     docs: list[dict[str, Any]],
     lines: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    """Resumen canónico firmado. Orden estable + números normalizados (anti-flap SHA)."""
+    docs_n = sorted(
+        docs,
+        key=lambda d: (
+            int(d["related_document_id"])
+            if d.get("related_document_id") is not None
+            else 0,
+            str(d.get("document_number") or ""),
+        ),
+    )
+    lines_n = sorted(
+        lines,
+        key=lambda ln: (
+            int(ln["variant_id"]) if ln.get("variant_id") is not None else 0,
+            str(ln.get("sku_code") or ""),
+            str(ln.get("product_name") or ""),
+        ),
+    )
     return {
         "visit_id": int(visit["id"]),
         "version": int(visit.get("version") or 1),
@@ -201,21 +251,21 @@ def build_conformity_summary(
                 "related_document_id": d.get("related_document_id"),
                 "document_number": d.get("document_number"),
                 "document_type": d.get("document_type"),
-                "document_total": d.get("document_total"),
+                "document_total": _num(d.get("document_total")),
                 "result_status": d.get("result_status"),
             }
-            for d in docs
+            for d in docs_n
         ],
         "lines": [
             {
                 "variant_id": ln.get("variant_id"),
                 "sku_code": ln.get("sku_code"),
                 "product_name": ln.get("product_name"),
-                "planned_units": ln.get("planned_units"),
-                "delivered_units": ln.get("delivered_units"),
-                "undelivered_units": ln.get("undelivered_units"),
+                "planned_units": _num(ln.get("planned_units")),
+                "delivered_units": _num(ln.get("delivered_units")),
+                "undelivered_units": _num(ln.get("undelivered_units")),
                 "undelivered_reason": ln.get("undelivered_reason"),
             }
-            for ln in lines
+            for ln in lines_n
         ],
     }

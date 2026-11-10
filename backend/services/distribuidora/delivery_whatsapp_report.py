@@ -215,10 +215,10 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
 
     cols = data.get("collections") or []
     lines.append("")
-    lines.append("Cobranza:")
+    lines.append("Cobranza declarada (no es pago confirmado contable):")
     if not cols:
         lines.append("• Sin declaración registrada")
-        lines.append("• Pago verificado: no")
+        lines.append("• Pago verificado administrativamente: no")
     else:
         for c in cols:
             method = c.get("method")
@@ -231,15 +231,17 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
                 f"  Monto declarado por chofer: {_fmt_money(c.get('declared_amount'))}"
             )
             lines.append(
-                f"  Monto pendiente: {_fmt_money(c.get('pending_balance'))}"
+                f"  Saldo pendiente declarado: {_fmt_money(c.get('pending_balance'))}"
             )
             verified = c.get("verified_amount")
             if verified is not None and float(verified) > 0:
-                lines.append(f"  Pago verificado: sí ({_fmt_money(verified)})")
+                lines.append(
+                    f"  Pago verificado administrativamente: sí ({_fmt_money(verified)})"
+                )
             elif method == "transfer_verified":
-                lines.append("  Pago verificado: sí")
+                lines.append("  Pago verificado administrativamente: sí")
             else:
-                lines.append("  Pago verificado: no (solo declarado)")
+                lines.append("  Pago verificado administrativamente: no")
 
     lines.append("")
     lines.append(f"Firma de conformidad: {data.get('signature_status') or 'pendiente'}")
