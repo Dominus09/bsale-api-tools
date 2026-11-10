@@ -43,41 +43,57 @@ export default function EntregaCobranzaPage() {
 
   useEffect(() => {
     if (!session.documents.length) return
-    const next: DocPayState[] = session.documents
-      .filter((d) => d.related_document_id != null)
-      .map((d) => {
-        const key = docKeyFromDocument(d)
-        const savedDoc = visitDocs.find(
-          (vd) => String(vd.related_document_id ?? "") === key,
-        )
-        const docResId = savedDoc?.id != null ? Number(savedDoc.id) : null
-        const cols = collections.filter(
-          (c) => docResId != null && Number(c.document_result_id) === docResId,
-        )
-        const rows: PaymentRow[] =
-          cols.length > 0
-            ? cols.map((c, i) =>
-                newPaymentRow({
-                  key: `saved-${c.id ?? i}`,
-                  method: (String(c.method || "cash") as PaymentRow["method"]),
-                  amount:
-                    c.declared_amount != null
-                      ? formatClpDisplay(Number(c.declared_amount))
-                      : "",
-                  note: String(c.note || ""),
-                }),
-              )
-            : [newPaymentRow({ method: "cash" })]
-        return {
-          related_document_id: Number(d.related_document_id),
-          document_result_id: docResId,
-          label: `${d.document_type || "Doc"} ${d.document_number ?? "—"}`,
-          total: typeof d.document_total === "number" ? d.document_total : 0,
-          rows,
-          saved: cols.length > 0,
-        }
-      })
-    setDocs(next)
+    setDocs((prev) => {
+      const prevByRel = new Map(prev.map((d) => [d.related_document_id, d]))
+      return session.documents
+        .filter((d) => d.related_document_id != null)
+        .map((d) => {
+          const key = docKeyFromDocument(d)
+          const relatedId = Number(d.related_document_id)
+          const existing = prevByRel.get(relatedId)
+          const savedDoc = visitDocs.find(
+            (vd) => String(vd.related_document_id ?? "") === key,
+          )
+          const docResId = savedDoc?.id != null ? Number(savedDoc.id) : null
+          const cols = collections.filter(
+            (c) => docResId != null && Number(c.document_result_id) === docResId,
+          )
+          const serverSaved = cols.length > 0
+          // Conservar borrador local si el chofer aún no confirmó este documento.
+          if (existing && !existing.saved && !serverSaved) {
+            return {
+              ...existing,
+              document_result_id: docResId ?? existing.document_result_id,
+              label: `${d.document_type || "Doc"} ${d.document_number ?? "—"}`,
+              total: typeof d.document_total === "number" ? d.document_total : 0,
+            }
+          }
+          const rows: PaymentRow[] =
+            cols.length > 0
+              ? cols.map((c, i) =>
+                  newPaymentRow({
+                    key: `saved-${c.id ?? i}`,
+                    method: String(c.method || "cash") as PaymentRow["method"],
+                    amount:
+                      c.declared_amount != null
+                        ? formatClpDisplay(Number(c.declared_amount))
+                        : "",
+                    note: String(c.note || ""),
+                  }),
+                )
+              : existing?.rows?.length
+                ? existing.rows
+                : [newPaymentRow({ method: "cash" })]
+          return {
+            related_document_id: relatedId,
+            document_result_id: docResId,
+            label: `${d.document_type || "Doc"} ${d.document_number ?? "—"}`,
+            total: typeof d.document_total === "number" ? d.document_total : 0,
+            rows,
+            saved: serverSaved || Boolean(existing?.saved),
+          }
+        })
+    })
   }, [session.documents, visitDocs, collections])
 
   const allSaved = useMemo(
@@ -116,8 +132,9 @@ export default function EntregaCobranzaPage() {
             : d,
         ),
       )
-      setInfo(`Cobranza de ${doc.label} guardada (mixto auditado).`)
-      session.reload()
+      setInfo(`Cobranza de ${doc.label} guardada.`)
+      // Soft refresh del detalle: evita pantallazo/loading de toda la sesión.
+      void session.softReloadVisitDetail()
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Error al guardar cobranza")
     } finally {

@@ -30,6 +30,8 @@ export type VisitSession = {
   canOperateActive: boolean
   visitDetail: Awaited<ReturnType<typeof getVisitDetail>> | null
   reload: () => void
+  /** Refetch solo del detalle de visita, sin pantallazo de loading. */
+  softReloadVisitDetail: () => Promise<void>
   loading: boolean
   error: string | null
 }
@@ -46,6 +48,20 @@ export function useVisitSession(planId: number, customerKey: string): VisitSessi
   > | null>(null)
 
   const reload = useCallback(() => setToken((n) => n + 1), [])
+
+  const softReloadVisitDetail = useCallback(async () => {
+    const visitId =
+      clientPayload?.active_visit?.id ||
+      clientPayload?.last_closed_visit?.id ||
+      clientPayload?.latest_visit?.id
+    if (!visitId || !Number.isFinite(planId)) return
+    try {
+      const detail = await getVisitDetail(planId, Number(visitId))
+      setVisitDetail(detail)
+    } catch {
+      /* conservar detalle previo */
+    }
+  }, [clientPayload, planId])
 
   useEffect(() => {
     if (!Number.isFinite(planId) || planId < 1 || !customerKey) {
@@ -131,6 +147,7 @@ export function useVisitSession(planId: number, customerKey: string): VisitSessi
     canOperateActive: recovery.canResumeActive,
     visitDetail,
     reload,
+    softReloadVisitDetail,
     loading,
     error,
   }

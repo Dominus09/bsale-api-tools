@@ -424,6 +424,11 @@ export default function EntregaDocumentoDetallePage() {
                           <div className="product-category">{ln.category_name}</div>
                         ) : null}
                         <div className="product-name">{ln.product_name}</div>
+                        {ln.barcode ? (
+                          <div className="muted" style={{ fontSize: "0.75rem", marginTop: 2 }}>
+                            {ln.barcode}
+                          </div>
+                        ) : null}
                       </div>
                       <span
                         className={`pill${
@@ -437,41 +442,30 @@ export default function EntregaDocumentoDetallePage() {
                         {lineOutcomeEs(outcome)}
                       </span>
                     </div>
-                    <div className="muted" style={{ fontSize: "0.8rem" }}>
-                      {ln.barcode
-                        ? `Código de barras: ${ln.barcode}`
-                        : "Código de barras: no disponible"}
-                    </div>
                     {(() => {
                       const boxes = breakdownBoxUnits(ln.planned, ln.units_per_box, {
                         sinUnidadCaja: ln.sin_unidad_caja,
                         equivalenceStatus: ln.equivalence_status,
                       })
                       return (
-                        <div style={{ margin: "8px 0 10px" }}>
-                          <div className="muted" style={{ fontSize: "0.75rem" }}>
-                            Documentado
-                          </div>
-                          <div className="qty-doc">{ln.planned} unidades</div>
-                          {boxes.available && boxes.label ? (
-                            <>
-                              <div className="qty-boxes">{boxes.label}</div>
-                              {boxes.unitsPerBox != null ? (
-                                <div className="qty-factor">
-                                  Factor: {boxes.unitsPerBox} un. por caja
-                                </div>
-                              ) : null}
-                            </>
+                        <div style={{ margin: "8px 0 6px" }}>
+                          {boxes.available && boxes.unitsPerBox != null ? (
+                            <div className="muted" style={{ fontSize: "0.75rem" }}>
+                              {boxes.unitsPerBox} un = 1 caja
+                            </div>
+                          ) : null}
+                          {boxes.available && boxes.pillLabel ? (
+                            <span className="qty-box-pill">{boxes.pillLabel}</span>
                           ) : (
-                            <div className="qty-factor">Equivalencia en cajas no disponible</div>
+                            <div className="qty-doc">{ln.planned} un</div>
                           )}
                         </div>
                       )
                     })()}
-                    <div className="btn-row" style={{ marginBottom: 8 }}>
+                    <div className="line-actions">
                       <button
                         type="button"
-                        className="btn btn-ghost btn-compact"
+                        className="btn btn-primary"
                         disabled={busy}
                         onClick={() =>
                           patchLine({ delivered: ln.planned, reason: "physical_shortage", note: "" })
@@ -481,7 +475,7 @@ export default function EntregaDocumentoDetallePage() {
                       </button>
                       <button
                         type="button"
-                        className="btn btn-ghost btn-compact"
+                        className="btn btn-secondary"
                         disabled={busy}
                         onClick={() =>
                           patchLine({
@@ -497,8 +491,9 @@ export default function EntregaDocumentoDetallePage() {
                       </button>
                       <button
                         type="button"
-                        className="btn btn-ghost btn-compact"
+                        className="btn btn-none"
                         disabled={busy}
+                        aria-label="No entregado"
                         onClick={() =>
                           patchLine({
                             delivered: 0,
@@ -506,11 +501,11 @@ export default function EntregaDocumentoDetallePage() {
                           })
                         }
                       >
-                        No entregado
+                        ✕
                       </button>
                     </div>
                     <label className="field">
-                      Entregado (unidades)
+                      Entregar (unidades)
                       <input
                         inputMode="numeric"
                         value={String(ln.delivered)}

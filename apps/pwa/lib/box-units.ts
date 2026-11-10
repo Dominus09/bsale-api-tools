@@ -9,6 +9,7 @@ export type BoxUnitsBreakdown = {
   fullBoxes: number | null
   looseUnits: number | null
   label: string | null
+  pillLabel: string | null
   available: boolean
 }
 
@@ -19,20 +20,20 @@ export function breakdownBoxUnits(
 ): BoxUnitsBreakdown {
   const u = typeof units === "number" && Number.isFinite(units) ? units : 0
   const blocked = Boolean(opts?.sinUnidadCaja)
-  const verified =
-    opts?.equivalenceStatus == null || opts.equivalenceStatus === "verified"
+  // Factor estructurado válido basta; no exigir equivalence_status=verified.
   const upb =
     typeof unitsPerBox === "number" && Number.isFinite(unitsPerBox) && unitsPerBox > 0
       ? unitsPerBox
       : null
 
-  if (blocked || !verified || upb == null) {
+  if (blocked || upb == null) {
     return {
       units: u,
       unitsPerBox: null,
       fullBoxes: null,
       looseUnits: null,
       label: null,
+      pillLabel: null,
       available: false,
     }
   }
@@ -40,12 +41,16 @@ export function breakdownBoxUnits(
   const fullBoxes = Math.floor(u / upb)
   const looseUnits = Math.round((u - fullBoxes * upb) * 1000) / 1000
   let label: string
+  let pillLabel: string
   if (looseUnits > 0 && fullBoxes > 0) {
-    label = `${fullBoxes} cajas + ${looseUnits} unidades`
+    label = `${u} un = ${fullBoxes} cajas + ${looseUnits} un`
+    pillLabel = `${u} un = ${fullBoxes} cajas + ${looseUnits}`
   } else if (looseUnits > 0) {
-    label = `${looseUnits} unidades`
+    label = `${u} un`
+    pillLabel = `${u} un`
   } else {
-    label = `${fullBoxes} cajas × ${upb} unidades`
+    label = `${u} un = ${fullBoxes} cajas`
+    pillLabel = `${u} un = ${fullBoxes} cajas`
   }
 
   return {
@@ -54,6 +59,7 @@ export function breakdownBoxUnits(
     fullBoxes,
     looseUnits,
     label,
+    pillLabel,
     available: true,
   }
 }

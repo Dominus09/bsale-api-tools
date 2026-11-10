@@ -357,7 +357,15 @@ def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) 
                 cajas_out = cajas_val
         except (TypeError, ValueError):
             cajas_out = None
-    verified = cajas_out is not None and upb_f > 0 and not sin_caja
+    # Si hay factor estructurado válido, mostrar cajas aunque el picking no traiga
+    # ``cajas`` precalculado (líneas de document_details).
+    units_num = _num(row.get("unidades"))
+    if cajas_out is None and not sin_caja and upb_f > 0 and units_num is not None:
+        try:
+            cajas_out = round(float(units_num) / upb_f, 2)
+        except (TypeError, ValueError, ZeroDivisionError):
+            cajas_out = None
+    verified = upb_f > 0 and not sin_caja
     commercial = _commercial_product_name(row)
     product_name = _clean_text(
         row.get("producto_base") or row.get("product_name") or row.get("producto") or ""

@@ -1163,6 +1163,38 @@ input {
   font-size: 0.92rem;
 }
 
+.qty-box-pill {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(196, 41, 60, 0.16);
+  border: 1px solid rgba(196, 41, 60, 0.45);
+  color: #ffb4bc;
+  font-size: 0.78rem;
+  font-weight: 750;
+}
+
+.line-actions {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr auto;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.line-actions .btn {
+  min-height: 40px;
+  font-size: 0.8rem;
+  padding: 8px 10px;
+}
+
+.btn-none {
+  background: #0b0d12;
+  border-color: #3a3f4a;
+  color: #fff;
+}
+
 .qty-factor {
   font-size: 0.75rem;
   color: var(--muted);
