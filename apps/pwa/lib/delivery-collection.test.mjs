@@ -4,7 +4,9 @@ import { describe, it } from "node:test"
 function parseAmount(raw) {
   const t = String(raw ?? "").trim()
   if (!t) return null
-  const n = Number(t.replace(",", "."))
+  const cleaned = t.replace(/\$/g, "").replace(/\s/g, "").replace(/\./g, "").replace(/,/g, "")
+  if (!cleaned || !/^-?\d+$/.test(cleaned)) return null
+  const n = Number(cleaned)
   return Number.isFinite(n) ? n : null
 }
 
@@ -47,13 +49,14 @@ describe("delivery-collection mixed payments", () => {
     assert.equal(pendingBalance(155033, rows), 0)
   })
 
-  it("acepta cash + transfer + pending", () => {
+  it("acepta cash + transfer + pending con puntos CLP", () => {
     const rows = [
-      { method: "cash", amount: "50000" },
-      { method: "transfer_declared", amount: "70000" },
-      { method: "pending", amount: "35033" },
+      { method: "cash", amount: "50.000" },
+      { method: "transfer_declared", amount: "90.000" },
+      { method: "pending", amount: "15.033" },
     ]
     assert.equal(validateMixedPayments(155033, rows), null)
+    assert.equal(sumDeclared(rows), 155033)
     assert.equal(pendingBalance(155033, rows), 0)
   })
 

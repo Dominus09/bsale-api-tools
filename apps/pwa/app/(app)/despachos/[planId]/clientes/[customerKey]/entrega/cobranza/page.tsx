@@ -8,11 +8,13 @@ import { DeliveryStepChrome } from "@/components/delivery-step-chrome"
 import {
   newPaymentRow,
   PAYMENT_METHODS,
+  parseAmount,
   pendingBalance,
   sumDeclared,
   validateMixedPayments,
   type PaymentRow,
 } from "@/lib/delivery-collection"
+import { formatClpDisplay } from "@/lib/clp-input"
 import { buildEntregaHref, docKeyFromDocument, moneyCLP } from "@/lib/delivery-flow"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
@@ -59,7 +61,9 @@ export default function EntregaCobranzaPage() {
                   key: `saved-${c.id ?? i}`,
                   method: (String(c.method || "cash") as PaymentRow["method"]),
                   amount:
-                    c.declared_amount != null ? String(c.declared_amount) : "",
+                    c.declared_amount != null
+                      ? formatClpDisplay(Number(c.declared_amount))
+                      : "",
                   note: String(c.note || ""),
                 }),
               )
@@ -101,7 +105,7 @@ export default function EntregaCobranzaPage() {
         document_amount: doc.total,
         payments: doc.rows.map((r) => ({
           method: r.method,
-          declared_amount: r.amount.trim() === "" ? 0 : Number(r.amount),
+          declared_amount: parseAmount(r.amount) ?? 0,
           note: r.note.trim() || null,
         })),
       })
@@ -176,11 +180,15 @@ export default function EntregaCobranzaPage() {
               </div>
               <div className="meta-row">
                 <span className="muted">Total declarado</span>
-                <span>{moneyCLP(declared)}</span>
+                <span className={declared - doc.total > 0.009 ? "amt-danger" : ""}>
+                  {moneyCLP(declared)}
+                </span>
               </div>
               <div className="meta-row">
                 <span className="muted">Saldo pendiente</span>
-                <span>{moneyCLP(pending)}</span>
+                <span className={pending > 0 ? "amt-pending" : ""}>
+                  {moneyCLP(pending)}
+                </span>
               </div>
 
               <strong style={{ display: "block", margin: "10px 0 6px", fontSize: "0.9rem" }}>
@@ -188,9 +196,13 @@ export default function EntregaCobranzaPage() {
               </strong>
               <div className="stack-gap">
                 {doc.rows.map((row) => (
-                  <div key={row.key} className="card" style={{ padding: 10 }}>
+                  <div
+                    key={row.key}
+                    className={`card pay-row pay-${row.method}`}
+                    style={{ padding: 10 }}
+                  >
                     <label className="field">
-                      Método
+                      Forma de pago
                       <select
                         value={row.method}
                         onChange={(e) =>
@@ -223,11 +235,14 @@ export default function EntregaCobranzaPage() {
                       </select>
                     </label>
                     <label className="field">
-                      Monto
+                      Monto (CLP)
                       <input
-                        inputMode="decimal"
+                        inputMode="numeric"
+                        pattern="[0-9.]*"
+                        enterKeyHint="done"
                         value={row.amount}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const raw = e.target.value
                           setDocs((all) =>
                             all.map((d) =>
                               d.related_document_id === doc.related_document_id
@@ -236,14 +251,33 @@ export default function EntregaCobranzaPage() {
                                     saved: false,
                                     rows: d.rows.map((r) =>
                                       r.key === row.key
-                                        ? { ...r, amount: e.target.value }
+                                        ? { ...r, amount: raw }
                                         : r,
                                     ),
                                   }
                                 : d,
                             ),
                           )
-                        }
+                        }}
+                        onBlur={() => {
+                          const n = parseAmount(row.amount)
+                          if (n == null) return
+                          const pretty = formatClpDisplay(n)
+                          setDocs((all) =>
+                            all.map((d) =>
+                              d.related_document_id === doc.related_document_id
+                                ? {
+                                    ...d,
+                                    rows: d.rows.map((r) =>
+                                      r.key === row.key
+                                        ? { ...r, amount: pretty }
+                                        : r,
+                                    ),
+                                  }
+                                : d,
+                            ),
+                          )
+                        }}
                       />
                     </label>
                     <label className="field">

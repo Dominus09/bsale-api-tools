@@ -117,7 +117,7 @@ def test_signature_sha_mismatch_blocks_finalize(monkeypatch):
     )
     monkeypatch.setattr(closure.visit_repo, "list_evidence", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        closure.visit_repo, "list_collections", lambda *_a, **_k: []
+        closure.visit_repo, "list_active_collections", lambda *_a, **_k: []
     )
     monkeypatch.setattr(
         closure.visit_repo,
@@ -259,7 +259,7 @@ def test_matching_signature_sha_allows_verified(monkeypatch):
         closure.visit_repo, "list_line_results", lambda *_a, **_k: lines
     )
     monkeypatch.setattr(
-        closure.visit_repo, "list_collections", lambda *_a, **_k: []
+        closure.visit_repo, "list_active_collections", lambda *_a, **_k: []
     )
     monkeypatch.setattr(closure.visit_repo, "list_evidence", lambda *_a, **_k: [])
     monkeypatch.setattr(
@@ -445,7 +445,7 @@ def test_collection_change_breaks_signed_sha(monkeypatch):
         closure.visit_repo, "list_line_results", lambda *_a, **_k: lines
     )
     monkeypatch.setattr(
-        closure.visit_repo, "list_collections", lambda *_a, **_k: cols_changed
+        closure.visit_repo, "list_active_collections", lambda *_a, **_k: cols_changed
     )
     monkeypatch.setattr(closure.visit_repo, "list_evidence", lambda *_a, **_k: [])
     monkeypatch.setattr(

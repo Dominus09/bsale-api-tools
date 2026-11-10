@@ -18,14 +18,21 @@ export const PAYMENT_METHODS: ReadonlyArray<{ value: PaymentMethod; label: strin
   { value: "cash", label: "Efectivo" },
   { value: "transfer_declared", label: "Transferencia informada" },
   { value: "credit", label: "Crédito autorizado" },
-  { value: "pending", label: "Pago pendiente" },
+  { value: "pending", label: "Saldo pendiente" },
   { value: "not_applicable", label: "No corresponde" },
 ]
 
+/** Acepta "50000", "50.000", "$50.000". */
 export function parseAmount(raw: string): number | null {
-  const t = raw.trim()
+  const t = String(raw || "").trim()
   if (!t) return null
-  const n = Number(t.replace(",", "."))
+  const cleaned = t
+    .replace(/\$/g, "")
+    .replace(/\s/g, "")
+    .replace(/\./g, "")
+    .replace(/,/g, "")
+  if (!cleaned || !/^-?\d+$/.test(cleaned)) return null
+  const n = Number(cleaned)
   return Number.isFinite(n) ? n : null
 }
 

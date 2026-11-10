@@ -974,6 +974,10 @@ def declare_collection(
                     status_code=422,
                     detail="document_result_id no pertenece a esta visita",
                 )
+            # Reemplazo del documento (evita acumular filas del endpoint simple).
+            visit_repo.delete_collections_for_document(
+                cur, visit_id=int(visit_id), document_result_id=int(doc_res_id)
+            )
         row = visit_repo.insert_collection(
             cur,
             visit_id=int(visit_id),
@@ -1227,7 +1231,7 @@ def build_whatsapp_report(
 
         docs = visit_repo.list_document_results(cur, int(visit_id))
         lines = visit_repo.list_line_results(cur, int(visit_id))
-        cols = visit_repo.list_collections(cur, int(visit_id))
+        cols = visit_repo.list_active_collections(cur, int(visit_id))
         try:
             evid_n = visit_repo.count_evidence(cur, int(visit_id))
         except Exception:
@@ -1492,7 +1496,7 @@ def get_visit_detail_for_erp(
         conf = visit_repo.get_conformity(cur, int(visit_id))
         docs = visit_repo.list_document_results(cur, int(visit_id))
         lines = visit_repo.list_line_results(cur, int(visit_id))
-        cols = visit_repo.list_collections(cur, int(visit_id))
+        cols = visit_repo.list_active_collections(cur, int(visit_id))
 
         facade_out = None
         client_id = visit.get("client_id")
@@ -1617,7 +1621,7 @@ def get_visit_detail(
             raise HTTPException(status_code=403, detail="Visita de otro chofer")
         docs = visit_repo.list_document_results(cur, int(visit_id))
         lines = visit_repo.list_line_results(cur, int(visit_id))
-        cols = visit_repo.list_collections(cur, int(visit_id))
+        cols = visit_repo.list_active_collections(cur, int(visit_id))
         evidence = visit_repo.list_evidence(cur, int(visit_id))
         conf = visit_repo.get_conformity(cur, int(visit_id))
         cur.close()
@@ -1878,10 +1882,20 @@ def submit_conformity(
 ) -> dict[str, Any]:
     from backend.services.distribuidora import delivery_visit_closure as closure
 
+    import logging
+
     uid = read_svc.enforce_driver_plan_read_access(user, int(plan_id))
     company_id = loc_svc._authorized_company_id_for_plan(user, int(plan_id))  # noqa: SLF001
     name = (receptor_name or "").strip()
+    _log = logging.getLogger("delivery.conformity")
     if not refused and len(name) < 2:
+        _log.info(
+            "conformity_reject empty_receptor plan=%s visit=%s name_len=%s has_sig=%s",
+            plan_id,
+            visit_id,
+            len(name),
+            bool(signature_png),
+        )
         raise HTTPException(status_code=400, detail="Nombre del receptor requerido")
     if refused and not (refuse_reason or "").strip():
         raise HTTPException(status_code=400, detail="Motivo de negativa requerido")
@@ -1896,14 +1910,52 @@ def submit_conformity(
         )
         docs = visit_repo.list_document_results(cur, int(visit_id))
         lines = visit_repo.list_line_results(cur, int(visit_id))
-        collections = visit_repo.list_collections(cur, int(visit_id))
+        collections = visit_repo.list_active_collections(cur, int(visit_id))
         if not refused and (not docs or not lines):
             raise HTTPException(
                 status_code=422,
                 detail="Registre cantidades antes de solicitar conformidad",
             )
+        # Cobranza vigente: suma por documento no puede superar el total.
+        for d in docs:
+            doc_id = int(d["id"])
+            total = d.get("document_total")
+            if total is None:
+                continue
+            try:
+                total_f = float(total)
+            except (TypeError, ValueError):
+                continue
+            sum_decl = 0.0
+            for c in collections:
+                if c.get("document_result_id") is None:
+                    continue
+                if int(c["document_result_id"]) != doc_id:
+                    continue
+                if str(c.get("method") or "") == "not_applicable":
+                    continue
+                try:
+                    sum_decl += float(c.get("declared_amount") or 0)
+                except (TypeError, ValueError):
+                    pass
+            if sum_decl - total_f > 0.009:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Cobranza vigente inconsistente con el total del documento; "
+                        "corrija antes de firmar"
+                    ),
+                )
         summary = closure.build_conformity_summary(
             visit=visit, docs=docs, lines=lines, collections=collections
+        )
+        _log.info(
+            "conformity_accept plan=%s visit=%s name_len=%s refused=%s cols=%s",
+            plan_id,
+            visit_id,
+            len(name),
+            bool(refused),
+            len(collections),
         )
         import json
 

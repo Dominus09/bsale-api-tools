@@ -995,6 +995,104 @@ def test_mixed_collections_cash_and_pending(isolated_db, monkeypatch):
     assert simple["collection"].get("verified_amount") is None
 
 
+def test_mixed_replace_drops_orphan_null_document_rows(isolated_db, monkeypatch):
+    """Filas antiguas sin document_result_id no deben contaminar el resumen."""
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42
+    )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_resolve_client",
+        lambda _p, _k: {"client_id": 9010, "customer_key": "id:9010"},
+    )
+    monkeypatch.setattr(svc.loc_svc, "_parse_client_id", lambda _k, _c: 9010)
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda _u, _p: 3
+    )
+    started = svc.start_visit(
+        user=_user(),
+        plan_id=10,
+        customer_key="id:9010",
+        latitude=-42.0,
+        longitude=-73.0,
+        accuracy_m=10.0,
+    )
+    vid = started["visit"]["id"]
+    saved = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=None,
+        document_number=9001,
+        document_type="boleta",
+        document_total=155033,
+        result_status="full",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 88001,
+                "planned_units": 4,
+                "delivered_units": 4,
+                "product_name": "A",
+            },
+            {
+                "source_detail_id": 88002,
+                "planned_units": 2,
+                "delivered_units": 2,
+                "product_name": "B",
+            },
+        ],
+    )
+    doc_res_id = int(saved["document_result"]["id"])
+    # Simula fila huérfana del endpoint simple antiguo.
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        visit_repo.insert_collection(
+            cur,
+            visit_id=int(vid),
+            document_result_id=None,
+            method="pending",
+            document_amount=155033,
+            declared_amount=120000,
+            verified_amount=None,
+            pending_balance=120000,
+            note="huerfana",
+            created_by_user_id=42,
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    mixed = svc.declare_collections_mixed(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_res_id,
+        document_amount=155033,
+        payments=[
+            {"method": "cash", "declared_amount": 50000},
+            {"method": "transfer_declared", "declared_amount": 90000},
+            {"method": "pending", "declared_amount": 15033},
+        ],
+    )
+    assert mixed["persisted"] is True
+    assert len(mixed["collections"]) == 3
+
+    detail = svc.get_visit_detail(user=_user(), plan_id=10, visit_id=vid)
+    cols = detail["collections"]
+    assert all(c.get("document_result_id") is not None for c in cols)
+    pending_sum = sum(
+        float(c["declared_amount"] or 0) for c in cols if c["method"] == "pending"
+    )
+    assert pending_sum == 15033.0
+    assert 120000.0 not in [
+        float(c["declared_amount"] or 0) for c in cols if c["method"] == "pending"
+    ]
+
+
 def test_mixed_collection_error_keeps_prior_rows(isolated_db, monkeypatch):
     monkeypatch.setattr(
         svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42

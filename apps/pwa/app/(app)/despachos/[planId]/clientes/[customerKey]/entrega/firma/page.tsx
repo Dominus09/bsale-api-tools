@@ -12,6 +12,11 @@ import {
 import { DeliverySignaturePad } from "@/components/delivery-signature-pad"
 import { DeliveryStepChrome } from "@/components/delivery-step-chrome"
 import { WhatsappSharePanel } from "@/components/whatsapp-share-panel"
+import {
+  filterActiveCollections,
+  summarizeCollections,
+} from "@/lib/active-collections"
+import { docStatusLabel, paymentMethodLabel } from "@/lib/delivery-labels"
 import { buildEntregaHref, moneyCLP } from "@/lib/delivery-flow"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
@@ -32,10 +37,23 @@ export default function EntregaFirmaPage() {
   const detail = session.visitDetail
   const lines = detail?.lines || []
   const docs = detail?.documents || []
-  const cols = detail?.collections || []
+  const allCols = detail?.collections || []
   const existingConf = detail?.conformity
 
-  const { compactLines, detailLines } = useMemo(() => {
+  const docResIds = useMemo(
+    () =>
+      docs
+        .map((d) => (d.id != null ? Number(d.id) : null))
+        .filter((n): n is number => n != null && Number.isFinite(n)),
+    [docs],
+  )
+
+  const cols = useMemo(
+    () => filterActiveCollections(allCols, docResIds),
+    [allCols, docResIds],
+  )
+
+  const { compactLines, detailLines, blockReason } = useMemo(() => {
     const compact: string[] = []
     const full: string[] = []
     compact.push(`Cliente: ${session.clientName}`)
@@ -44,10 +62,10 @@ export default function EntregaFirmaPage() {
       const tot = typeof d.document_total === "number" ? d.document_total : 0
       totalAmt += tot
       compact.push(
-        `${d.document_type || "Doc"} ${d.document_number ?? "—"} · ${moneyCLP(tot)} · ${d.result_status || "—"}`,
+        `${d.document_type || "Doc"} ${d.document_number ?? "—"} · ${moneyCLP(tot)} · ${docStatusLabel(String(d.result_status || ""))}`,
       )
     }
-    compact.push(`Totales documentos: ${moneyCLP(totalAmt)}`)
+    compact.push(`Total documentos: ${moneyCLP(totalAmt)}`)
     let fullN = 0
     let partialN = 0
     let noneN = 0
@@ -65,32 +83,65 @@ export default function EntregaFirmaPage() {
     compact.push(
       `Líneas: ${fullN} completas · ${partialN} parciales · ${noneN} no entregadas`,
     )
-    const byMethod = new Map<string, number>()
-    let declaredAll = 0
-    let pendingExplicit = 0
-    for (const c of cols) {
-      const method = String(c.method || "—")
-      const declared =
-        typeof c.declared_amount === "number" ? c.declared_amount : 0
-      byMethod.set(method, (byMethod.get(method) || 0) + declared)
-      if (method !== "not_applicable") declaredAll += declared
-      if (method === "pending") pendingExplicit += declared
-      full.push(
-        `Cobranza ${method}: ${moneyCLP(declared)}${c.note ? ` · ${c.note}` : ""}`,
+    const summary = summarizeCollections(cols, totalAmt)
+    if (summary.cash > 0) {
+      compact.push(`Efectivo declarado: ${moneyCLP(summary.cash)}`)
+    }
+    if (summary.transferDeclared > 0) {
+      compact.push(
+        `Transferencias informadas: ${moneyCLP(summary.transferDeclared)}`,
       )
     }
-    // No doble-contar: pending explícito + remanente solo si la suma no cubre el total.
-    const implicitRemaining = Math.max(0, totalAmt - declaredAll)
-    const pendingSum = pendingExplicit + implicitRemaining
-    for (const [method, amt] of byMethod) {
-      compact.push(`Cobranza ${method}: ${moneyCLP(amt)}`)
+    if (summary.credit > 0) {
+      compact.push(`Crédito: ${moneyCLP(summary.credit)}`)
     }
-    if (byMethod.size === 0) compact.push("Sin cobranza declarada")
-    compact.push(`Saldo pendiente (declarado): ${moneyCLP(pendingSum)}`)
+    for (const [method, amt] of summary.byMethod) {
+      if (
+        method === "cash" ||
+        method === "transfer_declared" ||
+        method === "credit" ||
+        method === "pending"
+      ) {
+        continue
+      }
+      compact.push(`${paymentMethodLabel(method)}: ${moneyCLP(amt)}`)
+    }
+    if (summary.byMethod.size === 0) compact.push("Sin cobranza declarada")
+    compact.push(`Saldo pendiente: ${moneyCLP(summary.pendingBalance)}`)
+
+    const orphans = allCols.filter((c) => c.document_result_id == null)
+    let block: string | null = null
+    if (orphans.length > 0) {
+      block =
+        "Hay declaraciones antiguas sin documento. Vuelva a cobranza y guarde de nuevo."
+    }
+    if (summary.declaredAll - totalAmt > 0.009) {
+      block =
+        "La cobranza vigente no cuadra con el total. Corrija antes de firmar."
+    }
+
+    for (const c of cols) {
+      full.push(
+        `${paymentMethodLabel(String(c.method))}: ${moneyCLP(
+          typeof c.declared_amount === "number" ? c.declared_amount : 0,
+        )}${c.note ? ` · ${c.note}` : ""}`,
+      )
+    }
+
     if (!docs.length) compact.push("Sin documentos registrados")
     if (!lines.length) compact.push("Sin líneas guardadas")
-    return { compactLines: compact, detailLines: full }
-  }, [session.clientName, docs, lines, cols])
+
+    const confLabel = existingConf
+      ? existingConf.invalidated_at
+        ? "Conformidad invalidada (requiere nueva firma)"
+        : existingConf.refused
+          ? "Negativa registrada"
+          : "Firmada"
+      : "Pendiente de firma"
+    compact.push(`Conformidad: ${confLabel}`)
+
+    return { compactLines: compact, detailLines: full, blockReason: block }
+  }, [session.clientName, docs, lines, cols, allCols, existingConf])
 
   const summaryLines = detailOpen
     ? [...compactLines, "— Detalle —", ...detailLines]
@@ -186,7 +237,13 @@ export default function EntregaFirmaPage() {
 
   const confReady =
     conformityOk ||
-    Boolean(existingConf && (existingConf.refused || existingConf.signature_object_key || existingConf.receptor_name))
+    Boolean(
+      existingConf &&
+        !existingConf.invalidated_at &&
+        (existingConf.refused ||
+          existingConf.signature_object_key ||
+          existingConf.receptor_name),
+    )
 
   return (
     <DeliveryStepChrome
@@ -199,82 +256,72 @@ export default function EntregaFirmaPage() {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={busy}
+            disabled={busy || Boolean(blockReason)}
             onClick={() => setConfirmEnd(true)}
           >
-            Finalizar entrega…
+            Finalizar visita
           </button>
-        ) : confirmEnd ? (
+        ) : confReady && confirmEnd ? (
           <div className="btn-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => void onFinalize()}
-            >
-              {busy ? "Confirmando…" : "Confirmar cierre"}
-            </button>
             <button
               type="button"
               className="btn btn-ghost"
               disabled={busy}
               onClick={() => setConfirmEnd(false)}
             >
-              Volver
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => void onFinalize()}
+            >
+              {busy ? "Cerrando…" : "Confirmar cierre"}
             </button>
           </div>
         ) : null
       }
     >
-      {confReady ? (
+      {existingConf && !existingConf.invalidated_at ? (
         <div className="banner banner-info">
-          Conformidad registrada
-          {existingConf?.receptor_name
+          Conformidad ya registrada
+          {existingConf.receptor_name
             ? ` · ${String(existingConf.receptor_name)}`
             : ""}
-          {existingConf?.refused ? " · negativa a firmar" : ""}.
         </div>
       ) : (
-                <DeliverySignaturePad
-                  planId={planId}
-                  visitId={session.activeVisit.id}
-                  summaryLines={summaryLines}
-                  detailOpen={detailOpen}
-                  onToggleDetail={() => setDetailOpen((v) => !v)}
-                  onDone={() => {
-                    setConformityOk(true)
-                    session.reload()
-                  }}
-                />
+        <DeliverySignaturePad
+          planId={planId}
+          visitId={session.activeVisit.id}
+          summaryLines={summaryLines}
+          detailOpen={detailOpen}
+          onToggleDetail={() => setDetailOpen((v) => !v)}
+          blockReason={blockReason}
+          onDone={() => {
+            setConformityOk(true)
+            session.reload()
+          }}
+        />
       )}
 
-      {confirmEnd ? (
-        <p className="muted" style={{ fontSize: "0.8rem", margin: 0 }}>
-          El servidor validará cantidades, evidencia/firma y GPS. No descuenta stock.
-          Cierre idempotente (una sola vez efectiva).
-        </p>
-      ) : null}
+      {err ? <div className="banner banner-error">{err}</div> : null}
 
       {report ? (
         <WhatsappSharePanel
           reportText={report.report_text}
           share={report.share}
           header={report.header}
-          busy={busy}
-          generateLabel="Regenerar reporte"
           onGenerate={async () => {
-            if (!session.activeVisit) return
             const res = await generateVisitWhatsappReport(
               planId,
-              session.activeVisit.id,
+              session.activeVisit!.id,
               { client_name: session.clientName },
             )
             setReport(res)
           }}
         />
       ) : null}
-
-      {err ? <div className="banner banner-error">{err}</div> : null}
     </DeliveryStepChrome>
   )
 }

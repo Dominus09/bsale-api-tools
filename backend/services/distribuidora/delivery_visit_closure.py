@@ -148,7 +148,7 @@ def assert_finalize_ready(
                     status_code=422, detail="Nombre del receptor requerido"
                 )
             # La firma debe corresponder al resumen actual (anti-reuso / anti-cambio silencioso)
-            collections = visit_repo.list_collections(cur, visit_id)
+            collections = visit_repo.list_active_collections(cur, visit_id)
             current_summary = build_conformity_summary(
                 visit=visit, docs=docs, lines=lines, collections=collections
             )

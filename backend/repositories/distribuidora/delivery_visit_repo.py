@@ -354,14 +354,40 @@ def insert_collection(cur, **kw) -> dict[str, Any]:
 def delete_collections_for_document(
     cur, *, visit_id: int, document_result_id: int
 ) -> int:
+    """Elimina declaraciones vigentes del documento + huérfanas (document_result_id NULL).
+
+    Las huérfanas suelen venir del endpoint simple antiguo y contaminaban el resumen.
+    """
     cur.execute(
         """
         DELETE FROM distribuidora.delivery_collections
-        WHERE visit_id = %s AND document_result_id = %s
+        WHERE visit_id = %s
+          AND (
+            document_result_id = %s
+            OR document_result_id IS NULL
+          )
         """,
         (int(visit_id), int(document_result_id)),
     )
     return int(cur.rowcount or 0)
+
+
+def list_active_collections(cur, visit_id: int) -> list[dict[str, Any]]:
+    """Solo cobranza ligada a document_results actuales de la visita."""
+    cur.execute(
+        """
+        SELECT c.*
+        FROM distribuidora.delivery_collections c
+        INNER JOIN distribuidora.delivery_document_results d
+          ON d.id = c.document_result_id
+         AND d.visit_id = c.visit_id
+        WHERE c.visit_id = %s
+        ORDER BY c.id
+        """,
+        (int(visit_id),),
+    )
+    rows = cur.fetchall() or []
+    return [_row(cur, r) for r in rows]
 
 
 def list_collections(cur, visit_id: int) -> list[dict[str, Any]]:
