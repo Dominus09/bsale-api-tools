@@ -205,6 +205,7 @@ def test_058_applies_over_057_and_rejects_incomplete_void_on_isolated_pg():
             VALUES (82, 'PLAN-00082')
             """
         )
+        # Reset sequence so explicit ids 1/3 work with later SERIAL inserts
         cur.execute(
             """
             INSERT INTO distribuidora.delivery_visits (
@@ -215,7 +216,61 @@ def test_058_applies_over_057_and_rejects_incomplete_void_on_isolated_pg():
             (3, 3, 82, 'id:3575', 3575, 1, 'in_progress', NOW() - interval '30 minute', NULL, 1)
             """
         )
+        cur.execute(
+            "SELECT setval(pg_get_serial_sequence('distribuidora.delivery_visits','id'), 3, true)"
+        )
+        # Hijos históricos (no se deben borrar)
+        cur.execute(
+            """
+            INSERT INTO distribuidora.delivery_document_results
+                (id, visit_id, related_document_id, document_number, result_status, document_total)
+            VALUES
+                (101, 1, 3975263, 51819, 'partial', 155033),
+                (103, 3, 3975263, 51819, 'full', 155033)
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO distribuidora.delivery_line_results
+                (visit_id, document_result_id, planned_units, delivered_units, undelivered_units, product_name)
+            VALUES
+                (1, 101, 60, 35, 25, 'Royal Guard'),
+                (1, 101, 48, 48, 0, 'Heineken'),
+                (3, 103, 60, 60, 0, 'Royal Guard'),
+                (3, 103, 48, 48, 0, 'Heineken')
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO distribuidora.delivery_collections
+                (visit_id, document_result_id, method, document_amount, declared_amount, created_by_user_id)
+            VALUES (1, 101, 'cash', 155033, 50000, 1)
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO distribuidora.delivery_conformity
+                (visit_id, receptor_name, signed_at, refused)
+            VALUES (1, 'Receptor prueba', NOW() - interval '1 hour', false)
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO distribuidora.delivery_visit_events (visit_id, action, actor_user_id, payload)
+            VALUES
+                (1, 'visit_started', 1, '{}'::jsonb),
+                (1, 'visit_finalized', 1, '{}'::jsonb),
+                (3, 'visit_started', 1, '{}'::jsonb),
+                (3, 'document_lines_saved', 1, '{}'::jsonb),
+                (3, 'visit_resumed', 1, '{}'::jsonb)
+            """
+        )
         conn.commit()
+
+        # Antes del void: bloqueo operativo por #1
+        closed = repo.get_valid_closed_visit(cur, plan_id=82, customer_key="id:3575")
+        assert closed is not None and int(closed["id"]) == 1
+        assert repo.get_active_visit(cur, plan_id=82, customer_key="id:3575") is not None
 
         # pilot_test solo: permitido por CHECK, sigue bloqueando
         cur.execute(
@@ -241,6 +296,41 @@ def test_058_applies_over_057_and_rejects_incomplete_void_on_isolated_pg():
             )
             conn.commit()
         conn.rollback()
+
+        # ROLLBACK total: void #1 OK + fallo simulado → no queda parcial
+        try:
+            cur.execute("BEGIN")
+            cur.execute(
+                """
+                UPDATE distribuidora.delivery_visits
+                SET admin_classification = 'voided_admin',
+                    voided_at = NOW(),
+                    voided_by_user_id = 99,
+                    void_reason = 'piloto aislado',
+                    void_ticket_ref = 'TEST'
+                WHERE id = 1 AND status = 'partial'
+                """
+            )
+            cur.execute(
+                """
+                DO $$ BEGIN
+                    RAISE EXCEPTION 'fallo simulado post-#1';
+                END $$;
+                """
+            )
+            conn.commit()
+            raise AssertionError("se esperaba fallo simulado")
+        except Exception as exc:
+            conn.rollback()
+            assert "fallo simulado" in str(exc)
+        cur.execute(
+            "SELECT admin_classification, voided_at FROM distribuidora.delivery_visits WHERE id = 1"
+        )
+        row1 = cur.fetchone()
+        assert row1["admin_classification"] == "pilot_test"
+        assert row1["voided_at"] is None
+        cur.execute("SELECT status FROM distribuidora.delivery_visits WHERE id = 3")
+        assert cur.fetchone()["status"] == "in_progress"
 
         # void completo #1 + cancel #3 en una TX
         cur.execute("BEGIN")
@@ -269,8 +359,30 @@ def test_058_applies_over_057_and_rejects_incomplete_void_on_isolated_pg():
         )
         cur.execute("COMMIT")
 
+        cur.execute(
+            """
+            SELECT id, status, ended_at IS NOT NULL AS has_ended, admin_classification
+            FROM distribuidora.delivery_visits WHERE id IN (1, 3) ORDER BY id
+            """
+        )
+        v1, v3 = cur.fetchall()
+        assert v1["status"] == "partial" and v1["has_ended"] is True
+        assert v1["admin_classification"] == "voided_admin"
+        assert v3["status"] == "cancelled"
+        assert v3["admin_classification"] == "voided_admin"
+
         assert repo.get_valid_closed_visit(cur, plan_id=82, customer_key="id:3575") is None
         assert repo.get_active_visit(cur, plan_id=82, customer_key="id:3575") is None
+
+        # Hijos intactos
+        cur.execute("SELECT count(*) AS n FROM distribuidora.delivery_line_results WHERE visit_id IN (1,3)")
+        assert int(cur.fetchone()["n"]) == 4
+        cur.execute("SELECT count(*) AS n FROM distribuidora.delivery_collections WHERE visit_id = 1")
+        assert int(cur.fetchone()["n"]) == 1
+        cur.execute("SELECT count(*) AS n FROM distribuidora.delivery_conformity WHERE visit_id = 1")
+        assert int(cur.fetchone()["n"]) == 1
+        cur.execute("SELECT count(*) AS n FROM distribuidora.delivery_visit_events WHERE visit_id IN (1,3)")
+        assert int(cur.fetchone()["n"]) == 5
 
         # Nueva visita activa permitida por índice único
         cur.execute(
@@ -286,7 +398,7 @@ def test_058_applies_over_057_and_rejects_incomplete_void_on_isolated_pg():
         conn.commit()
         assert new_id > 3
 
-        # Doble in_progress rechazado
+        # Doble in_progress rechazado (uq_delivery_visit_active)
         with pytest.raises(Exception):
             cur.execute(
                 """
@@ -298,5 +410,11 @@ def test_058_applies_over_057_and_rejects_incomplete_void_on_isolated_pg():
             )
             conn.commit()
         conn.rollback()
+
+        # Historial de anuladas sigue consultable
+        cur.execute("SELECT * FROM distribuidora.delivery_visits WHERE id = 1")
+        hist = cur.fetchone()
+        assert hist["admin_classification"] == "voided_admin"
+        assert hist["status"] == "partial"
     finally:
         conn.close()
