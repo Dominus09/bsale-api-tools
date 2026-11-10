@@ -254,9 +254,109 @@ export async function getMyCliente(
   documents: DriverDocument[]
   document_count: number
   units_total: number
+  p4?: {
+    tables_ready?: boolean
+    mode?: string
+    note_es?: string
+  }
+  active_visit?: DeliveryVisit | null
+  capabilities?: {
+    start_delivery_visit?: boolean
+    mode?: string
+  }
 }> {
   return apiFetch(
     `/distribuidora/pwa/driver/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}`,
+  )
+}
+
+export type DeliveryVisit = {
+  id: number
+  company_id: number
+  dispatch_plan_id: number
+  customer_key: string
+  client_id?: number | null
+  driver_user_id: number
+  status: string
+  result_reason?: string | null
+  result_note?: string | null
+  started_at?: string | null
+  started_at_local?: string | null
+  ended_at?: string | null
+  ended_at_local?: string | null
+  start_gps?: {
+    lat?: number | null
+    lng?: number | null
+    accuracy_m?: number | null
+    captured_at?: string | null
+    source?: string | null
+  }
+  gps_exception_code?: string | null
+  gps_exception_note?: string | null
+  version: number
+}
+
+export async function startDeliveryVisit(
+  planId: number,
+  customerKey: string,
+  body: {
+    latitude?: number | null
+    longitude?: number | null
+    accuracy_m?: number | null
+    gps_captured_at?: string
+    gps_source?: string
+    gps_exception_code?: string
+    gps_exception_note?: string
+    idempotency_key?: string
+  },
+): Promise<{
+  visit: DeliveryVisit
+  created: boolean
+  resumed: boolean
+  idempotent_replay?: boolean
+  mode?: string
+  ui_status_es?: string
+  note_es?: string
+}> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/visitas/start`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export async function finalizeDeliveryVisit(
+  planId: number,
+  visitId: number,
+  body: {
+    expected_version: number
+    status: string
+    result_reason?: string | null
+    result_note?: string | null
+    latitude?: number | null
+    longitude?: number | null
+    accuracy_m?: number | null
+    gps_captured_at?: string
+    gps_source?: string
+  },
+): Promise<{
+  visit: DeliveryVisit
+  finalized: boolean
+  idempotent_replay?: boolean
+  persisted?: boolean
+  mode?: string
+  note_es?: string
+}> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/finalize`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
   )
 }
 

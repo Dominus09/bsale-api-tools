@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react"
 import { ApiError, getMyCliente } from "@/lib/api"
 import { formatRutDisplay } from "@/lib/format-rut"
 import { ClientLocationCapture } from "@/components/client-location-capture"
+import { DeliveryVisitPanel } from "@/components/delivery-visit-panel"
 
 function money(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return "—"
@@ -184,9 +185,17 @@ export default function ClienteFichaPage() {
         </div>
       ) : null}
 
-      <button type="button" className="btn btn-primary" disabled title="Módulo de visita en commit C">
-        Comenzar entrega
-      </button>
+      <DeliveryVisitPanel
+        planId={planId}
+        customerKey={customerKey}
+        clientName={c.client_name || "Cliente"}
+        documentCount={totals.count}
+        documentTotalLabel={money(totals.amount)}
+        p4Ready={Boolean(data.p4?.tables_ready)}
+        p4Note={data.p4?.note_es}
+        activeVisit={data.active_visit || null}
+        onChanged={() => setReloadToken((n) => n + 1)}
+      />
 
       <ClientLocationCapture
         planId={planId}
