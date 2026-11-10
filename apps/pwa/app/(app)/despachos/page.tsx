@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react"
 import { ApiError, listMyDespachos, type DriverDespacho } from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDate, statusLabel } from "@/lib/format"
+import { asAmount } from "@/lib/money-display"
 import { partitionPlansByDate, santiagoTodayYmd } from "@/lib/plan-buckets"
 
 function PlanCard(props: {
@@ -13,52 +14,74 @@ function PlanCard(props: {
   cta?: string
 }) {
   const p = props.plan
+  const amount = asAmount(p.amount_total)
+  const docs =
+    typeof p.document_count === "number" ? p.document_count : null
+  const clients =
+    typeof p.client_count === "number" ? p.client_count : null
+
   return (
     <div className={`card${props.hero ? " despacho-hero" : ""}`}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-        <h2 style={{ margin: 0, fontSize: props.hero ? "1.2rem" : "1.05rem" }}>
+      <div className="despacho-hero-head">
+        <h2 style={{ margin: 0, fontSize: props.hero ? "1.15rem" : "1.02rem" }}>
           {p.planning_code || `Plan #${p.id}`}
         </h2>
-        <span className="pill">{statusLabel(p.status)}</span>
-      </div>
-      <div className="muted" style={{ marginTop: 4 }}>
-        {formatDate(p.planning_date)}
-      </div>
-      <div className="meta-row">
-        <span className="muted">Ruta</span>
-        <span>{p.route_name || "—"}</span>
-      </div>
-      <div className="meta-row">
-        <span className="muted">Vehículo</span>
-        <span>
-          {p.truck_name || "—"}
-          {p.truck_plate ? ` · ${p.truck_plate}` : ""}
+        <span className={`pill${p.status === "picking_generated" ? " pill-ok" : ""}`}>
+          {statusLabel(p.status)}
         </span>
       </div>
-      <div className="kpi-row">
-        <div className="kpi">
-          <span className="kpi-label">Clientes</span>
-          <span className="kpi-value">{p.client_count ?? "—"}</span>
+      {!props.hero ? (
+        <div className="muted" style={{ marginTop: 4, fontSize: "0.8rem" }}>
+          {formatDate(p.planning_date)}
         </div>
-        <div className="kpi">
-          <span className="kpi-label">Documentos</span>
-          <span className="kpi-value">{p.document_count ?? "—"}</span>
+      ) : null}
+
+      <div className="despacho-hero-grid">
+        <div>
+          <span className="meta-label">Ruta</span>
+          <span className="meta-value">{p.route_name || "—"}</span>
+        </div>
+        <div>
+          <span className="meta-label">Vehículo</span>
+          <span className="meta-value">{p.truck_name || "—"}</span>
+        </div>
+        <div>
+          <span className="meta-label">Patente</span>
+          <span className="meta-value">{p.truck_plate || "—"}</span>
+        </div>
+        <div>
+          <span className="meta-label">Clientes</span>
+          <span className="meta-value">{clients ?? "—"}</span>
+        </div>
+        <div>
+          <span className="meta-label">Documentos</span>
+          <span className="meta-value">{docs ?? "—"}</span>
+        </div>
+        <div>
+          <span className="meta-label">Fecha</span>
+          <span className="meta-value">{formatDate(p.planning_date)}</span>
         </div>
       </div>
-      <div className="meta-row" style={{ marginTop: 10 }}>
-        <span className="muted">Monto picking</span>
-        <span>
-          {typeof p.amount_total === "number"
-            ? moneyCLP(p.amount_total)
-            : "Monto no disponible"}
-        </span>
+
+      <div className="despacho-amount">
+        <span className="despacho-amount-label">Monto picking</span>
+        <div className="despacho-amount-value">
+          {amount != null ? moneyCLP(amount) : "Monto no disponible"}
+        </div>
       </div>
+
       <Link
         href={`/despachos/${p.id}`}
-        className={`btn ${props.hero ? "btn-primary" : "btn-secondary"}`}
+        className={`btn ${props.hero ? "btn-primary btn-with-arrow" : "btn-secondary"}`}
         style={{ textAlign: "center", marginTop: 14 }}
       >
         {props.cta || "Abrir despacho"}
+        {props.hero ? (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+            <path d="M5 12h14" />
+            <path d="m13 6 6 6-6 6" />
+          </svg>
+        ) : null}
       </Link>
     </div>
   )
@@ -110,8 +133,7 @@ export default function DespachosPage() {
         <h2 style={{ marginBottom: 8 }}>Sin despachos asignados</h2>
         <p className="muted">
           No hay planificaciones con tu usuario como chofer. Si crees que falta
-          uno, pide a operaciones que te asigne con el selector de chofer (no se
-          vincula por nombre).
+          uno, pide a operaciones que te asigne con el selector de chofer.
         </p>
       </div>
     )
@@ -121,17 +143,14 @@ export default function DespachosPage() {
     <div className="stack-gap">
       <section>
         <h2 className="section-title">Despacho de hoy</h2>
-        <p className="muted" style={{ margin: "0 0 10px", fontSize: "0.82rem" }}>
+        <p className="muted" style={{ margin: "0 0 10px", fontSize: "0.78rem" }}>
           Fecha operativa Chile · {todayLabel}
         </p>
         {buckets.today.length === 0 ? (
           <div className="card">
-            <p style={{ margin: 0 }}>
-              No tienes un despacho asignado para hoy.
-            </p>
+            <p style={{ margin: 0 }}>No tienes un despacho asignado para hoy.</p>
             <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.85rem" }}>
-              Consulta próximos o historial más abajo. No se abre un plan antiguo
-              en automático.
+              Consulta próximos o historial más abajo.
             </p>
           </div>
         ) : (

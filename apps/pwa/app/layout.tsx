@@ -1,6 +1,14 @@
 import type { Metadata, Viewport } from "next"
+import { Plus_Jakarta_Sans } from "next/font/google"
 import { PwaRegister } from "@/components/pwa-register"
 import "./globals.css"
+
+const font = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  weight: ["500", "600", "700", "800"],
+  display: "swap",
+  variable: "--font-ops",
+})
 
 export const metadata: Metadata = {
   title: "Quillotana Operativa",
@@ -32,13 +40,13 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  themeColor: "#c4293c",
+  themeColor: "#0B0D12",
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="es">
-      <body>
+    <html lang="es" className={font.variable}>
+      <body className={font.className}>
         <div className="app-shell">{children}</div>
         <PwaRegister />
       </body>

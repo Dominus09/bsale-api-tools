@@ -9,14 +9,14 @@ export function PlanTabs({ planId }: { planId: number }) {
   const tabs = [
     { href: base, label: "Resumen", match: (p: string) => p === base },
     {
-      href: `${base}/mapa`,
-      label: "Mapa",
-      match: (p: string) => p.startsWith(`${base}/mapa`),
-    },
-    {
       href: `${base}/clientes`,
       label: "Clientes",
       match: (p: string) => p.startsWith(`${base}/clientes`),
+    },
+    {
+      href: `${base}/mapa`,
+      label: "Mapa",
+      match: (p: string) => p.startsWith(`${base}/mapa`),
     },
   ]
 

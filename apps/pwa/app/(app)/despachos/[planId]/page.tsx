@@ -6,6 +6,7 @@ import { useEffect, useState } from "react"
 import { ApiError, getMyDespacho, type DriverDespacho } from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDate, statusLabel } from "@/lib/format"
+import { asAmount } from "@/lib/money-display"
 
 export default function DespachoDetailPage() {
   const params = useParams()
@@ -44,80 +45,83 @@ export default function DespachoDetailPage() {
   }
 
   if (!plan) {
-    return <div className="empty">Cargando ficha…</div>
+    return <div className="empty">Cargando resumen…</div>
   }
+
+  const amount = asAmount(plan.amount_total)
+  const docs =
+    typeof plan.document_count === "number" ? plan.document_count : null
+  const clients =
+    typeof plan.client_count === "number" ? plan.client_count : null
 
   return (
     <div className="stack-gap">
       <div className="card despacho-hero">
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-          <h2 style={{ margin: 0 }}>{plan.planning_code || `Plan #${plan.id}`}</h2>
-          <span className="pill">{statusLabel(plan.status)}</span>
-        </div>
-        {plan.planning_name ? (
-          <p className="muted" style={{ margin: "6px 0 0" }}>
-            {plan.planning_name}
-          </p>
-        ) : null}
-        <div className="meta-row">
-          <span className="muted">Fecha</span>
-          <span>{formatDate(plan.planning_date)}</span>
-        </div>
-        <div className="meta-row">
-          <span className="muted">Ruta</span>
-          <span>{plan.route_name || "—"}</span>
-        </div>
-        <div className="meta-row">
-          <span className="muted">Vehículo</span>
-          <span>
-            {plan.truck_name || "—"}
-            {plan.truck_plate ? ` · ${plan.truck_plate}` : ""}
+        <div className="despacho-hero-head">
+          <div>
+            <h2 style={{ margin: 0 }}>{plan.planning_code || `Plan #${plan.id}`}</h2>
+            <p className="muted" style={{ margin: "4px 0 0", fontSize: "0.8rem" }}>
+              {formatDate(plan.planning_date)}
+            </p>
+          </div>
+          <span className={`pill${plan.status === "picking_generated" ? " pill-ok" : ""}`}>
+            {statusLabel(plan.status)}
           </span>
-        </div>
-        <div className="meta-row">
-          <span className="muted">Chofer</span>
-          <span>{plan.driver_name || "—"}</span>
         </div>
 
         <div className="kpi-row">
           <div className="kpi">
             <span className="kpi-label">Clientes</span>
-            <span className="kpi-value">{plan.client_count ?? "—"}</span>
+            <span className="kpi-value">{clients ?? "—"}</span>
           </div>
           <div className="kpi">
             <span className="kpi-label">Documentos</span>
-            <span className="kpi-value">{plan.document_count ?? "—"}</span>
+            <span className="kpi-value">{docs ?? "—"}</span>
+          </div>
+          <div className="kpi">
+            <span className="kpi-label">Monto total</span>
+            <span className="kpi-value" style={{ fontSize: "0.95rem" }}>
+              {amount != null ? moneyCLP(amount) : "—"}
+            </span>
+          </div>
+          <div className="kpi">
+            <span className="kpi-label">Picking</span>
+            <span className="kpi-value" style={{ fontSize: "0.85rem" }}>
+              {statusLabel(plan.status)}
+            </span>
           </div>
         </div>
 
         <div className="meta-row" style={{ marginTop: 12 }}>
-          <span className="muted">Total picking</span>
-          <span>
-            {typeof plan.amount_total === "number"
-              ? moneyCLP(plan.amount_total)
-              : "Monto no disponible"}
-          </span>
+          <span className="muted">Ruta</span>
+          <span>{plan.route_name || "—"}</span>
         </div>
-        <p className="muted" style={{ margin: "6px 0 0", fontSize: "0.75rem" }}>
-          Total = facturas confirmadas (c/IVA), sin duplicar documentos. Estado del
-          plan ({statusLabel(plan.status)}) es preparación, no avance de entregas.
-        </p>
+        <div className="meta-row">
+          <span className="muted">Vehículo</span>
+          <span>{plan.truck_name || "—"}</span>
+        </div>
+        <div className="meta-row">
+          <span className="muted">Patente</span>
+          <span>{plan.truck_plate || "—"}</span>
+        </div>
       </div>
 
-      <Link
-        href={`/despachos/${planId}/clientes`}
-        className="btn btn-primary"
-        style={{ textAlign: "center" }}
-      >
-        Ver clientes
-      </Link>
-      <Link
-        href={`/despachos/${planId}/mapa`}
-        className="btn btn-secondary"
-        style={{ textAlign: "center" }}
-      >
-        Ver mapa
-      </Link>
+      <div className="btn-row">
+        <Link
+          href={`/despachos/${planId}/clientes`}
+          className="btn btn-secondary"
+          style={{ textAlign: "center" }}
+        >
+          Ver clientes
+        </Link>
+        <Link
+          href={`/despachos/${planId}/mapa`}
+          className="btn btn-primary"
+          style={{ textAlign: "center" }}
+        >
+          Ver mapa
+        </Link>
+      </div>
     </div>
   )
 }

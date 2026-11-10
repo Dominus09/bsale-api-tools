@@ -1,21 +1,26 @@
 :root {
-  /* Graphite + rojo institucional La Quillotana (ERP --lq-brand). */
-  --bg: #111318;
-  --surface: #17191e;
-  --surface-2: #1f222a;
-  --border: #2a2f38;
-  --text: #f4f5f7;
-  --muted: #a9b2be;
+  /* Operativa 2.0 — mockup oficial Grupo La Quillotana. */
+  --bg: #0b0d12;
+  --surface: #17191f;
+  --surface-2: #20232b;
+  --border: #30343d;
+  --text: #f7f8fa;
+  --muted: #a8b0be;
   --accent: #c4293c;
   --accent-strong: #a42032;
-  --danger: #b91c1c;
-  --ok: #047857;
-  --warn: #b45309;
-  --info: #1d4ed8;
-  --box-accent: #d97706;
-  --radius: 14px;
+  --accent-glow: rgba(196, 41, 60, 0.28);
+  --danger: #e35d6a;
+  --ok: #22c55e;
+  --ok-strong: #16a34a;
+  --warn: #f59e0b;
+  --info: #3b82f6;
+  --whatsapp: #25d366;
+  --box-accent: #c4293c;
+  --radius: 16px;
+  --radius-sm: 12px;
   --tap: 48px;
-  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --shadow-card: 0 8px 28px rgba(0, 0, 0, 0.28);
+  font-family: var(--font-ops), "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
 }
 
 * {
@@ -30,6 +35,7 @@ body {
   color: var(--text);
   min-height: 100%;
   -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
 }
 
 a {
@@ -48,7 +54,10 @@ input {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background:
+    radial-gradient(90% 55% at 100% -5%, var(--accent-glow), transparent 55%),
+    radial-gradient(70% 45% at -10% 100%, rgba(196, 41, 60, 0.12), transparent 50%),
+    var(--bg);
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
@@ -59,11 +68,33 @@ input {
   gap: 12px;
   padding: 12px 16px;
   padding-top: calc(12px + env(safe-area-inset-top, 0px));
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid rgba(48, 52, 61, 0.85);
+  background: rgba(11, 13, 18, 0.82);
+  backdrop-filter: blur(12px);
   position: sticky;
   top: 0;
   z-index: 20;
+}
+
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.topbar-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: linear-gradient(145deg, #2a2f3a, #17191f);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
 }
 
 .topbar-title {
@@ -73,12 +104,13 @@ input {
 
 .topbar h1 {
   margin: 0;
-  font-size: 1.05rem;
-  font-weight: 650;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .topbar-sub {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   margin-top: 2px;
   line-height: 1.2;
 }
@@ -95,7 +127,8 @@ input {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 14px 14px 16px;
+  box-shadow: var(--shadow-card);
 }
 
 .card h2 {
@@ -307,8 +340,9 @@ input {
 }
 
 .plan-tab.active {
-  background: var(--surface-2);
-  color: var(--text);
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid transparent;
 }
 
 .plan-body {
@@ -834,7 +868,7 @@ input {
   min-height: 70dvh;
 }
 
-/* —— Login corporativo —— */
+/* —— Login corporativo V2 —— */
 .login-shell {
   min-height: 100dvh;
   display: flex;
@@ -843,39 +877,62 @@ input {
   padding: 24px 16px;
   padding-bottom: max(24px, env(safe-area-inset-bottom));
   background:
-    radial-gradient(120% 80% at 50% -10%, rgba(196, 41, 60, 0.22), transparent 55%),
-    linear-gradient(180deg, #17191e 0%, var(--bg) 48%);
+    radial-gradient(110% 70% at 50% -15%, rgba(196, 41, 60, 0.34), transparent 58%),
+    radial-gradient(80% 50% at 110% 90%, rgba(196, 41, 60, 0.16), transparent 55%),
+    linear-gradient(180deg, #12141a 0%, var(--bg) 52%);
 }
 
 .login-card {
   width: min(100%, 400px);
   padding: 28px 20px 24px;
+  background: rgba(23, 25, 31, 0.92);
+  border: 1px solid rgba(48, 52, 61, 0.95);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
 }
 
 .login-brand {
   text-align: center;
-  margin-bottom: 20px;
+  margin-bottom: 22px;
 }
 
 .login-logo {
   display: block;
-  width: min(100%, 260px);
+  width: min(100%, 240px);
   height: auto;
-  margin: 0 auto 14px;
+  margin: 0 auto 16px;
   object-fit: contain;
 }
 
 .login-brand h1 {
   margin: 0;
-  font-size: 1.35rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: 1.28rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
 }
 
 .login-brand .login-sub {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 0.9rem;
+}
+
+.field-icon-wrap {
+  position: relative;
+}
+
+.field-icon-wrap .field-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.field-icon-wrap input {
+  padding-left: 40px;
 }
 
 .password-wrap {
@@ -883,34 +940,109 @@ input {
 }
 
 .password-wrap input {
-  padding-right: 72px;
+  padding-right: 48px;
 }
 
 .password-toggle {
   position: absolute;
-  right: 6px;
+  right: 4px;
   top: 50%;
   transform: translateY(-50%);
+  width: 40px;
   min-height: 40px;
-  padding: 0 10px;
+  padding: 0;
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+}
+
+.password-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+.btn-with-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.btn-with-arrow svg {
+  width: 18px;
+  height: 18px;
 }
 
 /* —— Despacho de hoy / secciones —— */
 .section-title {
   margin: 0 0 8px;
-  font-size: 1.05rem;
+  font-size: 0.78rem;
   font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
 .despacho-hero {
-  border-color: rgba(196, 41, 60, 0.45);
-  box-shadow: 0 0 0 1px rgba(196, 41, 60, 0.12);
+  border-color: rgba(196, 41, 60, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(196, 41, 60, 0.18),
+    var(--shadow-card);
+  background:
+    linear-gradient(180deg, rgba(196, 41, 60, 0.08), transparent 42%),
+    var(--surface);
+}
+
+.despacho-hero-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.despacho-hero-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.despacho-hero-grid .meta-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.despacho-hero-grid .meta-value {
+  font-size: 0.92rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.despacho-amount {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.despacho-amount-label {
+  display: block;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.despacho-amount-value {
+  font-size: 1.35rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
 }
 
 .kpi-row {
