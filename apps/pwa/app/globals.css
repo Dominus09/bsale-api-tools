@@ -705,11 +705,11 @@ input {
   gap: 8px;
 }
 
-/* P4.1 complemento: muchas líneas por documento */
+/* P4.1 complemento: muchas líneas por documento.
+   No sticky: en iPhone el buscador tapaba motivo/Guardar al hacer scroll. */
 .line-toolbar {
-  position: sticky;
-  top: calc(8px + env(safe-area-inset-top, 0px));
-  z-index: 12;
+  position: relative;
+  z-index: 1;
   padding: 12px;
   background: var(--surface);
 }
@@ -777,9 +777,24 @@ input {
   border-color: rgba(160, 160, 180, 0.45);
 }
 
-.product-name {
+.product-identity {
+  min-width: 0;
+  flex: 1;
+}
+
+.product-category {
+  font-size: 0.72rem;
   font-weight: 600;
-  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted, #6b7280);
+  margin-bottom: 2px;
+  line-height: 1.2;
+}
+
+.product-name {
+  font-weight: 650;
+  font-size: 0.98rem;
   line-height: 1.35;
   word-break: break-word;
 }
