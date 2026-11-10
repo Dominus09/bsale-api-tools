@@ -237,6 +237,9 @@ def build_conformity_summary(
     lines_n = sorted(
         lines,
         key=lambda ln: (
+            int(ln["source_detail_id"])
+            if ln.get("source_detail_id") is not None
+            else 0,
             int(ln["variant_id"]) if ln.get("variant_id") is not None else 0,
             str(ln.get("sku_code") or ""),
             str(ln.get("product_name") or ""),
@@ -258,6 +261,8 @@ def build_conformity_summary(
         ],
         "lines": [
             {
+                "source_detail_id": ln.get("source_detail_id"),
+                "line_number": ln.get("line_number"),
                 "variant_id": ln.get("variant_id"),
                 "sku_code": ln.get("sku_code"),
                 "product_name": ln.get("product_name"),

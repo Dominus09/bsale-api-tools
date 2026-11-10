@@ -119,6 +119,7 @@ def test_save_lines_rejects_over_delivery(monkeypatch):
             notes=None,
             lines=[
                 {
+                    "source_detail_id": 101,
                     "planned_units": 2,
                     "delivered_units": 3,
                     "product_name": "X",
@@ -126,6 +127,71 @@ def test_save_lines_rejects_over_delivery(monkeypatch):
             ],
         )
     assert ei.value.status_code == 400
+
+
+def test_save_lines_requires_source_detail_id(monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.save_document_lines(
+            user={"id": 7},
+            plan_id=1,
+            visit_id=1,
+            related_document_id=99,
+            oc_document_id=None,
+            document_number=1,
+            document_type="boleta",
+            document_total=1000,
+            result_status="full",
+            notes=None,
+            lines=[
+                {
+                    "planned_units": 1,
+                    "delivered_units": 1,
+                    "product_name": "X",
+                    "variant_id": 5,
+                }
+            ],
+        )
+    assert ei.value.status_code == 400
+    assert "source_detail_id" in str(ei.value.detail)
+
+
+def test_save_lines_rejects_duplicate_source_detail(monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.save_document_lines(
+            user={"id": 7},
+            plan_id=1,
+            visit_id=1,
+            related_document_id=99,
+            oc_document_id=None,
+            document_number=1,
+            document_type="boleta",
+            document_total=1000,
+            result_status="partial",
+            notes=None,
+            lines=[
+                {
+                    "source_detail_id": 7,
+                    "planned_units": 1,
+                    "delivered_units": 1,
+                    "product_name": "A",
+                },
+                {
+                    "source_detail_id": 7,
+                    "planned_units": 2,
+                    "delivered_units": 1,
+                    "product_name": "A",
+                    "undelivered_reason": "physical_shortage",
+                },
+            ],
+        )
+    assert ei.value.status_code == 400
+    assert "duplicada" in str(ei.value.detail).lower()
 
 
 def test_declare_collection_blocks_transfer_verified(monkeypatch):

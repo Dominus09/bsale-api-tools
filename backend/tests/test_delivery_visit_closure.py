@@ -187,6 +187,8 @@ def test_matching_signature_sha_allows_verified(monkeypatch):
     docs = [{"related_document_id": 1, "document_number": 10, "result_status": "full"}]
     lines = [
         {
+            "source_detail_id": 501,
+            "line_number": 1,
             "planned_units": 2,
             "delivered_units": 2,
             "undelivered_units": 0,

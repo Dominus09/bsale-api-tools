@@ -251,6 +251,8 @@ def finalize_delivery_visit(
 
 
 class DeliveryLineBody(BaseModel):
+    source_detail_id: int = Field(..., ge=1)
+    line_number: int | None = Field(None, ge=0)
     variant_id: int | None = None
     sku_code: str | None = Field(None, max_length=64)
     product_name: str | None = Field(None, max_length=240)

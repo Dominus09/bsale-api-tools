@@ -653,6 +653,7 @@ def save_document_lines(
         raise HTTPException(status_code=400, detail="Se requieren líneas")
 
     normalized: list[dict[str, Any]] = []
+    seen_details: set[int] = set()
     for raw in lines:
         try:
             planned = float(raw.get("planned_units") or 0)
@@ -683,8 +684,31 @@ def save_document_lines(
         else:
             reason = None
             note = None
+        src_raw = raw.get("source_detail_id")
+        if src_raw is None:
+            raise HTTPException(
+                status_code=400,
+                detail="source_detail_id obligatorio (línea exacta del documento)",
+            )
+        try:
+            source_detail_id = int(src_raw)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="source_detail_id inválido") from exc
+        if source_detail_id in seen_details:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Línea duplicada source_detail_id={source_detail_id}",
+            )
+        seen_details.add(source_detail_id)
+        line_number = raw.get("line_number")
+        try:
+            line_number_n = int(line_number) if line_number is not None else None
+        except (TypeError, ValueError):
+            line_number_n = None
         normalized.append(
             {
+                "source_detail_id": source_detail_id,
+                "line_number": line_number_n,
                 "variant_id": raw.get("variant_id"),
                 "sku_code": (raw.get("sku_code") or None),
                 "product_name": (raw.get("product_name") or None),
@@ -705,6 +729,57 @@ def save_document_lines(
             cur, user=user, plan_id=int(plan_id), visit_id=int(visit_id)
         )
         uid = int(visit["driver_user_id"])
+        # Validar source_detail_id contra document_details cuando el doc tiene líneas.
+        detail_ids = [int(x["source_detail_id"]) for x in normalized]
+        cur.execute(
+            "SELECT to_regclass('distribuidora.document_details') IS NOT NULL AS ok"
+        )
+        row_ok = cur.fetchone()
+        details_exist = bool(
+            (
+                row_ok["ok"]
+                if isinstance(row_ok, dict) or hasattr(row_ok, "keys")
+                else row_ok[0]
+            )
+        )
+        if details_exist:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM distribuidora.document_details
+                WHERE document_id = %s
+                """,
+                (int(related_document_id),),
+            )
+            crow = cur.fetchone()
+            n_doc = int(
+                crow["n"]
+                if isinstance(crow, dict) or hasattr(crow, "keys")
+                else crow[0] or 0
+            )
+            if n_doc > 0:
+                cur.execute(
+                    """
+                    SELECT detail_id
+                    FROM distribuidora.document_details
+                    WHERE document_id = %s
+                      AND detail_id = ANY(%s)
+                    """,
+                    (int(related_document_id), detail_ids),
+                )
+                found = {
+                    int(r["detail_id"] if isinstance(r, dict) or hasattr(r, "keys") else r[0])
+                    for r in cur.fetchall()
+                }
+                missing = [d for d in detail_ids if d not in found]
+                if missing:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "source_detail_id no pertenece al documento: "
+                            + ", ".join(str(x) for x in missing)
+                        ),
+                    )
         doc = visit_repo.upsert_document_result(
             cur,
             visit_id=int(visit_id),
@@ -716,6 +791,8 @@ def save_document_lines(
             result_status=result_status,
             notes=(notes or "").strip() or None,
         )
+        if int(doc["visit_id"]) != int(visit_id):
+            raise HTTPException(status_code=409, detail="Documento no pertenece a la visita")
         saved_lines = visit_repo.replace_line_results(
             cur,
             visit_id=int(visit_id),
@@ -811,12 +888,21 @@ def declare_collection(
             cur, user=user, plan_id=int(plan_id), visit_id=int(visit_id)
         )
         uid = int(visit["driver_user_id"])
+        doc_res_id = (
+            int(document_result_id) if document_result_id is not None else None
+        )
+        if doc_res_id is not None:
+            docs = visit_repo.list_document_results(cur, int(visit_id))
+            owned = {int(d["id"]) for d in docs}
+            if doc_res_id not in owned:
+                raise HTTPException(
+                    status_code=422,
+                    detail="document_result_id no pertenece a esta visita",
+                )
         row = visit_repo.insert_collection(
             cur,
             visit_id=int(visit_id),
-            document_result_id=(
-                int(document_result_id) if document_result_id is not None else None
-            ),
+            document_result_id=doc_res_id,
             method=method_n,
             document_amount=doc_amt,
             declared_amount=decl,

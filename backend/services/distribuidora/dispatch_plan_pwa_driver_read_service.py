@@ -344,6 +344,9 @@ def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) 
         or row.get("producto")
         or ""
     )
+    source_detail_id = row.get("source_detail_id")
+    if source_detail_id is None:
+        source_detail_id = row.get("detail_id")
     return {
         "description": description,
         "name_short": _short_product_name(row),
@@ -360,7 +363,46 @@ def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) 
         "equivalence_status": "verified" if verified else "pending_validation",
         "equivalence_label": None if verified else "Equivalencia por validar",
         "load_group": load_group,
+        "source_detail_id": int(source_detail_id) if source_detail_id is not None else None,
+        "line_number": (
+            int(row["line_number"]) if row.get("line_number") is not None else None
+        ),
     }
+
+
+def _document_detail_lines(related_document_id: int) -> list[dict[str, Any]]:
+    """Una fila por detail_id (no agrupa SKUs repetidos). Sin mutar picking."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                dd.detail_id AS source_detail_id,
+                dd.line_number,
+                dd.variant_id,
+                COALESCE(
+                    NULLIF(BTRIM(dd.variant_description), ''),
+                    NULLIF(BTRIM(dd.variant_code), ''),
+                    'Producto'
+                ) AS producto,
+                NULLIF(BTRIM(dd.variant_description), '') AS producto_variante,
+                NULLIF(BTRIM(dd.variant_code), '') AS variante,
+                dd.quantity AS unidades
+            FROM distribuidora.document_details dd
+            WHERE dd.document_id = %s
+            ORDER BY dd.line_number NULLS LAST, dd.detail_id
+            """,
+            (int(related_document_id),),
+        )
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        cur.close()
+        return rows
+    except Exception:
+        return []
+    finally:
+        conn.close()
 
 
 def _client_commercial_by_ids(client_ids: list[int]) -> dict[int, dict[str, Any]]:
@@ -750,9 +792,13 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
         rel = doc.get("related_document_id")
         products_raw: list[dict[str, Any]] = []
         if rel is not None:
-            products_raw = plan_svc.compute_picking_products_for_related_documents(
-                int(plan_id), [int(rel)]
-            )
+            # Entrega: líneas exactas (detail_id). Evita colapsar SKUs repetidos.
+            products_raw = _document_detail_lines(int(rel))
+            if not products_raw:
+                # Fallback lectura picking consolidada (sin source_detail_id).
+                products_raw = plan_svc.compute_picking_products_for_related_documents(
+                    int(plan_id), [int(rel)]
+                )
         doc_group = doc.get("load_group")
         # No repetir grupo en cada línea si todo el documento comparte el mismo.
         products = [_product_payload(p, load_group=None) for p in products_raw]

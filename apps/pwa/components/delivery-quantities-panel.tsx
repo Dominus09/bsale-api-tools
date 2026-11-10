@@ -10,6 +10,8 @@ import {
 
 type LineDraft = {
   key: string
+  source_detail_id: number
+  line_number?: number | null
   variant_id?: number | null
   sku_code?: string | null
   product_name: string
@@ -39,23 +41,28 @@ function buildDrafts(docs: DriverDocument[]): Record<string, LineDraft[]> {
   const out: Record<string, LineDraft[]> = {}
   for (const doc of docs) {
     const id = String(doc.related_document_id || doc.document_number || "")
-    out[id] = (doc.products || []).map((p, idx) => {
-      const planned = typeof p.unidades === "number" ? p.unidades : 0
-      return {
-        key: `${id}-${p.variant_id ?? "x"}-${idx}`,
-        variant_id: p.variant_id,
-        sku_code: p.sku_code != null ? String(p.sku_code) : null,
-        product_name: p.name_short || p.description || p.producto || "Producto",
-        planned,
-        delivered: planned,
-        reason: "physical_shortage",
-        note: "",
-        boxesLabel:
-          p.equivalence_status === "verified" && p.cajas_equivalentes != null
-            ? `${p.cajas_equivalentes} cajas (ref.)`
-            : p.equivalence_label || null,
-      }
-    })
+    out[id] = (doc.products || [])
+      .filter((p) => p.source_detail_id != null)
+      .map((p, idx) => {
+        const planned = typeof p.unidades === "number" ? p.unidades : 0
+        const detailId = Number(p.source_detail_id)
+        return {
+          key: `${id}-detail-${detailId}-${idx}`,
+          source_detail_id: detailId,
+          line_number: p.line_number ?? null,
+          variant_id: p.variant_id,
+          sku_code: p.sku_code != null ? String(p.sku_code) : null,
+          product_name: p.name_short || p.description || p.producto || "Producto",
+          planned,
+          delivered: planned,
+          reason: "physical_shortage",
+          note: "",
+          boxesLabel:
+            p.equivalence_status === "verified" && p.cajas_equivalentes != null
+              ? `${p.cajas_equivalentes} cajas (ref.)`
+              : p.equivalence_label || null,
+        }
+      })
   }
   return out
 }
@@ -95,11 +102,7 @@ export function DeliveryQuantitiesPanel(props: Props) {
           saved[rel] = true
           base[rel] = base[rel].map((draft) => {
             const match = lines.find(
-              (l) =>
-                (draft.variant_id != null &&
-                  Number(l.variant_id) === Number(draft.variant_id)) ||
-                (l.product_name &&
-                  String(l.product_name) === draft.product_name),
+              (l) => Number(l.source_detail_id) === Number(draft.source_detail_id),
             )
             if (!match) return draft
             return {
@@ -141,7 +144,15 @@ export function DeliveryQuantitiesPanel(props: Props) {
       setErr("Documento sin related_document_id; no se puede guardar")
       return
     }
+    if (!lines.length) {
+      setErr("Sin líneas con source_detail_id; no se puede guardar")
+      return
+    }
     for (const ln of lines) {
+      if (!ln.source_detail_id) {
+        setErr("Falta identidad de línea (source_detail_id)")
+        return
+      }
       if (ln.delivered < 0 || ln.delivered > ln.planned) {
         setErr("Cantidad entregada inválida")
         return
@@ -171,6 +182,8 @@ export function DeliveryQuantitiesPanel(props: Props) {
         document_total: doc.document_total ?? null,
         result_status,
         lines: lines.map((l) => ({
+          source_detail_id: l.source_detail_id,
+          line_number: l.line_number ?? null,
           variant_id: l.variant_id ?? null,
           sku_code: l.sku_code,
           product_name: l.product_name,

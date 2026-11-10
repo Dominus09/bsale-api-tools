@@ -341,14 +341,26 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
         notes=None,
         lines=[
             {
+                "source_detail_id": 88001,
+                "line_number": 1,
                 "variant_id": 1,
                 "product_name": "Prod A",
                 "planned_units": 4,
                 "delivered_units": 3,
                 "undelivered_reason": "physical_shortage",
-            }
+            },
+            {
+                "source_detail_id": 88002,
+                "line_number": 2,
+                "variant_id": 1,
+                "product_name": "Prod A",
+                "planned_units": 2,
+                "delivered_units": 2,
+            },
         ],
     )
+    assert len(saved["lines"]) == 2
+    assert {int(x["source_detail_id"]) for x in saved["lines"]} == {88001, 88002}
     assert saved["persisted"] is True
     assert float(saved["lines"][0]["undelivered_units"]) == 3.0 or float(
         saved["lines"][0]["undelivered_units"]
@@ -393,12 +405,21 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
         notes=None,
         lines=[
             {
+                "source_detail_id": 88001,
                 "variant_id": 1,
                 "product_name": "Prod A",
                 "planned_units": 4,
                 "delivered_units": 0,
                 "undelivered_reason": "physical_shortage",
-            }
+            },
+            {
+                "source_detail_id": 88002,
+                "variant_id": 1,
+                "product_name": "Prod A",
+                "planned_units": 2,
+                "delivered_units": 0,
+                "undelivered_reason": "physical_shortage",
+            },
         ],
     )
 
@@ -430,3 +451,174 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
     assert report["share"]["auto_send"] is False
     assert "-42.0" not in report["report_text"]
     assert "group_invite_link" in report["omitted"]
+
+
+def test_schema_integrity_restrict_and_composites(isolated_db):
+    """056: RESTRICT al plan + FK compuestas + columnas 057."""
+    conn = _connect()
+    cur = conn.cursor()
+
+    def _val(row, key=None):
+        if row is None:
+            return None
+        if isinstance(row, dict) or hasattr(row, "keys"):
+            if key is not None:
+                return row[key]
+            return next(iter(row.values()))
+        return row[0] if key is None else row[key]
+
+    tables = [
+        "delivery_visits",
+        "delivery_visit_events",
+        "delivery_document_results",
+        "delivery_line_results",
+        "delivery_collections",
+        "delivery_evidence",
+        "delivery_conformity",
+        "delivery_report_snapshots",
+    ]
+    for t in tables:
+        cur.execute(
+            "SELECT to_regclass(%s) IS NOT NULL AS ok",
+            (f"distribuidora.{t}",),
+        )
+        assert _val(cur.fetchone(), "ok") is True, t
+
+    for col in ("closure_review_status",):
+        cur.execute(
+            """
+            SELECT 1 AS ok FROM information_schema.columns
+            WHERE table_schema='distribuidora'
+              AND table_name='delivery_visits'
+              AND column_name=%s
+            """,
+            (col,),
+        )
+        assert cur.fetchone() is not None
+
+    for col in (
+        "summary_payload",
+        "visit_version_at_sign",
+        "invalidated_at",
+        "invalidate_reason",
+    ):
+        cur.execute(
+            """
+            SELECT 1 AS ok FROM information_schema.columns
+            WHERE table_schema='distribuidora'
+              AND table_name='delivery_conformity'
+              AND column_name=%s
+            """,
+            (col,),
+        )
+        assert cur.fetchone() is not None
+
+    cur.execute(
+        """
+        SELECT 1 AS ok FROM information_schema.columns
+        WHERE table_schema='distribuidora'
+          AND table_name='delivery_line_results'
+          AND column_name='source_detail_id'
+        """
+    )
+    assert cur.fetchone() is not None
+
+    cur.execute(
+        """
+        INSERT INTO distribuidora.delivery_visits (
+            company_id, dispatch_plan_id, customer_key, client_id,
+            driver_user_id, status
+        ) VALUES (3, 10, 'id:77', 77, 42, 'in_progress')
+        RETURNING id
+        """
+    )
+    visit_id = int(_val(cur.fetchone(), "id"))
+    conn.commit()
+
+    # Borrar plan con visita debe fallar (RESTRICT)
+    with pytest.raises(Exception):
+        cur.execute("DELETE FROM distribuidora.dispatch_plan WHERE id = 10")
+        conn.commit()
+    conn.rollback()
+
+    cur.execute(
+        """
+        INSERT INTO distribuidora.delivery_document_results (
+            visit_id, related_document_id, result_status
+        ) VALUES (%s, 1, 'full')
+        RETURNING id
+        """,
+        (visit_id,),
+    )
+    doc_id = int(_val(cur.fetchone(), "id"))
+    conn.commit()
+
+    # Línea con visit_id ajeno debe fallar (FK compuesta)
+    cur.execute(
+        """
+        INSERT INTO distribuidora.delivery_visits (
+            company_id, dispatch_plan_id, customer_key, client_id,
+            driver_user_id, status
+        ) VALUES (3, 10, 'id:78', 78, 42, 'in_progress')
+        RETURNING id
+        """
+    )
+    other_visit = int(_val(cur.fetchone(), "id"))
+    conn.commit()
+    with pytest.raises(Exception):
+        cur.execute(
+            """
+            INSERT INTO distribuidora.delivery_line_results (
+                visit_id, document_result_id, source_detail_id,
+                planned_units, delivered_units, undelivered_units
+            ) VALUES (%s, %s, 1, 1, 1, 0)
+            """,
+            (other_visit, doc_id),
+        )
+        conn.commit()
+    conn.rollback()
+
+    # Evidencia con company_id distinto debe fallar
+    with pytest.raises(Exception):
+        cur.execute(
+            """
+            INSERT INTO distribuidora.delivery_evidence (
+                visit_id, company_id, evidence_kind, object_key,
+                captured_by_user_id, upload_confirmed
+            ) VALUES (%s, 99, 'closed_store', 'k/test', 42, TRUE)
+            """,
+            (visit_id,),
+        )
+        conn.commit()
+    conn.rollback()
+
+    # Dos líneas mismo variant, distinto source_detail_id: OK
+    cur.execute(
+        """
+        INSERT INTO distribuidora.delivery_line_results (
+            visit_id, document_result_id, source_detail_id, variant_id,
+            planned_units, delivered_units, undelivered_units
+        ) VALUES
+            (%s, %s, 1001, 55, 2, 2, 0),
+            (%s, %s, 1002, 55, 3, 1, 2)
+        """,
+        (visit_id, doc_id, visit_id, doc_id),
+    )
+    conn.commit()
+
+    # Mismo source_detail_id duplicado: NO
+    with pytest.raises(Exception):
+        cur.execute(
+            """
+            INSERT INTO distribuidora.delivery_line_results (
+                visit_id, document_result_id, source_detail_id, variant_id,
+                planned_units, delivered_units, undelivered_units
+            ) VALUES (%s, %s, 1001, 55, 1, 1, 0)
+            """,
+            (visit_id, doc_id),
+        )
+        conn.commit()
+    conn.rollback()
+
+    cur.close()
+    conn.close()

@@ -1,12 +1,20 @@
 -- P4: visitas de entrega, resultados por documento/línea, cobranza declarada,
 -- evidencias/firmas (R2) y auditoría. Aditivo. No muta Bsale/picking/ORS.
 -- No aplicar automáticamente desde syncs/HTTP.
+--
+-- Integridad:
+-- - dispatch_plan: ON DELETE RESTRICT (conservar trazabilidad de entregas).
+-- - Hijos de visita: CASCADE (borrar visita borra su evidencia local).
+-- - Líneas/cobros: FK compuesta (document_result_id, visit_id) → dueño coherente.
+-- - Evidencia: FK compuesta (visit_id, company_id) → misma empresa que la visita.
+-- - Línea documental: source_detail_id = document_details.detail_id (sin FK dura
+--   a Bsale para no acoplar sync comercial; UNIQUE por documento de visita).
 
 CREATE TABLE IF NOT EXISTS distribuidora.delivery_visits (
     id BIGSERIAL PRIMARY KEY,
     company_id INTEGER NOT NULL,
     dispatch_plan_id BIGINT NOT NULL
-        REFERENCES distribuidora.dispatch_plan (id) ON DELETE CASCADE,
+        REFERENCES distribuidora.dispatch_plan (id) ON DELETE RESTRICT,
     customer_key TEXT NOT NULL,
     client_id BIGINT,
     driver_user_id INTEGER NOT NULL,
@@ -37,7 +45,8 @@ CREATE TABLE IF NOT EXISTS distribuidora.delivery_visits (
     version INTEGER NOT NULL DEFAULT 1,
     idempotency_key TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_delivery_visits_id_company UNIQUE (id, company_id)
 );
 -- +go
 
@@ -93,7 +102,8 @@ CREATE TABLE IF NOT EXISTS distribuidora.delivery_document_results (
         )),
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_delivery_doc_result_id_visit UNIQUE (id, visit_id)
 );
 -- +go
 
@@ -106,8 +116,9 @@ CREATE TABLE IF NOT EXISTS distribuidora.delivery_line_results (
     id BIGSERIAL PRIMARY KEY,
     visit_id BIGINT NOT NULL
         REFERENCES distribuidora.delivery_visits (id) ON DELETE CASCADE,
-    document_result_id BIGINT NOT NULL
-        REFERENCES distribuidora.delivery_document_results (id) ON DELETE CASCADE,
+    document_result_id BIGINT NOT NULL,
+    source_detail_id BIGINT,
+    line_number INTEGER,
     variant_id BIGINT,
     sku_code TEXT,
     product_name TEXT,
@@ -123,20 +134,33 @@ CREATE TABLE IF NOT EXISTS distribuidora.delivery_line_results (
     ),
     CONSTRAINT ck_delivery_line_delivered_le_planned CHECK (
         delivered_units <= planned_units
-    )
+    ),
+    CONSTRAINT fk_delivery_line_doc_visit
+        FOREIGN KEY (document_result_id, visit_id)
+        REFERENCES distribuidora.delivery_document_results (id, visit_id)
+        ON DELETE CASCADE
 );
+-- +go
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_delivery_line_doc_source_detail
+    ON distribuidora.delivery_line_results (document_result_id, source_detail_id)
+    WHERE source_detail_id IS NOT NULL;
 -- +go
 
 CREATE INDEX IF NOT EXISTS idx_delivery_line_results_visit
     ON distribuidora.delivery_line_results (visit_id);
 -- +go
 
+CREATE INDEX IF NOT EXISTS idx_delivery_line_results_source_detail
+    ON distribuidora.delivery_line_results (source_detail_id)
+    WHERE source_detail_id IS NOT NULL;
+-- +go
+
 CREATE TABLE IF NOT EXISTS distribuidora.delivery_collections (
     id BIGSERIAL PRIMARY KEY,
     visit_id BIGINT NOT NULL
         REFERENCES distribuidora.delivery_visits (id) ON DELETE CASCADE,
-    document_result_id BIGINT
-        REFERENCES distribuidora.delivery_document_results (id) ON DELETE CASCADE,
+    document_result_id BIGINT,
     method TEXT NOT NULL
         CHECK (method IN (
             'cash',
@@ -154,7 +178,11 @@ CREATE TABLE IF NOT EXISTS distribuidora.delivery_collections (
     note TEXT,
     created_by_user_id INTEGER NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_delivery_collection_doc_visit
+        FOREIGN KEY (document_result_id, visit_id)
+        REFERENCES distribuidora.delivery_document_results (id, visit_id)
+        ON DELETE CASCADE
 );
 -- +go
 
@@ -164,8 +192,7 @@ CREATE INDEX IF NOT EXISTS idx_delivery_collections_visit
 
 CREATE TABLE IF NOT EXISTS distribuidora.delivery_evidence (
     id BIGSERIAL PRIMARY KEY,
-    visit_id BIGINT NOT NULL
-        REFERENCES distribuidora.delivery_visits (id) ON DELETE CASCADE,
+    visit_id BIGINT NOT NULL,
     company_id INTEGER NOT NULL,
     evidence_kind TEXT NOT NULL
         CHECK (evidence_kind IN (
@@ -194,7 +221,11 @@ CREATE TABLE IF NOT EXISTS distribuidora.delivery_evidence (
     idempotency_key TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_delivery_evidence_object_key UNIQUE (object_key)
+    CONSTRAINT uq_delivery_evidence_object_key UNIQUE (object_key),
+    CONSTRAINT fk_delivery_evidence_visit_company
+        FOREIGN KEY (visit_id, company_id)
+        REFERENCES distribuidora.delivery_visits (id, company_id)
+        ON DELETE CASCADE
 );
 -- +go
 
@@ -242,9 +273,13 @@ CREATE INDEX IF NOT EXISTS idx_delivery_report_snapshots_visit
 -- +go
 
 COMMENT ON TABLE distribuidora.delivery_visits IS
-    'Visitas de entrega PWA (chofer). No muta Bsale ni picking.';
+    'Visitas de entrega PWA (chofer). No muta Bsale ni picking. FK plan RESTRICT.';
 -- +go
 
 COMMENT ON TABLE distribuidora.delivery_evidence IS
     'Metadatos de evidencias; bytes en R2 privado (object_key).';
+-- +go
+
+COMMENT ON COLUMN distribuidora.delivery_line_results.source_detail_id IS
+    'Identidad estable de línea: distribuidora.document_details.detail_id del doc facturado.';
 -- +go

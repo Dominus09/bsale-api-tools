@@ -217,11 +217,13 @@ def replace_line_results(
         cur.execute(
             """
             INSERT INTO distribuidora.delivery_line_results (
-                visit_id, document_result_id, variant_id, sku_code, product_name,
+                visit_id, document_result_id, source_detail_id, line_number,
+                variant_id, sku_code, product_name,
                 planned_units, delivered_units, undelivered_units,
                 undelivered_reason, undelivered_note
             ) VALUES (
-                %(visit_id)s, %(document_result_id)s, %(variant_id)s, %(sku_code)s,
+                %(visit_id)s, %(document_result_id)s, %(source_detail_id)s,
+                %(line_number)s, %(variant_id)s, %(sku_code)s,
                 %(product_name)s, %(planned_units)s, %(delivered_units)s,
                 %(undelivered_units)s, %(undelivered_reason)s, %(undelivered_note)s
             )
@@ -230,7 +232,24 @@ def replace_line_results(
             {
                 "visit_id": int(visit_id),
                 "document_result_id": int(document_result_id),
-                **line,
+                "source_detail_id": (
+                    int(line["source_detail_id"])
+                    if line.get("source_detail_id") is not None
+                    else None
+                ),
+                "line_number": (
+                    int(line["line_number"])
+                    if line.get("line_number") is not None
+                    else None
+                ),
+                "variant_id": line.get("variant_id"),
+                "sku_code": line.get("sku_code"),
+                "product_name": line.get("product_name"),
+                "planned_units": line.get("planned_units"),
+                "delivered_units": line.get("delivered_units"),
+                "undelivered_units": line.get("undelivered_units"),
+                "undelivered_reason": line.get("undelivered_reason"),
+                "undelivered_note": line.get("undelivered_note"),
             },
         )
         out.append(_row(cur, cur.fetchone()))

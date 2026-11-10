@@ -116,6 +116,8 @@ export type DriverProduct = {
   equivalence_status?: "verified" | "pending_validation" | string
   equivalence_label?: string | null
   load_group?: LoadGroupRef | null
+  source_detail_id?: number | null
+  line_number?: number | null
 }
 
 export type DriverDocument = {
@@ -381,6 +383,8 @@ export async function saveVisitDocumentLines(
     result_status: string
     notes?: string | null
     lines: Array<{
+      source_detail_id: number
+      line_number?: number | null
       variant_id?: number | null
       sku_code?: string | null
       product_name?: string | null
