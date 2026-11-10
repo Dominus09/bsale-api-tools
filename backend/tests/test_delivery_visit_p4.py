@@ -281,3 +281,70 @@ def test_declare_collection_blocks_transfer_verified(monkeypatch):
             note=None,
         )
     assert ei.value.status_code == 403
+
+
+def test_declare_collection_pending_rejects_positive_amount(monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.declare_collection(
+            user={"id": 7},
+            plan_id=1,
+            visit_id=1,
+            document_result_id=None,
+            method="pending",
+            document_amount=155033,
+            declared_amount=100000,
+            note=None,
+        )
+    assert ei.value.status_code == 400
+    assert "pendiente" in str(ei.value.detail).lower()
+
+
+def test_submit_conformity_requires_receptor_name(monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7
+    )
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda *_a, **_k: 1
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.submit_conformity(
+            user={"id": 7},
+            plan_id=1,
+            visit_id=1,
+            receptor_name=" ",
+            signature_png=b"fake",
+            refused=False,
+            refuse_reason=None,
+            latitude=None,
+            longitude=None,
+            accuracy_m=None,
+        )
+    assert ei.value.status_code == 400
+    assert "receptor" in str(ei.value.detail).lower()
+
+
+def test_submit_conformity_refuse_requires_reason(monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7
+    )
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda *_a, **_k: 1
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.submit_conformity(
+            user={"id": 7},
+            plan_id=1,
+            visit_id=1,
+            receptor_name="",
+            signature_png=None,
+            refused=True,
+            refuse_reason="  ",
+            latitude=None,
+            longitude=None,
+            accuracy_m=None,
+        )
+    assert ei.value.status_code == 400
+    assert "negativa" in str(ei.value.detail).lower()
