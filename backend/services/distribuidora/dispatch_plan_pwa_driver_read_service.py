@@ -1168,26 +1168,37 @@ def resolve_visit_attention_rows(
             actor = 0
         return actor > 0 and len(str(void_reason or "").strip()) > 0
 
+    def _looks_like_ended_at(value: Any) -> bool:
+        if value is None:
+            return False
+        if hasattr(value, "year"):
+            return True
+        if isinstance(value, str):
+            text = value.strip()
+            return len(text) >= 10 and text[0:4].isdigit() and text[4] in "-/"
+        return False
+
     def _parse_row(
         row: tuple[Any, ...],
     ) -> tuple[str, int, str, str | None, Any, str | None] | None:
         """Soporta:
-        - Canónico: key,id,status,result_reason,ended_at[,admin...][,closure_review]
-        - Legacy tests: key,id,status,ended_at[,admin...] (sin result_reason)
+        - Canónico (≥9): key,id,status,result_reason,ended_at,admin…[,closure_review]
+        - Canónico corto (5): key,id,status,result_reason,ended_at
+        - Legacy (4/8): key,id,status,ended_at[,admin…] (sin result_reason)
         """
         n = len(row)
-        # Legacy: [3] es ended_at (datetime/None) y no hay hueco de reason.
+        # Filas SQL actuales traen admin + closure_review (≥9) → siempre canónico.
+        # Legacy de tests: ended_at en [3] (fecha) y admin en [4].
         legacy = n == 4 or (
-            n >= 5
-            and (row[3] is None or hasattr(row[3], "year"))
-            and not isinstance(row[3], str)
+            n == 8 and _looks_like_ended_at(row[3])
+        ) or (
+            n == 5 and _looks_like_ended_at(row[3]) and not _looks_like_ended_at(row[4])
         )
         if legacy:
             admin_class = row[4] if n > 4 else None
             voided_at = row[5] if n > 5 else None
             voided_by = row[6] if n > 6 else None
             void_reason = row[7] if n > 7 else None
-            review = (str(row[8]).strip() if n > 8 and row[8] else None) or None
             if _voided(admin_class, voided_at, voided_by, void_reason):
                 return None
             return (
@@ -1196,7 +1207,7 @@ def resolve_visit_attention_rows(
                 str(row[2] or ""),
                 None,
                 row[3] if n > 3 else None,
-                review,
+                None,
             )
         admin_class = row[5] if n > 5 else None
         voided_at = row[6] if n > 6 else None
@@ -1211,7 +1222,7 @@ def resolve_visit_attention_rows(
             int(row[1]),
             str(row[2] or ""),
             (str(reason).strip() if reason else None) or None,
-            row[4],
+            row[4] if n > 4 else None,
             review,
         )
 
