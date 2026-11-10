@@ -1302,3 +1302,212 @@ def test_collection_after_conformity_invalidates(isolated_db, monkeypatch):
         cur.close()
     finally:
         conn.close()
+
+
+def test_two_invoices_mixed_keeps_other_doc_and_audits_delete(
+    isolated_db, monkeypatch
+):
+    """Dos facturas: reemplazar A + huérfanas no toca B; evento audita deleted_prior_rows."""
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42
+    )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_resolve_client",
+        lambda _p, _k: {"client_id": 9010, "customer_key": "id:9010"},
+    )
+    monkeypatch.setattr(svc.loc_svc, "_parse_client_id", lambda _k, _c: 9010)
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda _u, _p: 3
+    )
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO distribuidora.document_details
+                (detail_id, document_id, line_number, variant_id, variant_description, quantity)
+            VALUES
+                (99001, 556, 1, 2, 'Prod B1', 1),
+                (99002, 556, 2, 2, 'Prod B2', 1)
+            """
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    started = svc.start_visit(
+        user=_user(),
+        plan_id=10,
+        customer_key="id:9010",
+        latitude=-42.0,
+        longitude=-73.0,
+        accuracy_m=10.0,
+    )
+    vid = started["visit"]["id"]
+
+    saved_a = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=None,
+        document_number=51819,
+        document_type="factura",
+        document_total=155033,
+        result_status="full",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 88001,
+                "planned_units": 4,
+                "delivered_units": 4,
+                "product_name": "A1",
+            },
+            {
+                "source_detail_id": 88002,
+                "planned_units": 2,
+                "delivered_units": 2,
+                "product_name": "A2",
+            },
+        ],
+    )
+    saved_b = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=556,
+        oc_document_id=None,
+        document_number=51820,
+        document_type="factura",
+        document_total=80000,
+        result_status="full",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 99001,
+                "planned_units": 1,
+                "delivered_units": 1,
+                "product_name": "B1",
+            },
+            {
+                "source_detail_id": 99002,
+                "planned_units": 1,
+                "delivered_units": 1,
+                "product_name": "B2",
+            },
+        ],
+    )
+    doc_a = int(saved_a["document_result"]["id"])
+    doc_b = int(saved_b["document_result"]["id"])
+    assert doc_a != doc_b
+
+    # Declaración vigente de B (debe sobrevivir).
+    svc.declare_collections_mixed(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_b,
+        document_amount=80000,
+        payments=[
+            {"method": "cash", "declared_amount": 80000},
+        ],
+    )
+    # Legacy A: pending 120000 + huérfana NULL.
+    svc.declare_collections_mixed(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_a,
+        document_amount=155033,
+        payments=[
+            {"method": "pending", "declared_amount": 120000},
+            {"method": "cash", "declared_amount": 35033},
+        ],
+    )
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        visit_repo.insert_collection(
+            cur,
+            visit_id=int(vid),
+            document_result_id=None,
+            method="pending",
+            document_amount=155033,
+            declared_amount=99999,
+            verified_amount=None,
+            pending_balance=99999,
+            note="orphan-legacy",
+            created_by_user_id=42,
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    # Nueva distribución A (ejemplo físico 50+90+15).
+    mixed_a = svc.declare_collections_mixed(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_a,
+        document_amount=155033,
+        payments=[
+            {"method": "cash", "declared_amount": 50000},
+            {"method": "transfer_declared", "declared_amount": 90000},
+            {"method": "pending", "declared_amount": 15033},
+        ],
+    )
+    assert mixed_a["persisted"] is True
+    assert float(mixed_a["sum_declared"]) == 155033.0
+
+    detail = svc.get_visit_detail(user=_user(), plan_id=10, visit_id=vid)
+    cols = detail["collections"]
+    assert all(c.get("document_result_id") is not None for c in cols)
+    by_doc: dict[int, list] = {}
+    for c in cols:
+        by_doc.setdefault(int(c["document_result_id"]), []).append(c)
+    assert set(by_doc.keys()) == {doc_a, doc_b}
+    assert len(by_doc[doc_b]) == 1
+    assert by_doc[doc_b][0]["method"] == "cash"
+    assert float(by_doc[doc_b][0]["declared_amount"]) == 80000.0
+    assert len(by_doc[doc_a]) == 3
+    pending_a = sum(
+        float(c["declared_amount"] or 0)
+        for c in by_doc[doc_a]
+        if c["method"] == "pending"
+    )
+    assert pending_a == 15033.0
+    assert 120000.0 not in [
+        float(c["declared_amount"] or 0) for c in by_doc[doc_a]
+    ]
+    assert 99999.0 not in [float(c["declared_amount"] or 0) for c in cols]
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT action, payload
+            FROM distribuidora.delivery_visit_events
+            WHERE visit_id = %s AND action = 'collections_mixed_declared'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(vid),),
+        )
+        ev = cur.fetchone()
+        assert ev is not None
+        payload = ev["payload"] if isinstance(ev, dict) else ev[1]
+        if isinstance(payload, str):
+            import json
+
+            payload = json.loads(payload)
+        assert int(payload.get("document_result_id")) == doc_a
+        assert int(payload.get("deleted_prior_rows") or 0) >= 2
+        assert int(payload.get("payment_count")) == 3
+        cur.close()
+    finally:
+        conn.close()

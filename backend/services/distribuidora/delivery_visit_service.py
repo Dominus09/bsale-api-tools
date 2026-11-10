@@ -1124,7 +1124,7 @@ def declare_collections_mixed(
                 status_code=422,
                 detail="document_result_id no pertenece a esta visita",
             )
-        visit_repo.delete_collections_for_document(
+        deleted_n = visit_repo.delete_collections_for_document(
             cur, visit_id=int(visit_id), document_result_id=int(document_result_id)
         )
         rows: list[dict[str, Any]] = []
@@ -1157,6 +1157,7 @@ def declare_collections_mixed(
             payload={
                 "document_result_id": int(document_result_id),
                 "payment_count": len(rows),
+                "deleted_prior_rows": int(deleted_n),
                 "sum_declared": sum_decl,
                 "pending_balance": remaining,
                 "conformity_invalidated": bool(invalidated),
