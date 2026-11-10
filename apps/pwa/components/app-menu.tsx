@@ -70,6 +70,21 @@ export function AppMenu() {
               </button>
             </div>
 
+            {tools?.available && tools.backHref ? (
+              <section className="drawer-section">
+                <h3>Navegación</h3>
+                <div className="drawer-actions">
+                  <Link
+                    className="drawer-item"
+                    href={tools.backHref}
+                    onClick={() => setOpen(false)}
+                  >
+                    ← Volver a despachos / clientes
+                  </Link>
+                </div>
+              </section>
+            ) : null}
+
             <section className="drawer-section">
               <h3>Herramientas del local</h3>
               {tools?.available ? (

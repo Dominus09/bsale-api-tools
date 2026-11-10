@@ -42,6 +42,13 @@ type Props = {
   navigationUrl?: string | null
   warnAccuracyM?: number
   onChanged: () => void
+  /**
+   * Modo guiado por menú: no muestra los paneles GPS/foto por defecto;
+   * solo la hoja de la herramienta enfocada (gps | photo | history).
+   */
+  menuDriven?: boolean
+  /** Destino del enlace "Volver" del menú. */
+  backHref?: string | null
 }
 
 async function compressImage(file: File, maxSide = 1600, quality = 0.82): Promise<Blob> {
@@ -242,6 +249,7 @@ export function ClientLocationCapture(props: Props) {
       locationLabel: loc?.label_es || null,
       canNavigate: Boolean(props.navigationUrl),
       navigationUrl: props.navigationUrl || null,
+      backHref: props.backHref ?? null,
       run: runTool,
     })
     const pending = consumePendingAction()
@@ -252,13 +260,44 @@ export function ClientLocationCapture(props: Props) {
     props.planId,
     props.customerKey,
     props.navigationUrl,
+    props.backHref,
     props.address,
     props.city,
     loc?.label_es,
   ])
 
+  const menuDriven = Boolean(props.menuDriven)
+  const showGps = !menuDriven || focus === "gps" || focus === "history"
+  const showPhoto = !menuDriven || focus === "photo"
+
+  const closeSheet = menuDriven && focus ? (
+    <button
+      type="button"
+      className="btn btn-ghost"
+      disabled={busy != null}
+      onClick={() => {
+        setFocus(null)
+        setHistoryOpen(false)
+        setMsg(null)
+        setErr(null)
+      }}
+    >
+      Cerrar herramienta
+    </button>
+  ) : null
+
   return (
     <div className="stack-gap">
+      {/* Input siempre montado: el menú puede abrir la cámara sin mostrar el panel. */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{ display: "none" }}
+        onChange={(e) => void onPickFile(e.target.files?.[0] || null)}
+      />
+      {showGps ? (
       <div
         ref={gpsRef}
         className={`card tool-panel${focus === "gps" || focus === "history" ? " highlight" : ""}`}
@@ -331,8 +370,11 @@ export function ClientLocationCapture(props: Props) {
                 : "Sin historial de propuestas en esta ficha. Las aprobaciones se consultan en ERP."}
           </div>
         ) : null}
+        {closeSheet ? <div style={{ marginTop: 10 }}>{closeSheet}</div> : null}
       </div>
+      ) : null}
 
+      {showPhoto ? (
       <div
         ref={photoRef}
         className={`card tool-panel${focus === "photo" ? " highlight" : ""}`}
@@ -351,14 +393,6 @@ export function ClientLocationCapture(props: Props) {
             Estado foto: {props.facade.status}
           </p>
         ) : null}
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          capture="environment"
-          style={{ display: "none" }}
-          onChange={(e) => void onPickFile(e.target.files?.[0] || null)}
-        />
         <div className="stack-gap" style={{ marginTop: 8 }}>
           <button
             type="button"
@@ -388,8 +422,10 @@ export function ClientLocationCapture(props: Props) {
               </button>
             </>
           ) : null}
+          {closeSheet}
         </div>
       </div>
+      ) : null}
 
       {msg ? <div className="banner banner-info">{msg}</div> : null}
       {err ? <div className="banner banner-error">{err}</div> : null}

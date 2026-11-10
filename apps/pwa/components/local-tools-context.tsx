@@ -10,6 +10,8 @@ type LocalToolsApi = {
   locationLabel: string | null
   canNavigate: boolean
   navigationUrl: string | null
+  /** Destino "Volver a despachos / clientes" en el menú (opcional). */
+  backHref?: string | null
   run: (action: LocalToolAction) => void
 }
 
