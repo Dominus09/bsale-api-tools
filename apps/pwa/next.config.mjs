@@ -19,18 +19,8 @@ const nextConfig = {
       },
     ]
   },
-  async rewrites() {
-    const apiBase = (
-      process.env.API_PROXY_TARGET ||
-      process.env.NEXT_PUBLIC_API_URL ||
-      "https://api.quillotana.cl"
-    )
-      .trim()
-      .replace(/\/$/, "")
-    return [
-      { source: "/api-upstream/:path*", destination: `${apiBase}/:path*` },
-    ]
-  },
+  // Proxy same-origin: app/api-upstream/[...path]/route.ts
+  // Lee API_PROXY_TARGET en runtime (URL interna Coolify). Sin rewrite a DNS público.
 }
 
 export default nextConfig

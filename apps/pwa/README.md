@@ -17,7 +17,7 @@ npm install
 npm run dev   # http://localhost:3001
 ```
 
-## Coolify (propuesta — no configurar aún)
+## Coolify
 
 | Campo | Valor |
 |---|---|
@@ -27,6 +27,11 @@ npm run dev   # http://localhost:3001
 | Puerto | `3000` |
 | Dominio | `app.quillotana.cl` |
 | Build arg | `NEXT_PUBLIC_API_URL=https://api.quillotana.cl` |
+| Runtime env | `API_PROXY_TARGET=http://<hostname-interno-api>:8000` |
+
+`API_PROXY_TARGET` es **runtime** (no build arg). Debe ser el hostname Docker/Coolify del API en la misma red, puerto interno 8000. Sin ese valor el proxy usa DNS público (`api.quillotana.cl`) y puede fallar con `EAI_AGAIN`.
+
+Verificar desde el contenedor PWA: `getent hosts <hostname>` y `node scripts/probe-api-upstream.mjs`.
 
 Redeploy manual. No tocar el recurso del ERP (`frontend/`).
 

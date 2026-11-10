@@ -7,6 +7,7 @@ import {
 } from "./auth"
 import { multipartAuthHeaders } from "./multipart-headers"
 import { getApiBase } from "./api-base"
+import { CONNECT_ERROR_ES } from "./api-proxy-target"
 
 export class ApiError extends Error {
   status: number
@@ -28,11 +29,26 @@ async function parseError(res: Response): Promise<string> {
   } catch {
     /* raw */
   }
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    return CONNECT_ERROR_ES
+  }
   return raw.slice(0, 240) || `Error ${res.status}`
 }
 
+function networkErrorMessage(_err: unknown): string {
+  return CONNECT_ERROR_ES
+}
+
+async function fetchOnce(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch (err) {
+    throw new ApiError(503, networkErrorMessage(err))
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getApiBase()}${path}`, {
+  const res = await fetchOnce(`${getApiBase()}${path}`, {
     ...init,
     headers: { ...jsonAuthHeaders(), ...(init?.headers || {}) },
   })
@@ -57,7 +73,7 @@ export type LoginResponse = {
 }
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
-  const res = await fetch(`${getApiBase()}/login`, {
+  const res = await fetchOnce(`${getApiBase()}/login`, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -530,7 +546,7 @@ export async function uploadVisitEvidence(
   if (opts.longitude != null) fd.append("longitude", String(opts.longitude))
   if (opts.accuracy_m != null) fd.append("accuracy_m", String(opts.accuracy_m))
   if (opts.idempotency_key) fd.append("idempotency_key", opts.idempotency_key)
-  const res = await fetch(
+  const res = await fetchOnce(
     `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/evidencia`,
     {
       method: "POST",
@@ -603,7 +619,7 @@ export async function submitVisitConformity(
       ),
     })
   }
-  const res = await fetch(
+  const res = await fetchOnce(
     `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/conformidad`,
     { method: "POST", headers, body: fd },
   )
@@ -679,7 +695,7 @@ export async function uploadFacadePhoto(
   const type = opts?.contentType || (file.type || "image/jpeg")
   fd.append("file", file, "fachada.jpg")
   if (opts?.idempotency_key) fd.append("idempotency_key", opts.idempotency_key)
-  const res = await fetch(
+  const res = await fetchOnce(
     `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/foto-fachada`,
     {
       method: "POST",
