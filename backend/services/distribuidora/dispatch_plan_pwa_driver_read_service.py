@@ -303,17 +303,41 @@ def build_client_navigation(
 
 
 def _short_product_name(row: dict[str, Any]) -> str:
-    raw = (
-        row.get("display_name")
-        or row.get("producto_variante")
-        or row.get("producto")
-        or row.get("variante")
-        or ""
-    )
+    raw = _commercial_product_name(row)
     text = re.sub(r"\s+", " ", str(raw)).strip()
     if len(text) <= 72:
         return text
     return text[:69].rstrip() + "…"
+
+
+def _commercial_product_name(row: dict[str, Any]) -> str:
+    """Nombre comercial: marca/producto + variante/formato. Sin inventar datos."""
+    brand = re.sub(
+        r"\s+",
+        " ",
+        str(
+            row.get("producto_marca")
+            or row.get("product_name")
+            or row.get("producto_base")
+            or ""
+        ),
+    ).strip()
+    variant = re.sub(
+        r"\s+",
+        " ",
+        str(
+            row.get("producto_variante")
+            or row.get("display_name")
+            or row.get("variante")
+            or row.get("producto")
+            or ""
+        ),
+    ).strip()
+    if brand and variant:
+        if brand.lower() in variant.lower():
+            return variant
+        return f"{brand} — {variant}"
+    return brand or variant or "Producto"
 
 
 def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) -> dict[str, Any]:
@@ -338,24 +362,30 @@ def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) 
         except (TypeError, ValueError):
             cajas_out = None
     verified = cajas_out is not None and upb_f > 0 and not sin_caja
+    commercial = _commercial_product_name(row)
     description = (
         row.get("producto_variante")
         or row.get("display_name")
         or row.get("producto")
+        or commercial
         or ""
     )
     source_detail_id = row.get("source_detail_id")
     if source_detail_id is None:
         source_detail_id = row.get("detail_id")
+    barcode = row.get("codigo_barras")
+    if barcode is not None:
+        barcode = str(barcode).strip() or None
     return {
         "description": description,
+        "commercial_name": commercial,
         "name_short": _short_product_name(row),
-        "producto": row.get("producto") or "",
-        "variante": row.get("variante") or "",
+        "producto": row.get("producto_base") or row.get("producto") or "",
+        "variante": row.get("producto_variante") or row.get("variante") or "",
         "product_id": row.get("product_id"),
         "variant_id": row.get("variant_id"),
         "sku_code": row.get("variant_id"),
-        "codigo_barras": row.get("codigo_barras"),
+        "codigo_barras": barcode,
         "unidades": _num(row.get("unidades")),
         "cajas_equivalentes": cajas_out,
         "units_per_box": upb_f if upb_f > 0 and not sin_caja else None,
@@ -375,26 +405,65 @@ def _document_detail_lines(related_document_id: int) -> list[dict[str, Any]]:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                dd.detail_id AS source_detail_id,
-                dd.line_number,
-                dd.variant_id,
-                COALESCE(
-                    NULLIF(BTRIM(dd.variant_description), ''),
-                    NULLIF(BTRIM(dd.variant_code), ''),
-                    'Producto'
-                ) AS producto,
-                NULLIF(BTRIM(dd.variant_description), '') AS producto_variante,
-                NULLIF(BTRIM(dd.variant_code), '') AS variante,
-                dd.quantity AS unidades
-            FROM distribuidora.document_details dd
-            WHERE dd.document_id = %s
-            ORDER BY dd.line_number NULLS LAST, dd.detail_id
-            """,
-            (int(related_document_id),),
-        )
+        # Intenta enriquecer con marca/barcode Bsale; si no hay tablas, fallback local.
+        try:
+            cur.execute(
+                """
+                SELECT
+                    dd.detail_id AS source_detail_id,
+                    dd.line_number,
+                    dd.variant_id,
+                    COALESCE(
+                        NULLIF(BTRIM(p.name), ''),
+                        NULLIF(BTRIM(dd.variant_description), ''),
+                        NULLIF(BTRIM(dd.variant_code), ''),
+                        'Producto'
+                    ) AS producto,
+                    NULLIF(BTRIM(p.name), '') AS producto_base,
+                    NULLIF(BTRIM(p.name), '') AS producto_marca,
+                    NULLIF(BTRIM(p.name), '') AS product_name,
+                    COALESCE(
+                        NULLIF(BTRIM(dd.variant_description), ''),
+                        NULLIF(BTRIM(v.description), ''),
+                        NULLIF(BTRIM(dd.variant_code), '')
+                    ) AS producto_variante,
+                    NULLIF(BTRIM(dd.variant_code), '') AS variante,
+                    NULLIF(BTRIM(COALESCE(v.bar_code, dd.variant_code)), '')
+                        AS codigo_barras,
+                    dd.quantity AS unidades
+                FROM distribuidora.document_details dd
+                LEFT JOIN bsale.variants v
+                  ON v.id = dd.variant_id
+                LEFT JOIN bsale.products p
+                  ON p.id = v.product_id
+                WHERE dd.document_id = %s
+                ORDER BY dd.line_number NULLS LAST, dd.detail_id
+                """,
+                (int(related_document_id),),
+            )
+        except Exception:
+            conn.rollback()
+            cur.execute(
+                """
+                SELECT
+                    dd.detail_id AS source_detail_id,
+                    dd.line_number,
+                    dd.variant_id,
+                    COALESCE(
+                        NULLIF(BTRIM(dd.variant_description), ''),
+                        NULLIF(BTRIM(dd.variant_code), ''),
+                        'Producto'
+                    ) AS producto,
+                    NULLIF(BTRIM(dd.variant_description), '') AS producto_variante,
+                    NULLIF(BTRIM(dd.variant_code), '') AS variante,
+                    NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
+                    dd.quantity AS unidades
+                FROM distribuidora.document_details dd
+                WHERE dd.document_id = %s
+                ORDER BY dd.line_number NULLS LAST, dd.detail_id
+                """,
+                (int(related_document_id),),
+            )
         cols = [d[0] for d in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
         cur.close()

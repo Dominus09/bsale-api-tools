@@ -731,6 +731,59 @@ input {
   border-color: rgba(62, 207, 142, 0.35);
 }
 
+.doc-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.doc-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.btn-block {
+  width: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
+.amt-pending {
+  color: #d4a017;
+  font-weight: 600;
+}
+
+.amt-danger {
+  color: #e35d6a;
+  font-weight: 700;
+}
+
+.pay-row.pay-cash {
+  border-color: rgba(62, 207, 142, 0.45);
+}
+
+.pay-row.pay-transfer_declared {
+  border-color: rgba(90, 160, 220, 0.45);
+}
+
+.pay-row.pay-pending {
+  border-color: rgba(212, 160, 23, 0.5);
+}
+
+.pay-row.pay-credit {
+  border-color: rgba(160, 160, 180, 0.45);
+}
+
+.product-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
 .pill-warn {
   background: rgba(227, 93, 106, 0.14);
   border-color: rgba(227, 93, 106, 0.4);

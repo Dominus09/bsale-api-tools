@@ -184,8 +184,8 @@ export default function EntregaDocumentosPage() {
             docKey: key,
           })
           return (
-            <div key={key} className="card">
-              <div className="client-card-head">
+            <div key={key} className="card doc-card">
+              <div className="doc-card-top">
                 <h3 style={{ fontSize: "1rem", margin: 0 }}>
                   {doc.document_type || "Documento"} {doc.document_number ?? "—"}
                 </h3>
@@ -198,18 +198,18 @@ export default function EntregaDocumentosPage() {
                   : ""}
               </div>
               {prog.registrable ? (
-                <>
+                <div className="doc-card-actions">
                   <div className="line-progress" role="status">
                     Registrados {prog.registered} de {prog.expected} · Pendientes{" "}
                     {prog.pending}
                   </div>
-                  <Link href={href} className="btn btn-secondary" style={{ marginTop: 10 }}>
-                    {prog.complete ? "Abrir documento" : "Abrir documento"}
+                  <Link href={href} className="btn btn-secondary btn-block">
+                    Abrir documento
                   </Link>
-                </>
+                </div>
               ) : (
                 <p className="muted" style={{ fontSize: "0.82rem", marginTop: 8 }} role="status">
-                  Sin document_details fiables: solo lectura. No se registra entrega
+                  Sin detalle confiable: solo lectura. No se registra entrega
                   verificada de este documento.
                 </p>
               )}

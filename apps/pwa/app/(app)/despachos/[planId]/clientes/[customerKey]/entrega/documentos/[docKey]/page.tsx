@@ -11,10 +11,10 @@ import {
 } from "@/lib/api"
 import { DeliveryStepChrome } from "@/components/delivery-step-chrome"
 import { buildEntregaHref, docKeyFromDocument, moneyCLP } from "@/lib/delivery-flow"
+import { commercialProductLabel, lineOutcomeEs } from "@/lib/delivery-labels"
 import {
   filterLines,
   lineOutcome,
-  lineOutcomeLabel,
   lineProgress,
   reasonLabel,
   type LineFilter,
@@ -55,7 +55,7 @@ function buildLines(doc: DriverDocument, savedByDetail: Map<number, Record<strin
         variant_id: p.variant_id,
         sku_code: p.sku_code != null ? String(p.sku_code) : null,
         barcode: p.codigo_barras != null ? String(p.codigo_barras) : null,
-        product_name: p.name_short || p.description || p.producto || "Producto",
+        product_name: commercialProductLabel(p),
         planned,
         delivered,
         reason: persisted
@@ -325,11 +325,11 @@ export default function EntregaDocumentoDetallePage() {
         <>
           <div className="line-toolbar card">
             <label className="field" style={{ marginBottom: 8 }}>
-              Buscar producto / SKU / código
+              Buscar producto o código de barras
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Nombre, SKU o código de barras"
+                placeholder="Nombre o código de barras"
                 autoComplete="off"
                 enterKeyHint="search"
               />
@@ -414,16 +414,16 @@ export default function EntregaDocumentoDetallePage() {
                               : ""
                         }`}
                       >
-                        {lineOutcomeLabel(outcome)}
+                        {lineOutcomeEs(outcome)}
                       </span>
                     </div>
                     <div className="muted" style={{ fontSize: "0.8rem" }}>
-                      SKU {ln.sku_code || ln.variant_id || "—"}
-                      {ln.barcode ? ` · ${ln.barcode}` : ""}
-                      {` · detail ${ln.source_detail_id}`}
+                      {ln.barcode
+                        ? `Código de barras: ${ln.barcode}`
+                        : "Código de barras: no disponible"}
                     </div>
                     <div className="meta-row">
-                      <span className="muted">Planificado</span>
+                      <span className="muted">Documentado</span>
                       <span>{ln.planned}</span>
                     </div>
                     <div className="btn-row" style={{ marginBottom: 8 }}>
@@ -541,12 +541,12 @@ export default function EntregaDocumentoDetallePage() {
       {!registrable
         ? (doc.products || []).map((p, idx) => (
             <div key={`ro-${idx}`} className="card" style={{ padding: 12 }}>
-              <div className="product-name">
-                {p.name_short || p.description || p.producto || "Producto"}
-              </div>
+              <div className="product-name">{commercialProductLabel(p)}</div>
               <div className="muted" style={{ fontSize: "0.8rem" }}>
-                {typeof p.unidades === "number" ? `${p.unidades} un.` : "—"} · sin
-                detail_id
+                {p.codigo_barras
+                  ? `Código de barras: ${p.codigo_barras}`
+                  : "Código de barras: no disponible"}
+                {typeof p.unidades === "number" ? ` · ${p.unidades} un.` : ""}
               </div>
             </div>
           ))
