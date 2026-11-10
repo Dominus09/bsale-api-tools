@@ -794,6 +794,8 @@ def save_document_lines(
                     + ", ".join(str(x) for x in missing)
                 ),
             )
+        # Estado inicial: pending si aún no se completan todas las líneas del doc.
+        initial_status = result_status if result_status == "pending" else result_status
         doc = visit_repo.upsert_document_result(
             cur,
             visit_id=int(visit_id),
@@ -802,7 +804,7 @@ def save_document_lines(
             document_number=document_number,
             document_type=document_type,
             document_total=document_total,
-            result_status=result_status,
+            result_status=initial_status,
             notes=(notes or "").strip() or None,
         )
         if int(doc["visit_id"]) != int(visit_id):
@@ -813,6 +815,26 @@ def save_document_lines(
             document_result_id=int(doc["id"]),
             lines=normalized,
         )
+        # Derivar estado real tras merge: no marcar documento completo si faltan líneas.
+        n_saved = len(saved_lines)
+        if n_saved < n_doc:
+            derived_status = "pending"
+        else:
+            undel = sum(float(x.get("undelivered_units") or 0) for x in saved_lines)
+            deliv = sum(float(x.get("delivered_units") or 0) for x in saved_lines)
+            if undel <= 0:
+                derived_status = "full"
+            elif deliv <= 0:
+                derived_status = "none"
+            else:
+                derived_status = "partial"
+        if str(doc.get("result_status") or "") != derived_status:
+            doc = visit_repo.update_document_result_status(
+                cur,
+                document_result_id=int(doc["id"]),
+                result_status=derived_status,
+            )
+        result_status = derived_status
         invalidated = visit_repo.invalidate_conformity(
             cur,
             int(visit_id),
@@ -828,6 +850,8 @@ def save_document_lines(
             payload={
                 "related_document_id": int(related_document_id),
                 "line_count": len(saved_lines),
+                "lines_upserted": len(normalized),
+                "expected_detail_count": n_doc,
                 "result_status": result_status,
                 "conformity_invalidated": bool(invalidated),
             },
@@ -856,6 +880,9 @@ def save_document_lines(
             "document_result": doc,
             "lines": saved_lines,
             "persisted": True,
+            "lines_registered": len(saved_lines),
+            "lines_expected": n_doc,
+            "document_complete": len(saved_lines) >= n_doc,
             "note_es": "Cantidades guardadas sin modificar Bsale ni picking histórico.",
         }
     )

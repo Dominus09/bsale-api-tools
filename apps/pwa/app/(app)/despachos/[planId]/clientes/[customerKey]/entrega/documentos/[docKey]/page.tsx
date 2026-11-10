@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ApiError,
   type DriverDocument,
@@ -11,6 +11,15 @@ import {
 } from "@/lib/api"
 import { DeliveryStepChrome } from "@/components/delivery-step-chrome"
 import { buildEntregaHref, docKeyFromDocument, moneyCLP } from "@/lib/delivery-flow"
+import {
+  filterLines,
+  lineOutcome,
+  lineOutcomeLabel,
+  lineProgress,
+  reasonLabel,
+  type LineFilter,
+  type LineUiRow,
+} from "@/lib/delivery-lines-ui"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
 
@@ -22,38 +31,53 @@ const REASONS = [
   { value: "other", label: "Otro" },
 ]
 
-type LineDraft = {
+type LineDraft = LineUiRow & {
   key: string
-  source_detail_id: number
   line_number?: number | null
   variant_id?: number | null
-  sku_code?: string | null
-  product_name: string
-  planned: number
-  delivered: number
-  reason: string
-  note: string
 }
 
-function buildLines(doc: DriverDocument): LineDraft[] {
+function buildLines(doc: DriverDocument, savedByDetail: Map<number, Record<string, unknown>>): LineDraft[] {
   return (doc.products || [])
     .filter((p) => p.source_detail_id != null)
     .map((p, idx) => {
       const planned = typeof p.unidades === "number" ? p.unidades : 0
       const detailId = Number(p.source_detail_id)
+      const saved = savedByDetail.get(detailId)
+      const persisted = Boolean(saved)
+      const delivered = persisted
+        ? Number(saved?.delivered_units ?? planned)
+        : planned
       return {
         key: `detail-${detailId}-${idx}`,
         source_detail_id: detailId,
         line_number: p.line_number ?? null,
         variant_id: p.variant_id,
         sku_code: p.sku_code != null ? String(p.sku_code) : null,
+        barcode: p.codigo_barras != null ? String(p.codigo_barras) : null,
         product_name: p.name_short || p.description || p.producto || "Producto",
         planned,
-        delivered: planned,
-        reason: "physical_shortage",
-        note: "",
+        delivered,
+        reason: persisted
+          ? String(saved?.undelivered_reason || "physical_shortage")
+          : "physical_shortage",
+        note: persisted ? String(saved?.undelivered_note || "") : "",
+        persisted,
       }
     })
+}
+
+function validateLine(ln: LineDraft): string | null {
+  if (ln.delivered < 0 || ln.delivered > ln.planned) {
+    return "Cantidad entregada inválida (0 … documentada)"
+  }
+  if (ln.delivered < ln.planned && !ln.reason) {
+    return "Motivo obligatorio para faltantes"
+  }
+  if (ln.delivered < ln.planned && ln.reason === "other" && !ln.note.trim()) {
+    return "Observación obligatoria cuando el motivo es Otro"
+  }
+  return null
 }
 
 export default function EntregaDocumentoDetallePage() {
@@ -61,6 +85,7 @@ export default function EntregaDocumentoDetallePage() {
   const router = useRouter()
   const session = useVisitSession(planId, customerKey)
   const listHref = buildEntregaHref(planId, customerKey, "documentos")
+  const listRef = useRef<HTMLDivElement | null>(null)
 
   const doc = useMemo(
     () =>
@@ -70,109 +95,137 @@ export default function EntregaDocumentoDetallePage() {
   )
 
   const [lines, setLines] = useState<LineDraft[]>([])
-  const [busy, setBusy] = useState(false)
+  const [filter, setFilter] = useState<LineFilter>("pending")
+  const [query, setQuery] = useState("")
+  const [busyId, setBusyId] = useState<number | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  const [hydrated, setHydrated] = useState(false)
+
+  async function hydrateFromServer() {
+    if (!doc || !session.activeVisit?.id) return
+    const baseSaved = new Map<number, Record<string, unknown>>()
+    try {
+      const detail = await getVisitDetail(planId, session.activeVisit.id)
+      const docMeta = (detail.documents || []).find(
+        (d) =>
+          String(d.related_document_id ?? d.document_number ?? "") ===
+          docKeyFromDocument(doc),
+      )
+      const docResId = docMeta ? String(docMeta.id) : null
+      for (const ln of detail.lines || []) {
+        if (docResId && String(ln.document_result_id ?? "") !== docResId) continue
+        const sid = Number(ln.source_detail_id)
+        if (Number.isFinite(sid)) baseSaved.set(sid, ln)
+      }
+    } catch {
+      /* primera visita */
+    }
+    setLines(buildLines(doc, baseSaved))
+    setHydrated(true)
+  }
 
   useEffect(() => {
     if (!doc || !session.activeVisit?.id) return
     let cancelled = false
-    async function hydrate() {
-      const base = buildLines(doc!)
-      try {
-        const detail = await getVisitDetail(planId, session.activeVisit!.id)
-        const docMeta = (detail.documents || []).find(
-          (d) =>
-            String(d.related_document_id ?? d.document_number ?? "") ===
-            docKeyFromDocument(doc!),
-        )
-        const docResId = docMeta ? String(docMeta.id) : null
-        const saved = (detail.lines || []).filter(
-          (ln) => String(ln.document_result_id ?? "") === String(docResId),
-        )
-        if (!cancelled && saved.length) {
-          setLines(
-            base.map((draft) => {
-              const match = saved.find(
-                (l) => Number(l.source_detail_id) === Number(draft.source_detail_id),
-              )
-              if (!match) return draft
-              return {
-                ...draft,
-                delivered: Number(match.delivered_units ?? draft.delivered),
-                reason: String(match.undelivered_reason || draft.reason),
-                note: String(match.undelivered_note || ""),
-              }
-            }),
-          )
-          return
-        }
-      } catch {
-        /* primera vez */
-      }
-      if (!cancelled) setLines(base)
-    }
-    void hydrate()
+    void (async () => {
+      await hydrateFromServer()
+      if (cancelled) return
+    })()
     return () => {
       cancelled = true
     }
-  }, [doc, planId, session.activeVisit, docKey])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, planId, session.activeVisit?.id, docKey])
 
-  async function save() {
+  const progress = useMemo(() => lineProgress(lines), [lines])
+  const visible = useMemo(
+    () => filterLines(lines, filter, query),
+    [lines, filter, query],
+  )
+
+  async function persistLine(ln: LineDraft, opts?: { stayOnRegistered?: boolean }) {
     if (!doc?.related_document_id || !session.activeVisit) return
-    for (const ln of lines) {
-      if (ln.delivered < 0 || ln.delivered > ln.planned) {
-        setErr("Cantidad entregada inválida (0 … documentada)")
-        return
-      }
-      if (ln.delivered < ln.planned && !ln.reason) {
-        setErr("Motivo obligatorio para faltantes")
-        return
-      }
-      if (ln.delivered < ln.planned && ln.reason === "other" && !ln.note.trim()) {
-        setErr("Observación obligatoria cuando el motivo es Otro")
-        return
-      }
+    const validation = validateLine(ln)
+    if (validation) {
+      setErr(validation)
+      return
     }
-    setBusy(true)
+    const scrollY = typeof window !== "undefined" ? window.scrollY : 0
+    setBusyId(ln.source_detail_id)
     setErr(null)
     setMsg(null)
     try {
-      const undelTotal = lines.reduce((a, l) => a + Math.max(0, l.planned - l.delivered), 0)
-      const delTotal = lines.reduce((a, l) => a + l.delivered, 0)
-      const result_status =
-        undelTotal <= 0 ? "full" : delTotal <= 0 ? "none" : "partial"
-      await saveVisitDocumentLines(planId, session.activeVisit.id, {
+      const res = (await saveVisitDocumentLines(planId, session.activeVisit.id, {
         related_document_id: Number(doc.related_document_id),
         oc_document_id: doc.oc_document_id ?? null,
         document_number: doc.document_number ?? null,
         document_type: doc.document_type ?? null,
         document_total: doc.document_total ?? null,
-        result_status,
-        lines: lines.map((l) => ({
-          source_detail_id: l.source_detail_id,
-          line_number: l.line_number ?? null,
-          variant_id: l.variant_id ?? null,
-          sku_code: l.sku_code,
-          product_name: l.product_name,
-          planned_units: l.planned,
-          delivered_units: l.delivered,
-          undelivered_reason: l.delivered < l.planned ? l.reason : null,
-          undelivered_note:
-            l.delivered < l.planned && l.note.trim() ? l.note.trim() : null,
-        })),
+        result_status: "pending",
+        lines: [
+          {
+            source_detail_id: ln.source_detail_id,
+            line_number: ln.line_number ?? null,
+            variant_id: ln.variant_id ?? null,
+            sku_code: ln.sku_code,
+            product_name: ln.product_name,
+            planned_units: ln.planned,
+            delivered_units: ln.delivered,
+            undelivered_reason: ln.delivered < ln.planned ? ln.reason : null,
+            undelivered_note:
+              ln.delivered < ln.planned && ln.note.trim() ? ln.note.trim() : null,
+          },
+        ],
+      })) as {
+        lines?: Array<Record<string, unknown>>
+        document_complete?: boolean
+        persisted?: boolean
+      }
+      if (!res.persisted) {
+        setErr("El servidor no confirmó el guardado de la línea")
+        return
+      }
+      const savedByDetail = new Map<number, Record<string, unknown>>()
+      for (const s of res.lines || []) {
+        const sid = Number(s.source_detail_id)
+        if (Number.isFinite(sid)) savedByDetail.set(sid, s)
+      }
+      // Conservar drafts locales de líneas aún no persistidas.
+      setLines((prev) => {
+        const next = prev.map((row) => {
+          const saved = savedByDetail.get(row.source_detail_id)
+          if (!saved) return row
+          return {
+            ...row,
+            delivered: Number(saved.delivered_units ?? row.delivered),
+            reason: String(saved.undelivered_reason || row.reason || "physical_shortage"),
+            note: String(saved.undelivered_note || ""),
+            persisted: true,
+          }
+        })
+        return next
       })
-      setMsg("Documento guardado en servidor")
+      setMsg(
+        res.document_complete
+          ? "Documento completo en servidor"
+          : `Línea ${ln.source_detail_id} registrada`,
+      )
+      if (!opts?.stayOnRegistered && filter === "pending") {
+        /* la línea sale sola del filtro; no forzar scroll al top */
+      }
       session.reload()
-      router.push(listHref)
+      requestAnimationFrame(() => {
+        if (typeof window !== "undefined") window.scrollTo({ top: scrollY })
+      })
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "No se pudo guardar")
+      setErr(e instanceof ApiError ? e.message : "No se pudo guardar la línea")
     } finally {
-      setBusy(false)
+      setBusyId(null)
     }
   }
 
-  if (session.loading) return <div className="empty">Cargando…</div>
+  if (session.loading || !hydrated) return <div className="empty">Cargando…</div>
   if (session.error) {
     return <div className="banner banner-error">{session.error}</div>
   }
@@ -198,6 +251,7 @@ export default function EntregaDocumentoDetallePage() {
   }
 
   const registrable = lines.length > 0
+  const allDone = progress.pending === 0 && progress.total > 0
 
   return (
     <DeliveryStepChrome
@@ -210,10 +264,17 @@ export default function EntregaDocumentoDetallePage() {
           <button
             type="button"
             className="btn btn-primary"
-            disabled={busy}
-            onClick={() => void save()}
+            disabled={!allDone || busyId != null}
+            onClick={() => {
+              if (!allDone) {
+                setErr(`Faltan ${progress.pending} línea(s) por registrar`)
+                setFilter("pending")
+                return
+              }
+              router.push(listHref)
+            }}
           >
-            {busy ? "Guardando…" : "Guardar documento"}
+            {allDone ? "Volver a documentos" : `Faltan ${progress.pending} líneas`}
           </button>
         ) : null
       }
@@ -223,8 +284,11 @@ export default function EntregaDocumentoDetallePage() {
           {doc.document_type || "Documento"} {doc.document_number ?? "—"}
         </strong>
         <div className="muted" style={{ fontSize: "0.85rem", marginTop: 4 }}>
-          {moneyCLP(doc.document_total)} · {lines.length || (doc.products || []).length}{" "}
-          línea(s)
+          {moneyCLP(doc.document_total)} · {progress.total} línea(s)
+        </div>
+        <div className="line-progress" role="status">
+          Registrados {progress.registered} de {progress.total} · Pendientes{" "}
+          {progress.pending}
         </div>
       </div>
 
@@ -233,96 +297,196 @@ export default function EntregaDocumentoDetallePage() {
           Sin source_detail_id fiable. Solo lectura; no se puede registrar entrega
           verificada.
         </div>
-      ) : null}
+      ) : (
+        <>
+          <div className="line-toolbar card">
+            <label className="field" style={{ marginBottom: 8 }}>
+              Buscar producto / SKU / código
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Nombre, SKU o código de barras"
+                autoComplete="off"
+                enterKeyHint="search"
+              />
+            </label>
+            <div className="line-filters" role="tablist" aria-label="Filtro de líneas">
+              {(
+                [
+                  ["pending", `Pendientes ${progress.pending}`],
+                  ["registered", `Registrados ${progress.registered}`],
+                  ["all", `Todos ${progress.total}`],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === key}
+                  className={`pill${filter === key ? " pill-active" : ""}`}
+                  onClick={() => setFilter(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.75rem" }}>
+              Una línea solo cuenta como registrada cuando el servidor confirma el
+              guardado. La cantidad precargada no implica entrega.
+            </p>
+          </div>
 
-      <div className="stack-gap">
-        {(registrable ? lines : []).map((ln) => {
-          const diff = Math.max(0, ln.planned - ln.delivered)
-          return (
-            <div key={ln.key} className="card" style={{ padding: 12 }}>
-              <div className="product-name">{ln.product_name}</div>
-              <div className="muted" style={{ fontSize: "0.8rem" }}>
-                SKU {ln.sku_code || ln.variant_id || "—"} · detail {ln.source_detail_id}
+          <div className="stack-gap" ref={listRef}>
+            {visible.length === 0 ? (
+              <div className="empty" style={{ padding: 24 }}>
+                {filter === "pending"
+                  ? progress.total === 0
+                    ? "Sin líneas"
+                    : "No hay pendientes con este filtro/búsqueda"
+                  : "Sin resultados"}
               </div>
-              <div className="meta-row">
-                <span className="muted">Documentado</span>
-                <span>{ln.planned}</span>
-              </div>
-              <label className="field">
-                Entregado
-                <input
-                  inputMode="decimal"
-                  value={String(ln.delivered)}
-                  onChange={(e) => {
-                    const v = Number(e.target.value)
-                    setLines((all) =>
-                      all.map((x) =>
-                        x.key === ln.key
-                          ? { ...x, delivered: Number.isFinite(v) ? v : 0 }
-                          : x,
-                      ),
-                    )
-                  }}
-                />
-              </label>
-              <div className="meta-row">
-                <span className="muted">Diferencia</span>
-                <span>{diff}</span>
-              </div>
-              {diff > 0 ? (
-                <>
-                  <label className="field">
-                    Motivo del faltante
-                    <select
-                      value={ln.reason}
-                      onChange={(e) =>
-                        setLines((all) =>
-                          all.map((x) =>
-                            x.key === ln.key ? { ...x, reason: e.target.value } : x,
-                          ),
-                        )
+            ) : (
+              visible.map((ln) => {
+                const outcome = lineOutcome(ln)
+                const diff = Math.max(0, ln.planned - ln.delivered)
+                const busy = busyId === ln.source_detail_id
+                return (
+                  <div
+                    key={ln.key}
+                    className={`card line-card${ln.persisted ? " line-card-saved" : ""}`}
+                    style={{ padding: 12 }}
+                  >
+                    <div className="client-card-head">
+                      <div className="product-name">{ln.product_name}</div>
+                      <span
+                        className={`pill${
+                          outcome === "full"
+                            ? " pill-ok"
+                            : outcome === "partial" || outcome === "none"
+                              ? " pill-warn"
+                              : ""
+                        }`}
+                      >
+                        {lineOutcomeLabel(outcome)}
+                      </span>
+                    </div>
+                    <div className="muted" style={{ fontSize: "0.8rem" }}>
+                      SKU {ln.sku_code || ln.variant_id || "—"}
+                      {ln.barcode ? ` · ${ln.barcode}` : ""}
+                      {` · detail ${ln.source_detail_id}`}
+                    </div>
+                    <div className="meta-row">
+                      <span className="muted">Documentado</span>
+                      <span>{ln.planned}</span>
+                    </div>
+                    <label className="field">
+                      Entregado
+                      <input
+                        inputMode="decimal"
+                        value={String(ln.delivered)}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const v = Number(e.target.value)
+                          setLines((all) =>
+                            all.map((x) =>
+                              x.key === ln.key
+                                ? {
+                                    ...x,
+                                    delivered: Number.isFinite(v) ? v : 0,
+                                  }
+                                : x,
+                            ),
+                          )
+                        }}
+                      />
+                    </label>
+                    <div className="meta-row">
+                      <span className="muted">Diferencia</span>
+                      <span>{diff}</span>
+                    </div>
+                    {diff > 0 ? (
+                      <>
+                        <label className="field">
+                          Motivo del faltante
+                          <select
+                            value={ln.reason || "physical_shortage"}
+                            disabled={busy}
+                            onChange={(e) =>
+                              setLines((all) =>
+                                all.map((x) =>
+                                  x.key === ln.key
+                                    ? { ...x, reason: e.target.value }
+                                    : x,
+                                ),
+                              )
+                            }
+                          >
+                            {REASONS.map((r) => (
+                              <option key={r.value} value={r.value}>
+                                {r.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field">
+                          Observación{ln.reason === "other" ? " *" : ""}
+                          <input
+                            value={ln.note || ""}
+                            disabled={busy}
+                            onChange={(e) =>
+                              setLines((all) =>
+                                all.map((x) =>
+                                  x.key === ln.key
+                                    ? { ...x, note: e.target.value }
+                                    : x,
+                                ),
+                              )
+                            }
+                          />
+                        </label>
+                        {ln.persisted ? (
+                          <div className="muted" style={{ fontSize: "0.78rem" }}>
+                            Motivo guardado: {reasonLabel(ln.reason)}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      style={{ marginTop: 8 }}
+                      disabled={busy}
+                      onClick={() =>
+                        void persistLine(ln, { stayOnRegistered: ln.persisted })
                       }
                     >
-                      {REASONS.map((r) => (
-                        <option key={r.value} value={r.value}>
-                          {r.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    Observación{ln.reason === "other" ? " *" : ""}
-                    <input
-                      value={ln.note}
-                      onChange={(e) =>
-                        setLines((all) =>
-                          all.map((x) =>
-                            x.key === ln.key ? { ...x, note: e.target.value } : x,
-                          ),
-                        )
-                      }
-                    />
-                  </label>
-                </>
-              ) : null}
-            </div>
-          )
-        })}
+                      {busy
+                        ? "Guardando…"
+                        : ln.persisted
+                          ? "Guardar cambios"
+                          : "Registrar línea"}
+                    </button>
+                  </div>
+                )
+              })
+            )}
+          </div>
+        </>
+      )}
 
-        {!registrable
-          ? (doc.products || []).map((p, idx) => (
-              <div key={`ro-${idx}`} className="card" style={{ padding: 12 }}>
-                <div className="product-name">
-                  {p.name_short || p.description || p.producto || "Producto"}
-                </div>
-                <div className="muted" style={{ fontSize: "0.8rem" }}>
-                  {typeof p.unidades === "number" ? `${p.unidades} un.` : "—"} · sin
-                  detail_id
-                </div>
+      {!registrable
+        ? (doc.products || []).map((p, idx) => (
+            <div key={`ro-${idx}`} className="card" style={{ padding: 12 }}>
+              <div className="product-name">
+                {p.name_short || p.description || p.producto || "Producto"}
               </div>
-            ))
-          : null}
-      </div>
+              <div className="muted" style={{ fontSize: "0.8rem" }}>
+                {typeof p.unidades === "number" ? `${p.unidades} un.` : "—"} · sin
+                detail_id
+              </div>
+            </div>
+          ))
+        : null}
 
       {err ? <div className="banner banner-error">{err}</div> : null}
       {msg ? <div className="banner banner-info">{msg}</div> : null}

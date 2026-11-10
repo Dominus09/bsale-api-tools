@@ -704,3 +704,35 @@ input {
   flex-direction: column;
   gap: 8px;
 }
+
+/* P4.1 complemento: muchas líneas por documento */
+.line-toolbar {
+  position: sticky;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  z-index: 12;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.line-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.line-progress {
+  margin-top: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.line-card-saved {
+  border-color: rgba(62, 207, 142, 0.35);
+}
+
+.pill-warn {
+  background: rgba(227, 93, 106, 0.14);
+  border-color: rgba(227, 93, 106, 0.4);
+  color: #ffb4bc;
+}

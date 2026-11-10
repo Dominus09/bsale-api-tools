@@ -646,3 +646,113 @@ def test_schema_integrity_restrict_and_composites(isolated_db):
 
     cur.close()
     conn.close()
+
+
+def test_progressive_line_upsert_keeps_prior_lines(isolated_db, monkeypatch):
+    """Guardar línea a línea no borra las ya persistidas; pending hasta completar."""
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42
+    )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_resolve_client",
+        lambda _p, _k: {"client_id": 9010, "customer_key": "id:9010"},
+    )
+    monkeypatch.setattr(svc.loc_svc, "_parse_client_id", lambda _k, _c: 9010)
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda _u, _p: 3
+    )
+
+    started = svc.start_visit(
+        user=_user(),
+        plan_id=10,
+        customer_key="id:9010",
+        latitude=-42.0,
+        longitude=-73.0,
+        accuracy_m=10.0,
+    )
+    vid = started["visit"]["id"]
+
+    first = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=100,
+        document_number=9001,
+        document_type="boleta",
+        document_total=12000,
+        result_status="pending",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 88001,
+                "line_number": 1,
+                "variant_id": 1,
+                "product_name": "Prod A",
+                "planned_units": 4,
+                "delivered_units": 4,
+            }
+        ],
+    )
+    assert first["persisted"] is True
+    assert first["document_complete"] is False
+    assert first["document_result"]["result_status"] == "pending"
+    assert len(first["lines"]) == 1
+
+    second = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=100,
+        document_number=9001,
+        document_type="boleta",
+        document_total=12000,
+        result_status="pending",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 88002,
+                "line_number": 2,
+                "variant_id": 1,
+                "product_name": "Prod A",
+                "planned_units": 2,
+                "delivered_units": 1,
+                "undelivered_reason": "physical_shortage",
+            }
+        ],
+    )
+    assert second["document_complete"] is True
+    assert {int(x["source_detail_id"]) for x in second["lines"]} == {88001, 88002}
+    assert second["document_result"]["result_status"] == "partial"
+
+    # Edición posterior: actualiza 88001 sin perder 88002
+    third = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=100,
+        document_number=9001,
+        document_type="boleta",
+        document_total=12000,
+        result_status="pending",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 88001,
+                "line_number": 1,
+                "variant_id": 1,
+                "product_name": "Prod A",
+                "planned_units": 4,
+                "delivered_units": 2,
+                "undelivered_reason": "damaged",
+            }
+        ],
+    )
+    by_id = {int(x["source_detail_id"]): x for x in third["lines"]}
+    assert len(by_id) == 2
+    assert float(by_id[88001]["delivered_units"]) == 2.0
+    assert float(by_id[88002]["delivered_units"]) == 1.0
+    assert by_id[88001]["undelivered_reason"] == "damaged"

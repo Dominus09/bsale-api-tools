@@ -205,14 +205,10 @@ def replace_line_results(
     document_result_id: int,
     lines: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    cur.execute(
-        """
-        DELETE FROM distribuidora.delivery_line_results
-        WHERE document_result_id = %s
-        """,
-        (int(document_result_id),),
-    )
-    out: list[dict[str, Any]] = []
+    """Upsert por source_detail_id. No borra líneas ya persistidas de otras details.
+
+    Permite registro progresivo (1..N líneas) sin perder avances previos.
+    """
     for line in lines:
         cur.execute(
             """
@@ -227,7 +223,18 @@ def replace_line_results(
                 %(product_name)s, %(planned_units)s, %(delivered_units)s,
                 %(undelivered_units)s, %(undelivered_reason)s, %(undelivered_note)s
             )
-            RETURNING *
+            ON CONFLICT (document_result_id, source_detail_id)
+                WHERE source_detail_id IS NOT NULL
+            DO UPDATE SET
+                line_number = EXCLUDED.line_number,
+                variant_id = EXCLUDED.variant_id,
+                sku_code = EXCLUDED.sku_code,
+                product_name = EXCLUDED.product_name,
+                planned_units = EXCLUDED.planned_units,
+                delivered_units = EXCLUDED.delivered_units,
+                undelivered_units = EXCLUDED.undelivered_units,
+                undelivered_reason = EXCLUDED.undelivered_reason,
+                undelivered_note = EXCLUDED.undelivered_note
             """,
             {
                 "visit_id": int(visit_id),
@@ -252,8 +259,37 @@ def replace_line_results(
                 "undelivered_note": line.get("undelivered_note"),
             },
         )
-        out.append(_row(cur, cur.fetchone()))
-    return out
+    return list_line_results_for_document(cur, int(document_result_id))
+
+
+def list_line_results_for_document(cur, document_result_id: int) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT * FROM distribuidora.delivery_line_results
+        WHERE document_result_id = %s
+        ORDER BY id
+        """,
+        (int(document_result_id),),
+    )
+    rows = cur.fetchall() or []
+    return [_row(cur, r) for r in rows]
+
+
+def update_document_result_status(
+    cur, *, document_result_id: int, result_status: str, notes: str | None = None
+) -> dict[str, Any]:
+    cur.execute(
+        """
+        UPDATE distribuidora.delivery_document_results
+        SET result_status = %s,
+            notes = COALESCE(%s, notes),
+            updated_at = NOW()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (result_status, notes, int(document_result_id)),
+    )
+    return _row(cur, cur.fetchone())
 
 
 def list_document_results(cur, visit_id: int) -> list[dict[str, Any]]:
