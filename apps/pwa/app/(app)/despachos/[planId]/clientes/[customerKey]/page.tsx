@@ -243,6 +243,19 @@ export default function ClienteFichaPage() {
                     {doc.seller_name ? ` · ${doc.seller_name}` : ""}
                     {doc.oc_number != null ? ` · OC ${doc.oc_number}` : ""}
                   </div>
+                  {doc.group_assignment_conflict ? (
+                    <div
+                      className="muted"
+                      style={{
+                        marginTop: 6,
+                        fontSize: "0.8rem",
+                        color: "var(--danger, #b45309)",
+                      }}
+                      role="status"
+                    >
+                      {doc.group_assignment_conflict.message_es}
+                    </div>
+                  ) : null}
                   <span className="muted" style={{ fontSize: "0.8rem" }}>
                     {open ? "Ocultar productos ▲" : "Ver productos ▼"}
                   </span>

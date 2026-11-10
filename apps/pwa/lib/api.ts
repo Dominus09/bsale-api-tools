@@ -131,6 +131,12 @@ export type DriverDocument = {
   load_group?: LoadGroupRef | null
   products: DriverProduct[]
   product_count: number
+  group_assignment_conflict?: {
+    code: string
+    message_es: string
+    oc_document_id?: number
+    load_batch_ids?: number[]
+  } | null
 }
 
 export type DriverMapMarker = {

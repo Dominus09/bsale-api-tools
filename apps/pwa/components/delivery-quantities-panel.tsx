@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import {
   ApiError,
   type DriverDocument,
+  getVisitDetail,
   saveVisitDocumentLines,
 } from "@/lib/api"
 
@@ -68,13 +69,64 @@ export function DeliveryQuantitiesPanel(props: Props) {
   const [savedDocs, setSavedDocs] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
-    setDrafts(buildDrafts(props.documents))
-    const first = props.documents[0]
-    if (first) {
-      const id = String(first.related_document_id || first.document_number || "")
-      setOpen({ [id]: true })
+    let cancelled = false
+    async function hydrate() {
+      const base = buildDrafts(props.documents)
+      const saved: Record<string, boolean> = {}
+      try {
+        const detail = await getVisitDetail(props.planId, props.visitId)
+        const byDoc = new Map<string, Array<Record<string, unknown>>>()
+        for (const ln of detail.lines || []) {
+          const docResId = String(ln.document_result_id ?? "")
+          // Map document_result → related_document_id
+          const docMeta = (detail.documents || []).find(
+            (d) => String(d.id) === docResId,
+          )
+          const rel = String(
+            docMeta?.related_document_id ?? docMeta?.document_number ?? "",
+          )
+          if (!rel) continue
+          const arr = byDoc.get(rel) || []
+          arr.push(ln)
+          byDoc.set(rel, arr)
+        }
+        for (const [rel, lines] of byDoc) {
+          if (!base[rel]) continue
+          saved[rel] = true
+          base[rel] = base[rel].map((draft) => {
+            const match = lines.find(
+              (l) =>
+                (draft.variant_id != null &&
+                  Number(l.variant_id) === Number(draft.variant_id)) ||
+                (l.product_name &&
+                  String(l.product_name) === draft.product_name),
+            )
+            if (!match) return draft
+            return {
+              ...draft,
+              delivered: Number(match.delivered_units ?? draft.delivered),
+              reason: String(match.undelivered_reason || draft.reason),
+              note: String(match.undelivered_note || ""),
+            }
+          })
+        }
+      } catch {
+        /* primera visita o sin red: usar planificado */
+      }
+      if (cancelled) return
+      setDrafts(base)
+      setSavedDocs(saved)
+      const first = props.documents[0]
+      if (first) {
+        const id = String(first.related_document_id || first.document_number || "")
+        setOpen({ [id]: true })
+      }
     }
-  }, [props.documents, props.visitId])
+    void hydrate()
+    return () => {
+      cancelled = true
+    }
+  }, [props.documents, props.visitId, props.planId])
 
   const progress = useMemo(() => {
     const total = props.documents.filter((d) => d.related_document_id).length

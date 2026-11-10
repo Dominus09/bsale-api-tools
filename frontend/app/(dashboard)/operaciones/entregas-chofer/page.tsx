@@ -20,6 +20,13 @@ const STATUS_ES: Record<string, string> = {
   cancelled: "Cancelada",
 }
 
+const CONFORMITY_ES: Record<string, string> = {
+  signed: "Firma registrada",
+  refused: "Negativa a firmar",
+  pending: "Conformidad pendiente",
+  invalidated: "Firma invalidada",
+}
+
 export default function EntregasChoferPage() {
   const [items, setItems] = useState<DeliveryVisitErpItem[]>([])
   const [summary, setSummary] = useState<Record<string, number>>({})
@@ -159,7 +166,11 @@ export default function EntregasChoferPage() {
                       {new Intl.NumberFormat("es-CL").format(it.pending_balance_sum || 0)}
                     </div>
                   </td>
-                  <td className="p-2">{it.conformity_status || "—"}</td>
+                  <td className="p-2">
+                    {CONFORMITY_ES[it.conformity_status || ""] ||
+                      it.conformity_status ||
+                      "—"}
+                  </td>
                   <td className="p-2">{it.evidence_count ?? 0}</td>
                 </tr>
               ))}
