@@ -14,7 +14,8 @@ from fastapi import HTTPException
 # Radio máximo chofer↔cliente para local cerrado / rechazo.
 INCIDENT_MAX_DISTANCE_M = 300.0
 # Edad máxima de la posición GPS aceptada como "actual".
-GPS_MAX_AGE_SECONDS = 300
+# 120 s: evita fijar un fix obsoleto; el navegador no prueba presencia incorruptible.
+GPS_MAX_AGE_SECONDS = 120
 # Precisión reportada por encima de esto → revisión (no inventa OK).
 GPS_WARN_ACCURACY_M = 80.0
 

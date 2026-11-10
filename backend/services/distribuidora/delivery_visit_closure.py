@@ -161,6 +161,77 @@ def assert_finalize_ready(
                         "del establecimiento confirmada en el servidor"
                     ),
                 )
+            # GPS 300 m o excepción → pending_review (no verified automático).
+            if proximity_exception:
+                review = "pending_review"
+                notes.append("gps_proximity_exception_partial_rejection")
+            elif has_end_gps and end_lat is not None and end_lng is not None:
+                try:
+                    fresh = assert_fresh_gps(
+                        latitude=end_lat,
+                        longitude=end_lng,
+                        gps_captured_at=end_gps_captured_at,
+                        accuracy_m=end_accuracy_m,
+                    )
+                    prox = assert_within_incident_radius(
+                        driver_lat=fresh["latitude"],
+                        driver_lng=fresh["longitude"],
+                        client_lat=client_lat,
+                        client_lng=client_lng,
+                    )
+                    gps_meta = {**fresh, **prox}
+                    if fresh.get("accuracy_warn"):
+                        review = "pending_review"
+                        notes.append("gps_accuracy_warn")
+                except HTTPException as exc:
+                    raise HTTPException(
+                        status_code=exc.status_code, detail=exc.detail
+                    ) from exc
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "GPS_REQUIRED",
+                        "message_es": (
+                            "Debes estar a menos de 300 metros del cliente "
+                            "para registrar rechazo con evidencia, "
+                            "o declarar excepción GPS auditable"
+                        ),
+                    },
+                )
+
+        # Forma de pago declarativa (método por documento; montos opcionales/legado).
+        collections = visit_repo.list_active_collections(cur, visit_id)
+        docs_needing_pay = [
+            d
+            for d in docs
+            if str(d.get("result_status") or "") not in ("none", "skipped")
+        ]
+        if docs_needing_pay:
+            missing_pay = False
+            saw_doc_id = False
+            for d in docs_needing_pay:
+                did = d.get("id")
+                if did is None:
+                    continue
+                saw_doc_id = True
+                doc_cols = [
+                    c
+                    for c in collections
+                    if c.get("document_result_id") is not None
+                    and int(c["document_result_id"]) == int(did)
+                ]
+                if not doc_cols:
+                    missing_pay = True
+                    break
+            if (saw_doc_id and missing_pay) or (not saw_doc_id and not collections):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Declare la forma de pago de cada documento entregado "
+                        "(sin montos) antes de finalizar"
+                    ),
+                )
 
         # Conformidad
         if not conf:
@@ -186,7 +257,6 @@ def assert_finalize_ready(
                     status_code=422, detail="Nombre del receptor requerido"
                 )
             # La firma debe corresponder al resumen actual (anti-reuso / anti-cambio silencioso)
-            collections = visit_repo.list_active_collections(cur, visit_id)
             current_summary = build_conformity_summary(
                 visit=visit, docs=docs, lines=lines, collections=collections
             )

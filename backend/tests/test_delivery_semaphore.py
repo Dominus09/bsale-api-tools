@@ -55,7 +55,8 @@ def test_client_gps_missing():
 
 
 def test_fresh_gps_stale_rejected():
-    old = (datetime.now(timezone.utc) - timedelta(seconds=400)).isoformat()
+    # Antigüedad máx. 120 s: un fix de 3+ minutos no sirve como presencia actual.
+    old = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat()
     with pytest.raises(HTTPException) as ei:
         sem.assert_fresh_gps(
             latitude=-33.45,

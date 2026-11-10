@@ -25,8 +25,9 @@ PAYMENT_METHOD_ES = {
     "transfer_verified": "Transf. verificada",
     "credit": "Crédito",
     "partial": "Cobranza parcial",
-    "pending": "Saldo pendiente",
-    "not_applicable": "No corresponde",
+    "pending": "Pago pendiente",
+    "not_applicable": "Sin cobro",
+    "cash_and_transfer": "Efectivo + transf.",
 }
 
 REASON_ES = dict(REASON_LABEL_ES)
@@ -133,42 +134,32 @@ def whatsapp_share_url(text: str) -> str:
 
 
 def _collection_compact(cols: list[dict[str, Any]]) -> tuple[str, str]:
-    """Devuelve (línea montos, línea pendiente/aviso). Sin afirmar verificación falsa."""
-    cash = 0.0
-    transfer = 0.0
-    pending = 0.0
-    credit = 0.0
+    """Forma de pago declarada (sin montos). Sin afirmar verificación falsa."""
+    methods: list[str] = []
+    seen: set[str] = set()
+    has_amounts = False
     for c in cols or []:
         method = str(c.get("method") or "")
-        try:
-            amt = float(c.get("declared_amount") or 0)
-        except (TypeError, ValueError):
-            amt = 0.0
-        if method == "cash":
-            cash += amt
-        elif method == "transfer_declared":
-            transfer += amt
-        elif method == "pending":
-            pending += amt
-        elif method == "credit":
-            credit += amt
-    pay_bits: list[str] = []
-    if cash:
-        pay_bits.append(f"Efectivo {_fmt_money(cash)}")
-    if transfer:
-        pay_bits.append(f"Transf. inf. {_fmt_money(transfer)}")
-    if credit:
-        pay_bits.append(f"Crédito {_fmt_money(credit)}")
-    if not pay_bits:
-        pay_bits.append("Sin cobro declarado")
-    pending_bits: list[str] = []
-    if pending:
-        pending_bits.append(f"Pendiente {_fmt_money(pending)}")
-    if transfer:
-        pending_bits.append("Transf. no verificada")
-    if not pending_bits:
-        pending_bits.append("Sin saldo pendiente declarado")
-    return " · ".join(pay_bits), " · ".join(pending_bits)
+        if not method or method in seen:
+            continue
+        seen.add(method)
+        methods.append(PAYMENT_METHOD_ES.get(method, method))
+        if c.get("declared_amount") is not None:
+            has_amounts = True
+    if not methods:
+        pay_line = "💵 Forma de pago: sin declarar"
+    else:
+        pay_line = "💵 " + " · ".join(methods)
+    # Segunda línea: aviso operativo (no montos).
+    if "transfer_declared" in seen or "cash_and_transfer" in seen:
+        note_line = "ℹ️ Transf. informada (no verificada)"
+    elif "pending" in seen:
+        note_line = "ℹ️ Cobro pendiente de gestión"
+    elif has_amounts:
+        note_line = "ℹ️ Declaración con montos (legado)"
+    else:
+        note_line = "ℹ️ Solo forma de pago (sin montos)"
+    return pay_line, note_line
 
 
 def _line_counts(products: list[dict[str, Any]]) -> tuple[int, int, int]:
@@ -223,9 +214,29 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
 
     products = data.get("products") or []
     full_n, partial_n, none_n = _line_counts(products)
-    gps_line = "📍 GPS validado (radio)" if data.get("gps_within_radius") else (
-        f"📍 GPS: {'sí' if data.get('gps_registered') else 'no'} (sin coords en mensaje)"
+    pending_review = str(data.get("closure_review_status") or "") == "pending_review"
+    if pending_review and template in (
+        "closed_store",
+        "not_found",
+        "rejected_order",
+        "absent_customer",
+        "other_incident",
+        "partial",
+    ):
+        header = "🟡 QUILLOTANA | PENDIENTE DE VALIDACIÓN"
+    gps_line = (
+        "📍 GPS validado (≤300 m)"
+        if data.get("gps_within_radius") and not pending_review
+        else (
+            "📍 GPS: pendiente de validación"
+            if pending_review
+            else (
+                f"📍 GPS: {'registrado' if data.get('gps_registered') else 'no'} "
+                "(sin coords en mensaje)"
+            )
+        )
     )
+    evid = data.get("evidence_status") or "pendiente"
     if template in (
         "closed_store",
         "not_found",
@@ -235,13 +246,22 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
     ):
         reason = data.get("result_reason")
         reason_es = REASON_ES.get(reason, reason or sem.get("label_es") or "Incidencia")
+        footer = (
+            "✍️ Datos de prueba"
+            if demo
+            else (
+                "✍️ PENDIENTE DE VALIDACIÓN"
+                if pending_review
+                else "✍️ Incidencia registrada"
+            )
+        )
         lines = [
             header,
             f"🏪 {client} · {docs_s}",
             f"📝 {reason_es}",
-            f"📷 Evidencia: {data.get('evidence_status') or 'pendiente'}",
+            f"📷 Evidencia: {evid}",
             gps_line,
-            "✍️ Datos de prueba" if demo else "✍️ Incidencia registrada",
+            footer,
         ]
     else:
         pay_line, pend_line = _collection_compact(list(data.get("collections") or []))
@@ -250,8 +270,8 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
             header,
             f"🏪 {client} · {docs_s}",
             f"📦 {full_n} completas · {partial_n} parciales · {none_n} no entregadas",
-            f"💵 {pay_line}",
-            f"⏳ {pend_line}",
+            pay_line,
+            pend_line,
             (
                 f"✍️ Firma: {sig} · Datos ficticios"
                 if demo
@@ -400,6 +420,7 @@ def visit_row_to_report_data(
             and str(visit.get("result_reason") or "")
             in ("closed_store", "rejected_order")
         ),
+        "closure_review_status": visit.get("closure_review_status"),
         "evidence_status": evid,
         "signature_status": sig,
         "observations": visit.get("result_note"),

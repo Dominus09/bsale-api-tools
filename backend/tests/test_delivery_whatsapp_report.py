@@ -66,6 +66,50 @@ def test_templates_a_to_f_compact():
         assert "cash" not in text.lower() or "Efectivo" in text
         assert "r2.dev" not in text.lower()
         assert "cloudflare" not in text.lower()
+        if status in ("completed", "partial"):
+            assert "$" not in text or "💵" in text  # sin montos CLP en forma de pago nueva
+
+
+def test_pending_review_whatsapp_header():
+    text = wa.build_report_text(
+        {
+            "status": "not_delivered",
+            "result_reason": "closed_store",
+            "closure_review_status": "pending_review",
+            "client_name": "Cliente",
+            "documents": [{"document_type": "Boleta", "document_number": 1}],
+            "products": [],
+            "collections": [],
+            "gps_registered": True,
+            "gps_within_radius": False,
+            "evidence_status": "sí",
+        }
+    )
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    assert lines[0] == "🟡 QUILLOTANA | PENDIENTE DE VALIDACIÓN"
+    assert "pendiente de validación" in text.lower()
+    assert "GPS validado" not in text
+
+
+def test_declarative_payment_no_amounts_in_whatsapp():
+    text = wa.build_report_text(
+        {
+            "status": "completed",
+            "client_name": "Cliente",
+            "documents": [{"document_type": "Factura", "document_number": 99}],
+            "products": [
+                {"planned_units": 2, "delivered_units": 2, "undelivered_units": 0}
+            ],
+            "collections": [
+                {"method": "cash_and_transfer", "declared_amount": None},
+            ],
+            "signature_status": "sí",
+            "gps_registered": True,
+        }
+    )
+    assert "Efectivo + transf" in text
+    assert "$" not in text
+    assert "no verificada" in text.lower()
 
 
 def test_demo_scenarios_marked_compact_and_safe():

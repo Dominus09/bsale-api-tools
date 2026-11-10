@@ -283,6 +283,15 @@ class DeclareCollectionBody(BaseModel):
     note: str | None = Field(None, max_length=500)
 
 
+class DeclarePaymentMethodBody(BaseModel):
+    """Operativa 2.0: forma de pago sin montos."""
+
+    document_result_id: int = Field(..., ge=1)
+    method: str = Field(..., max_length=32)
+    document_amount: float | None = None
+    note: str | None = Field(None, max_length=500)
+
+
 class MixedPaymentRow(BaseModel):
     method: str = Field(..., max_length=32)
     declared_amount: float | None = None
@@ -351,6 +360,25 @@ def declare_visit_collection(
     )
 
 
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/forma-pago")
+def declare_visit_payment_method(
+    plan_id: int,
+    visit_id: int,
+    body: DeclarePaymentMethodBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    """Forma de pago declarativa (sin montos). No verifica transferencia ni Bsale."""
+    return visit_svc.declare_payment_method(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        document_result_id=int(body.document_result_id),
+        method=body.method,
+        document_amount=body.document_amount,
+        note=body.note,
+    )
+
+
 @router.post("/despachos/{plan_id}/visitas/{visit_id}/cobranza/mixta")
 def declare_visit_collection_mixed(
     plan_id: int,
@@ -358,7 +386,7 @@ def declare_visit_collection_mixed(
     body: DeclareMixedCollectionBody,
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
-    """Pago mixto: reemplaza las declaraciones del documento."""
+    """Legado pago mixto con montos. Preferir /forma-pago en PWA 2.0."""
     return visit_svc.declare_collections_mixed(
         user=user,
         plan_id=int(plan_id),

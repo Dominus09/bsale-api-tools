@@ -822,6 +822,18 @@ COLLECTION_METHODS = frozenset(
         "partial",
         "pending",
         "not_applicable",
+        "cash_and_transfer",  # requiere migración 059
+    }
+)
+
+# Métodos que el chofer puede declarar en Operativa 2.0 (sin montos).
+DRIVER_PAYMENT_METHODS = frozenset(
+    {
+        "cash",
+        "transfer_declared",
+        "cash_and_transfer",
+        "pending",
+        "not_applicable",
     }
 )
 
@@ -1155,6 +1167,128 @@ def save_document_lines(
     )
 
 
+def declare_payment_method(
+    *,
+    user: dict[str, Any],
+    plan_id: int,
+    visit_id: int,
+    document_result_id: int,
+    method: str,
+    document_amount: float | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Forma de pago DECLARATIVA (Operativa 2.0). Sin montos. No toca Bsale.
+
+    Persiste una fila por documento con declared_amount/pending_balance en NULL.
+    Requiere migración 059 si method=cash_and_transfer.
+    """
+    method_n = (method or "").strip()
+    if method_n not in DRIVER_PAYMENT_METHODS:
+        raise HTTPException(status_code=400, detail="Método de pago inválido")
+    if method_n == "transfer_verified":
+        raise HTTPException(
+            status_code=403,
+            detail="transfer_verified solo vía verificación administrativa",
+        )
+    doc_amt = float(document_amount) if document_amount is not None else None
+    invalidated = False
+    bumped: dict[str, Any] | None = None
+    visit: dict[str, Any] | None = None
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not visit_repo.tables_ready(cur):
+            raise HTTPException(status_code=503, detail="Migración 056 pendiente")
+        visit = _require_own_open_visit(
+            cur, user=user, plan_id=int(plan_id), visit_id=int(visit_id)
+        )
+        uid = int(visit["driver_user_id"])
+        docs = visit_repo.list_document_results(cur, int(visit_id))
+        owned = {int(d["id"]) for d in docs}
+        if int(document_result_id) not in owned:
+            raise HTTPException(
+                status_code=422,
+                detail="document_result_id no pertenece a esta visita",
+            )
+        visit_repo.delete_collections_for_document(
+            cur, visit_id=int(visit_id), document_result_id=int(document_result_id)
+        )
+        row = visit_repo.insert_collection(
+            cur,
+            visit_id=int(visit_id),
+            document_result_id=int(document_result_id),
+            method=method_n,
+            document_amount=doc_amt,
+            declared_amount=None,
+            verified_amount=None,
+            pending_balance=None,
+            note=(note or "").strip() or None,
+            created_by_user_id=uid,
+        )
+        invalidated = visit_repo.invalidate_conformity(
+            cur,
+            int(visit_id),
+            reason="Forma de pago modificada tras conformidad",
+        )
+        bumped = visit_repo.bump_visit_version(cur, int(visit_id))
+        visit_repo.insert_event(
+            cur,
+            visit_id=int(visit_id),
+            action="payment_method_declared",
+            actor_user_id=uid,
+            payload={
+                "method": method_n,
+                "document_result_id": int(document_result_id),
+                "declarative": True,
+                "declared_amount": None,
+                "conformity_invalidated": bool(invalidated),
+                "new_version": int((bumped or visit).get("version") or 0),
+            },
+        )
+        conn.commit()
+        cur.close()
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # Hint si falta 059
+        msg = str(exc)
+        if "cash_and_transfer" in msg or "method_check" in msg.lower():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Método efectivo+transferencia requiere migración 059 "
+                    "(pendiente de aprobación)"
+                ),
+            ) from exc
+        raise HTTPException(
+            status_code=500, detail=f"No se pudo declarar forma de pago: {exc}"
+        ) from exc
+    finally:
+        conn.close()
+
+    return serialize_value(
+        {
+            "collection": row,
+            "persisted": True,
+            "declarative": True,
+            "visit_version": int((bumped or visit).get("version") or 1),
+            "conformity_invalidated": bool(invalidated),
+            "note_es": (
+                "Forma de pago declarada (sin montos). "
+                "No es recibo ni verificación Bsale."
+            ),
+        }
+    )
+
+
 def declare_collection(
     *,
     user: dict[str, Any],
@@ -1166,7 +1300,7 @@ def declare_collection(
     declared_amount: float | None,
     note: str | None,
 ) -> dict[str, Any]:
-    """Declaración de cobro del chofer. No genera recibo ni movimiento contable."""
+    """Legado con montos. Preferir declare_payment_method en PWA 2.0."""
     method_n = (method or "").strip()
     if method_n not in COLLECTION_METHODS:
         raise HTTPException(status_code=400, detail="Método de cobranza inválido")
@@ -1179,12 +1313,28 @@ def declare_collection(
             ),
         )
 
+    # Flujo declarativo: si no envían monto, no inventar $0.
+    if declared_amount is None and method_n in DRIVER_PAYMENT_METHODS:
+        if document_result_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="document_result_id requerido para forma de pago declarativa",
+            )
+        return declare_payment_method(
+            user=user,
+            plan_id=plan_id,
+            visit_id=visit_id,
+            document_result_id=int(document_result_id),
+            method=method_n,
+            document_amount=document_amount,
+            note=note,
+        )
+
     doc_amt = float(document_amount) if document_amount is not None else None
     decl = float(declared_amount) if declared_amount is not None else None
     if decl is not None and decl < 0:
         raise HTTPException(status_code=400, detail="Monto declarado inválido")
-    # pending admite monto > 0: es la porción declarada como pendiente (pago mixto),
-    # no un "recibido" verificable.
+    # Legado: pending sin monto → 0 (pago mixto antiguo). No usar en PWA 2.0.
     if method_n == "pending" and decl is None:
         decl = 0.0
     pending = None
