@@ -60,6 +60,7 @@ def main() -> int:
         "pytest",
         "backend/tests/test_client_location_p3.py",
         "backend/tests/test_client_location_p3_isolated_pg.py",
+        "backend/tests/test_delivery_map_p3_realdict_hotfix.py",
         "-vv",
         "--tb=short",
     ]

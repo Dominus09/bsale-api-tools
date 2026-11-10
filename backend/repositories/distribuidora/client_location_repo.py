@@ -14,14 +14,22 @@ def _row(cur, r) -> dict[str, Any]:
 
 
 def tables_ready(cur) -> bool:
+    """Compatible con cursor tuple y RealDictCursor (alias explícito)."""
     cur.execute(
         """
-        SELECT to_regclass('distribuidora.client_location_proposals') IS NOT NULL
-           AND to_regclass('distribuidora.client_facade_photos') IS NOT NULL
-           AND to_regclass('distribuidora.client_verified_locations') IS NOT NULL
+        SELECT (
+            to_regclass('distribuidora.client_location_proposals') IS NOT NULL
+            AND to_regclass('distribuidora.client_facade_photos') IS NOT NULL
+            AND to_regclass('distribuidora.client_verified_locations') IS NOT NULL
+        ) AS tables_ready
         """
     )
-    return bool(cur.fetchone()[0])
+    row = cur.fetchone()
+    if row is None:
+        return False
+    if isinstance(row, dict) or hasattr(row, "keys"):
+        return bool(row["tables_ready"])
+    return bool(row[0])
 
 
 def get_verified_location(cur, client_id: int) -> dict[str, Any] | None:

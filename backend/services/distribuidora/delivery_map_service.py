@@ -221,12 +221,16 @@ def get_delivery_map(plan_id: int) -> dict[str, Any]:
             }
         )
         if client_ids:
+            # RealDictCursor: no usar fetchone()[0] (KeyError: 0).
             cur.execute(
                 """
                 SELECT to_regclass('distribuidora.client_verified_locations') IS NOT NULL
+                    AS table_exists
                 """
             )
-            if cur.fetchone()[0]:
+            exists_row = cur.fetchone()
+            table_exists = bool(exists_row["table_exists"]) if exists_row else False
+            if table_exists:
                 cur.execute(
                     """
                     SELECT client_id, latitude, longitude
