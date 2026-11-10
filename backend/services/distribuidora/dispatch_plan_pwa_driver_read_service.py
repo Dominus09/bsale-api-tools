@@ -573,6 +573,7 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
                 "city": stop.get("city") or "",
                 "phone": "",
                 "observations": "",
+                "delivery_notes": "",
                 "rut": None,
                 "sellers": [],
                 "_sellers": set(),
@@ -631,7 +632,8 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
                 "address": row.get("address") or "",
                 "city": row.get("city") or "",
                 "phone": row.get("phone") or "",
-                "observations": row.get("observations") or "",
+                "observations": (row.get("observations") or row.get("delivery_notes") or ""),
+                "delivery_notes": row.get("delivery_notes") or "",
                 "rut": None,
                 "sellers": [],
                 "_sellers": set(),
@@ -661,8 +663,11 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
             c["address"] = row.get("address") or ""
         if not c.get("city") and row.get("city"):
             c["city"] = row.get("city") or ""
-        if not c.get("observations") and row.get("observations"):
-            c["observations"] = row.get("observations") or ""
+        row_obs = (row.get("observations") or row.get("delivery_notes") or "").strip()
+        if row_obs and not (c.get("observations") or "").strip():
+            c["observations"] = row_obs
+        if not (c.get("delivery_notes") or "").strip() and row.get("delivery_notes"):
+            c["delivery_notes"] = row.get("delivery_notes") or ""
         if c.get("client_id") is None and row.get("client_id") is not None:
             c["client_id"] = row.get("client_id")
         seller = (row.get("seller_name") or "").strip()
@@ -779,6 +784,11 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
             except (TypeError, ValueError):
                 continue
         c["amount_total"] = round(amount, 2) if amount_known else None
+        # Observación operativa: observations; si viene vacía, delivery_notes del picking.
+        obs = (c.get("observations") or "").strip()
+        if not obs:
+            obs = (c.get("delivery_notes") or "").strip()
+        c["observations"] = obs
         c["search_text"] = " ".join(
             filter(
                 None,
@@ -790,6 +800,7 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
                     c.get("phone"),
                     c.get("rut"),
                     c.get("seller_name"),
+                    obs,
                     " ".join(c.get("_folios") or []),
                     " ".join(str(x) for x in (c.get("_oc_ids") or [])),
                     " ".join(g.get("name") or "" for g in c.get("load_groups") or []),
@@ -799,6 +810,7 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
         c.pop("_group_ids", None)
         c.pop("_oc_ids", None)
         c.pop("_folios", None)
+        c.pop("delivery_notes", None)
 
     ordered = sorted(
         clients.values(),

@@ -993,12 +993,13 @@ def assign_driver_to_plan(
         conn.close()
 
 
-def _picking_totals_by_plan_ids(cur, plan_ids: list[int]) -> dict[int, dict[str, Any]]:
-    """Totales de picking por plan: Σ documents.total_amount (c/IVA) 1 vez por factura.
+def _picking_totals_from_current_snapshot(
+    cur, plan_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    """Totales del picking vigente: Σ document_total 1 vez por related_document_id.
 
-    Fuente: OC del plan con factura confirmada (mismo criterio picking lite).
-    Dedup por ``invoicing_document_id`` para no sumar dos veces un documento
-    compartido entre filas de órdenes.
+    Fuente operativa PWA: ``dispatch_plan_picking_clients`` del picking ``is_current``.
+    Evita depender de vistas de facturación (permisos/joins) para el monto del día.
     """
     ids = sorted({int(x) for x in plan_ids if x is not None})
     if not ids:
@@ -1008,20 +1009,19 @@ def _picking_totals_by_plan_ids(cur, plan_ids: list[int]) -> dict[int, dict[str,
         SELECT
             x.dispatch_plan_id,
             COUNT(*)::int AS document_count,
-            COALESCE(SUM(x.total_amount), 0)::float AS amount_total
+            COALESCE(SUM(x.document_total), 0)::float AS amount_total
         FROM (
-            SELECT DISTINCT
-                dpo.dispatch_plan_id,
-                st.invoicing_document_id AS related_document_id,
-                d.total_amount
-            FROM distribuidora.dispatch_plan_orders dpo
-            INNER JOIN distribuidora.v_orders_purchase_status st
-                ON st.document_id = dpo.oc_document_id
-               AND COALESCE(st.is_invoiced, FALSE) = TRUE
-               AND st.invoicing_document_id IS NOT NULL
-            INNER JOIN distribuidora.v_documents_latest d
-                ON d.document_id = st.invoicing_document_id
-            WHERE dpo.dispatch_plan_id = ANY(%s)
+            SELECT DISTINCT ON (pk.dispatch_plan_id, pc.related_document_id)
+                pk.dispatch_plan_id,
+                pc.related_document_id,
+                pc.document_total
+            FROM distribuidora.dispatch_plan_pickings pk
+            INNER JOIN distribuidora.dispatch_plan_picking_clients pc
+                ON pc.picking_id = pk.id
+            WHERE pk.dispatch_plan_id = ANY(%s)
+              AND pk.is_current = TRUE
+              AND pc.related_document_id IS NOT NULL
+            ORDER BY pk.dispatch_plan_id, pc.related_document_id, pc.id
         ) x
         GROUP BY x.dispatch_plan_id
         """,
@@ -1029,12 +1029,71 @@ def _picking_totals_by_plan_ids(cur, plan_ids: list[int]) -> dict[int, dict[str,
     )
     out: dict[int, dict[str, Any]] = {}
     for plan_id, document_count, amount_total in cur.fetchall():
+        docs = int(document_count or 0)
         out[int(plan_id)] = {
-            "document_count": int(document_count or 0),
-            "amount_total": float(amount_total or 0),
+            "document_count": docs,
+            "amount_total": float(amount_total or 0) if docs > 0 else None,
+            "amounts_basis": "picking_document_total_with_tax",
+        }
+    return out
+
+
+def _picking_totals_from_invoicing_views(
+    cur, plan_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    """Fallback: Σ documents.total_amount (c/IVA) por factura confirmada de OC del plan."""
+    ids = sorted({int(x) for x in plan_ids if x is not None})
+    if not ids:
+        return {}
+    try:
+        cur.execute(
+            """
+            SELECT
+                x.dispatch_plan_id,
+                COUNT(*)::int AS document_count,
+                COALESCE(SUM(x.total_amount), 0)::float AS amount_total
+            FROM (
+                SELECT DISTINCT
+                    dpo.dispatch_plan_id,
+                    st.invoicing_document_id AS related_document_id,
+                    d.total_amount
+                FROM distribuidora.dispatch_plan_orders dpo
+                INNER JOIN distribuidora.v_orders_purchase_status st
+                    ON st.document_id = dpo.oc_document_id
+                   AND COALESCE(st.is_invoiced, FALSE) = TRUE
+                   AND st.invoicing_document_id IS NOT NULL
+                INNER JOIN distribuidora.v_documents_latest d
+                    ON d.document_id = st.invoicing_document_id
+                WHERE dpo.dispatch_plan_id = ANY(%s)
+            ) x
+            GROUP BY x.dispatch_plan_id
+            """,
+            (ids,),
+        )
+    except Exception:
+        return {}
+    out: dict[int, dict[str, Any]] = {}
+    for plan_id, document_count, amount_total in cur.fetchall():
+        docs = int(document_count or 0)
+        out[int(plan_id)] = {
+            "document_count": docs,
+            "amount_total": float(amount_total or 0) if docs > 0 else None,
             "amounts_basis": "document_total_with_tax",
         }
     return out
+
+
+def _picking_totals_by_plan_ids(cur, plan_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Totales de picking por plan para la PWA del chofer.
+
+    Prioridad: snapshot de picking actual (monto operativo). Fallback: vistas de
+    facturación. Dedup por identificador único de factura.
+    """
+    snap = _picking_totals_from_current_snapshot(cur, plan_ids)
+    missing = [int(x) for x in plan_ids if x is not None and int(x) not in snap]
+    if missing:
+        snap.update(_picking_totals_from_invoicing_views(cur, missing))
+    return snap
 
 
 def _attach_picking_totals(cur, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1048,7 +1107,7 @@ def _attach_picking_totals(cur, rows: list[dict[str, Any]]) -> list[dict[str, An
         else:
             r["document_count"] = 0
             r["amount_total"] = None
-            r["amounts_basis"] = "document_total_with_tax"
+            r["amounts_basis"] = "picking_document_total_with_tax"
     return rows
 
 
