@@ -1,6 +1,12 @@
 "use client"
 
 import { useState } from "react"
+import {
+  copyReportAndOpenFamily,
+  copyTextSafe,
+  FAMILY_WHATSAPP_INVITE_URL,
+  openFamilyGroup,
+} from "@/lib/family-whatsapp"
 
 type ShareMeta = {
   whatsapp_url?: string
@@ -23,16 +29,38 @@ type SharePhase = "idle" | "generated" | "share_requested" | "cancelled" | "unav
 export function WhatsappSharePanel(props: Props) {
   const [phase, setPhase] = useState<SharePhase>(props.reportText ? "generated" : "idle")
   const [copied, setCopied] = useState(false)
+  const [familyMsg, setFamilyMsg] = useState<string | null>(null)
   const [localErr, setLocalErr] = useState<string | null>(null)
+  const [showManual, setShowManual] = useState(false)
 
   async function copyText() {
     if (!props.reportText) return
-    try {
-      await navigator.clipboard.writeText(props.reportText)
+    const ok = await copyTextSafe(props.reportText)
+    if (ok) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch {
+      setLocalErr(null)
+    } else {
       setLocalErr("No se pudo copiar. Seleccione el texto manualmente.")
+      setShowManual(true)
+    }
+  }
+
+  async function copyAndOpenFamily() {
+    if (!props.reportText) return
+    setLocalErr(null)
+    setFamilyMsg(null)
+    const res = await copyReportAndOpenFamily(props.reportText)
+    if (res.copied) {
+      setCopied(true)
+      setFamilyMsg("Reporte copiado. Pegue en el grupo familiar y envíe.")
+      setTimeout(() => setCopied(false), 2500)
+    } else {
+      setShowManual(true)
+      setLocalErr("No se pudo copiar automáticamente. Use Copiar reporte y luego Abrir grupo.")
+    }
+    if (!res.opened) {
+      setShowManual(true)
     }
   }
 
@@ -52,7 +80,6 @@ export function WhatsappSharePanel(props: Props) {
           title: props.header || "Reporte Quillotana",
           text: props.reportText,
         })
-        // No afirmamos entrega: el usuario pudo cancelar tras abrir el sheet en algunos OS.
         return
       } catch (e) {
         const name = e instanceof DOMException ? e.name : ""
@@ -60,7 +87,6 @@ export function WhatsappSharePanel(props: Props) {
           setPhase("cancelled")
           return
         }
-        // Continúa a fallback
       }
     }
 
@@ -79,7 +105,7 @@ export function WhatsappSharePanel(props: Props) {
     <div className="stack-gap">
       {props.demo ? (
         <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
-          🧪 Modo prueba — datos ficticios. No es una entrega real.
+          🧪 Modo prueba — datos ficticios. No es una entrega real. Máximo 6 líneas.
         </div>
       ) : null}
 
@@ -115,6 +141,41 @@ export function WhatsappSharePanel(props: Props) {
 
           <pre className="report-pre">{props.reportText}</pre>
 
+          {props.demo ? (
+            <div className="stack-gap">
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={props.busy}
+                onClick={() => void copyAndOpenFamily()}
+              >
+                Copiar reporte y abrir grupo familiar
+              </button>
+              {showManual ? (
+                <div className="btn-row">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => void copyText()}
+                  >
+                    {copied ? "Copiado" : "Copiar reporte"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => openFamilyGroup()}
+                  >
+                    Abrir grupo familiar
+                  </button>
+                </div>
+              ) : null}
+              <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
+                No se envía automáticamente. Copie, abra el grupo, pegue y envíe.
+                Enlace demo: {FAMILY_WHATSAPP_INVITE_URL.split("?")[0]}
+              </p>
+            </div>
+          ) : null}
+
           <div className="btn-row">
             <button
               type="button"
@@ -122,7 +183,7 @@ export function WhatsappSharePanel(props: Props) {
               disabled={props.busy}
               onClick={() => void shareNativeOrFallback()}
             >
-              Compartir reporte por WhatsApp
+              Compartir por WhatsApp
             </button>
             <button
               type="button"
@@ -134,16 +195,11 @@ export function WhatsappSharePanel(props: Props) {
             </button>
           </div>
 
+          {familyMsg ? <div className="banner banner-info">{familyMsg}</div> : null}
+
           <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
             {props.share?.note_es ||
               "Seleccione el grupo en WhatsApp y confirme el envío. Abrir el menú no acredita entrega."}
-          </p>
-          <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
-            Estados: generado
-            {phase === "share_requested" || phase === "cancelled" || phase === "unavailable"
-              ? " · compartir solicitado"
-              : ""}{" "}
-            · envío no verificable por la app
           </p>
         </>
       )}

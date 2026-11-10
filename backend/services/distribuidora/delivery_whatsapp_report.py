@@ -14,13 +14,13 @@ from zoneinfo import ZoneInfo
 SANTIAGO = ZoneInfo("America/Santiago")
 
 PAYMENT_METHOD_ES = {
-    "cash": "Efectivo recibido (declarado)",
-    "transfer_declared": "Transferencia informada (pendiente verificación)",
-    "transfer_verified": "Transferencia verificada",
-    "credit": "Crédito autorizado",
+    "cash": "Efectivo",
+    "transfer_declared": "Transf. informada",
+    "transfer_verified": "Transf. verificada",
+    "credit": "Crédito",
     "partial": "Cobranza parcial",
-    "pending": "Pago pendiente",
-    "not_applicable": "No corresponde cobranza",
+    "pending": "Saldo pendiente",
+    "not_applicable": "No corresponde",
 }
 
 REASON_ES = {
@@ -36,13 +36,15 @@ REASON_ES = {
 }
 
 TEMPLATE_HEADERS = {
-    "completed": "✅ ENTREGA COMPLETADA",
-    "partial": "⚠️ ENTREGA PARCIAL",
-    "closed_store": "🔒 LOCAL CERRADO",
-    "not_found": "📍 LOCAL NO ENCONTRADO",
-    "rejected_order": "❌ PEDIDO RECHAZADO",
-    "other_incident": "⚠️ INCIDENCIA DE ENTREGA",
+    "completed": "✅ QUILLOTANA | ENTREGA COMPLETA",
+    "partial": "⚠️ QUILLOTANA | ENTREGA PARCIAL",
+    "closed_store": "🔒 QUILLOTANA | LOCAL CERRADO",
+    "not_found": "📍 QUILLOTANA | LOCAL NO ENCONTRADO",
+    "rejected_order": "❌ QUILLOTANA | PEDIDO RECHAZADO",
+    "other_incident": "⚠️ QUILLOTANA | INCIDENCIA",
 }
+
+MAX_REPORT_LINES = 6
 
 
 def _local(dt: datetime | str | None) -> datetime | None:
@@ -137,129 +139,123 @@ def whatsapp_share_url(text: str) -> str:
     return "https://wa.me/?text=" + quote(text)
 
 
+def _collection_compact(cols: list[dict[str, Any]]) -> tuple[str, str]:
+    """Devuelve (línea montos, línea pendiente/aviso). Sin afirmar verificación falsa."""
+    cash = 0.0
+    transfer = 0.0
+    pending = 0.0
+    credit = 0.0
+    for c in cols or []:
+        method = str(c.get("method") or "")
+        try:
+            amt = float(c.get("declared_amount") or 0)
+        except (TypeError, ValueError):
+            amt = 0.0
+        if method == "cash":
+            cash += amt
+        elif method == "transfer_declared":
+            transfer += amt
+        elif method == "pending":
+            pending += amt
+        elif method == "credit":
+            credit += amt
+    pay_bits: list[str] = []
+    if cash:
+        pay_bits.append(f"Efectivo {_fmt_money(cash)}")
+    if transfer:
+        pay_bits.append(f"Transf. inf. {_fmt_money(transfer)}")
+    if credit:
+        pay_bits.append(f"Crédito {_fmt_money(credit)}")
+    if not pay_bits:
+        pay_bits.append("Sin cobro declarado")
+    pending_bits: list[str] = []
+    if pending:
+        pending_bits.append(f"Pendiente {_fmt_money(pending)}")
+    if transfer:
+        pending_bits.append("Transf. no verificada")
+    if not pending_bits:
+        pending_bits.append("Sin saldo pendiente declarado")
+    return " · ".join(pay_bits), " · ".join(pending_bits)
+
+
+def _line_counts(products: list[dict[str, Any]]) -> tuple[int, int, int]:
+    full = partial = none = 0
+    for p in products or []:
+        try:
+            planned = float(p.get("planned_units") or 0)
+            delivered = float(p.get("delivered_units") or 0)
+        except (TypeError, ValueError):
+            planned = delivered = 0.0
+        if "undelivered_units" in p and p.get("planned_units") is None:
+            try:
+                undel = float(p.get("undelivered_units") or 0)
+                delivered = float(p.get("delivered_units") or 0)
+                planned = delivered + undel
+            except (TypeError, ValueError):
+                undel = 0.0
+        undel = max(0.0, planned - delivered)
+        if undel <= 0 and delivered > 0:
+            full += 1
+        elif delivered <= 0:
+            none += 1
+        else:
+            partial += 1
+    return full, partial, none
+
+
 def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
-    """Arma el mensaje a partir de datos ya confirmados (o ficticios marcados)."""
+    """Mensaje compacto (máx. 6 líneas). Sin GPS, RUT, fotos ni firma imagen."""
     template = resolve_template_key(
         status=data.get("status"),
         result_reason=data.get("result_reason"),
     )
     header = TEMPLATE_HEADERS[template]
-    lines: list[str] = []
     if demo:
-        lines.extend(
-            [
-                "🧪 PRUEBA — QUILLOTANA APP",
-                "DATOS FICTICIOS — NO CORRESPONDE A UNA ENTREGA REAL",
-                "",
-            ]
-        )
-    lines.append(header)
-    lines.append("Grupo La Quillotana")
-    lines.append(f"Planificación: {data.get('planning_code') or data.get('plan_id') or '—'}")
-    lines.append(f"Cliente: {data.get('client_name') or '—'}")
-    lines.append(f"Chofer: {data.get('driver_name') or '—'}")
-    lines.append(f"Fecha: {data.get('visit_date') or '—'}")
-    lines.append(f"Inicio: {data.get('started_at_local') or '—'}")
-    lines.append(f"Término: {data.get('ended_at_local') or '—'}")
-    lines.append(f"Duración: {data.get('duration_label') or '—'}")
+        header = header.replace("QUILLOTANA", "QUILLOTANA · PRUEBA")
+        if not header.startswith("🧪"):
+            header = "🧪 " + header.lstrip("✅⚠️🔒📍❌ ")
 
     docs = data.get("documents") or []
-    if docs:
-        lines.append("")
-        lines.append("Documentos:")
-        for d in docs:
-            dtype = d.get("document_type") or "Documento"
-            folio = d.get("document_number")
-            folio_s = str(folio) if folio is not None else "—"
-            lines.append(
-                f"• {dtype} {folio_s} · {_fmt_money(d.get('document_total'))}"
-            )
-    else:
-        lines.append("")
-        lines.append("Documentos: sin detalle registrado")
-
-    lines.append("")
-    lines.append(f"Estado: {data.get('status_label') or header}")
+    doc_bits: list[str] = []
+    for d in docs[:2]:
+        dtype = d.get("document_type") or "Doc"
+        folio = d.get("document_number")
+        folio_s = str(folio) if folio is not None else "—"
+        doc_bits.append(f"{dtype} {folio_s}")
+    docs_s = " · ".join(doc_bits) if doc_bits else "Sin documento"
+    client = data.get("client_name") or "—"
 
     products = data.get("products") or []
-    if template == "partial" or products:
-        lines.append("")
-        lines.append("Productos:")
-        if not products:
-            lines.append("• (sin líneas registradas)")
-        for p in products:
-            name = p.get("product_name") or "Producto"
-            deliv = _fmt_qty(p.get("delivered_units"))
-            pend = _fmt_qty(p.get("undelivered_units"))
-            line = f"• {name}: entregado {deliv} · pendiente {pend}"
-            reason = p.get("undelivered_reason")
-            if reason and float(p.get("undelivered_units") or 0) > 0:
-                line += f" ({REASON_ES.get(reason, reason)})"
-                if p.get("undelivered_note"):
-                    line += f" — {p['undelivered_note']}"
-            lines.append(line)
-
+    full_n, partial_n, none_n = _line_counts(products)
     if template in ("closed_store", "not_found", "rejected_order", "other_incident"):
-        lines.append("")
         reason = data.get("result_reason")
-        lines.append(f"Motivo: {REASON_ES.get(reason, reason or '—')}")
-        if data.get("result_note"):
-            lines.append(f"Observación: {data['result_note']}")
-        # Sin coordenadas precisas: solo disponibilidad
-        lines.append(
-            f"GPS registrado: {'sí' if data.get('gps_registered') else 'no'}"
-        )
-        lines.append(
-            f"Evidencia fotográfica: {data.get('evidence_status') or 'pendiente'}"
-        )
-
-    cols = data.get("collections") or []
-    lines.append("")
-    lines.append("Cobranza declarada (no es pago confirmado contable):")
-    if not cols:
-        lines.append("• Sin declaración registrada")
-        lines.append("• Pago verificado administrativamente: no")
+        reason_es = REASON_ES.get(reason, reason or "Incidencia")
+        lines = [
+            header,
+            f"🏪 {client} · {docs_s}",
+            f"📝 Motivo: {reason_es}",
+            f"📷 Evidencia: {data.get('evidence_status') or 'pendiente'}",
+            f"📍 GPS: {'sí' if data.get('gps_registered') else 'no'} (sin coordenadas)",
+            "✍️ Datos de prueba" if demo else "✍️ Incidencia registrada",
+        ]
     else:
-        for c in cols:
-            method = c.get("method")
-            method_es = PAYMENT_METHOD_ES.get(method, method or "—")
-            lines.append(f"• Medio declarado: {method_es}")
-            lines.append(
-                f"  Monto documento: {_fmt_money(c.get('document_amount'))}"
-            )
-            lines.append(
-                f"  Monto declarado por chofer: {_fmt_money(c.get('declared_amount'))}"
-            )
-            lines.append(
-                f"  Saldo pendiente declarado: {_fmt_money(c.get('pending_balance'))}"
-            )
-            verified = c.get("verified_amount")
-            if verified is not None and float(verified) > 0:
-                lines.append(
-                    f"  Pago verificado administrativamente: sí ({_fmt_money(verified)})"
-                )
-            elif method == "transfer_verified":
-                lines.append("  Pago verificado administrativamente: sí")
-            else:
-                lines.append("  Pago verificado administrativamente: no")
+        pay_line, pend_line = _collection_compact(list(data.get("collections") or []))
+        sig = data.get("signature_status") or "pendiente"
+        lines = [
+            header,
+            f"🏪 {client} · {docs_s}",
+            f"📦 {full_n} completas · {partial_n} parciales · {none_n} no entregadas",
+            f"💵 {pay_line}",
+            f"⏳ {pend_line}",
+            (
+                f"✍️ Firma: {sig} · Datos ficticios"
+                if demo
+                else f"✍️ Firma: {sig}"
+            ),
+        ]
 
-    lines.append("")
-    lines.append(f"Firma de conformidad: {data.get('signature_status') or 'pendiente'}")
-    lines.append(
-        f"Evidencia fotográfica registrada: {data.get('evidence_status') or 'no'}"
-    )
-    if data.get("observations"):
-        lines.append(f"Observaciones: {data['observations']}")
-
-    lines.append("")
-    lines.append(
-        "Seleccione el grupo en WhatsApp y confirme el envío manualmente."
-    )
-    lines.append(
-        "Este mensaje no acredita entrega automática ni pago verificado."
-    )
-    if demo:
-        lines.append("SIMULACIÓN — no es operación productiva.")
+    # Garantizar máximo 6 líneas visibles.
+    lines = [ln for ln in lines if ln is not None][:MAX_REPORT_LINES]
     return "\n".join(lines)
 
 
@@ -345,6 +341,7 @@ def visit_row_to_report_data(
         products.append(
             {
                 "product_name": ln.get("product_name"),
+                "planned_units": ln.get("planned_units"),
                 "delivered_units": ln.get("delivered_units"),
                 "undelivered_units": ln.get("undelivered_units"),
                 "undelivered_reason": ln.get("undelivered_reason"),
@@ -526,12 +523,26 @@ def demo_scenarios() -> list[dict[str, Any]]:
                 ],
                 "collections": [
                     {
-                        "method": "partial",
+                        "method": "cash",
                         "document_amount": 86500,
-                        "declared_amount": 52000,
+                        "declared_amount": 30000,
                         "verified_amount": None,
-                        "pending_balance": 34500,
-                    }
+                        "pending_balance": None,
+                    },
+                    {
+                        "method": "transfer_declared",
+                        "document_amount": 86500,
+                        "declared_amount": 50000,
+                        "verified_amount": None,
+                        "pending_balance": None,
+                    },
+                    {
+                        "method": "pending",
+                        "document_amount": 86500,
+                        "declared_amount": 6500,
+                        "verified_amount": None,
+                        "pending_balance": 6500,
+                    },
                 ],
                 "gps_registered": True,
                 "evidence_status": "no",

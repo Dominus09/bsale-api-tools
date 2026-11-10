@@ -1,4 +1,4 @@
-"""P4 complemento: formatos WhatsApp + demos sin escritura."""
+"""P4.3: formatos WhatsApp compactos (máx. 6 líneas) + demos sin escritura."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ from backend.services.distribuidora import delivery_whatsapp_report as wa
 from backend.services.distribuidora import delivery_visit_service as svc
 
 
-def test_templates_a_to_f():
+def test_templates_a_to_f_compact():
     cases = [
-        ("completed", None, "completed", "✅ ENTREGA COMPLETADA"),
-        ("partial", None, "partial", "⚠️ ENTREGA PARCIAL"),
-        ("not_delivered", "closed_store", "closed_store", "🔒 LOCAL CERRADO"),
-        ("not_delivered", "not_found", "not_found", "📍 LOCAL NO ENCONTRADO"),
-        ("not_delivered", "rejected_order", "rejected_order", "❌ PEDIDO RECHAZADO"),
-        ("not_delivered", "other", "other_incident", "⚠️ INCIDENCIA DE ENTREGA"),
+        ("completed", None, "completed"),
+        ("partial", None, "partial"),
+        ("not_delivered", "closed_store", "closed_store"),
+        ("not_delivered", "not_found", "not_found"),
+        ("not_delivered", "rejected_order", "rejected_order"),
+        ("not_delivered", "other", "other_incident"),
     ]
-    for status, reason, key, header in cases:
+    for status, reason, key in cases:
         assert wa.resolve_template_key(status=status, result_reason=reason) == key
         text = wa.build_report_text(
             {
@@ -35,30 +35,51 @@ def test_templates_a_to_f():
                         "document_total": 1000,
                     }
                 ],
-                "products": [],
-                "collections": [],
+                "products": [
+                    {
+                        "planned_units": 2,
+                        "delivered_units": 2,
+                        "undelivered_units": 0,
+                    }
+                ],
+                "collections": [
+                    {
+                        "method": "cash",
+                        "declared_amount": 500,
+                    },
+                    {
+                        "method": "pending",
+                        "declared_amount": 500,
+                    },
+                ],
                 "gps_registered": True,
                 "evidence_status": "sí",
-                "signature_status": "pendiente",
+                "signature_status": "sí",
             }
         )
-        assert header in text
-        assert "Grupo La Quillotana" in text
+        visible = [ln for ln in text.splitlines() if ln.strip()]
+        assert len(visible) <= 6
         assert "-42." not in text
         assert "chat.whatsapp.com" not in text.lower()
+        assert "cash" not in text.lower() or "Efectivo" in text
 
 
-def test_demo_scenarios_marked_and_safe():
+def test_demo_scenarios_marked_compact_and_safe():
     demos = wa.demo_scenarios()
     assert len(demos) == 6
     for d in demos:
         assert d["demo"] is True
         assert d["writes_production"] is False
-        assert "PRUEBA — QUILLOTANA APP" in d["report_text"]
-        assert "DATOS FICTICIOS" in d["report_text"]
+        text = d["report_text"]
+        visible = [ln for ln in text.splitlines() if ln.strip()]
+        assert len(visible) <= 6
+        assert "PRUEBA" in text or "ficticios" in text.lower() or "🧪" in text
         assert d["share"]["delivery_claimed"] is False
-        assert "chat.whatsapp.com" not in d["report_text"].lower()
-        assert "invite" not in d["report_text"].lower()
+        assert "chat.whatsapp.com" not in text.lower()
+        assert "invite" not in text.lower()
+        # No afirmar verificación falsa de transferencia
+        if "Transf" in text:
+            assert "no verificada" in text.lower() or "informada" in text.lower() or "inf." in text.lower()
 
 
 def test_list_demo_service_no_db(monkeypatch):
@@ -68,7 +89,7 @@ def test_list_demo_service_no_db(monkeypatch):
     assert out["adapter"]["official_api_ready"] is False
 
 
-def test_partial_highlights_pending_reasons():
+def test_partial_highlights_pending_compact():
     text = wa.build_report_text(
         {
             "status": "partial",
@@ -79,10 +100,11 @@ def test_partial_highlights_pending_reasons():
             "started_at_local": "11:00",
             "ended_at_local": "11:30",
             "duration_label": "30 min",
-            "documents": [],
+            "documents": [{"document_type": "Fact.", "document_number": "TEST-001"}],
             "products": [
                 {
                     "product_name": "Prod",
+                    "planned_units": 3,
                     "delivered_units": 1,
                     "undelivered_units": 2,
                     "undelivered_reason": "physical_shortage",
@@ -101,15 +123,24 @@ def test_partial_highlights_pending_reasons():
             "signature_status": "sí",
         }
     )
+    visible = [ln for ln in text.splitlines() if ln.strip()]
+    assert len(visible) <= 6
     assert "ENTREGA PARCIAL" in text
-    assert "Faltante físico" in text
-    assert "Transferencia informada" in text
-    assert "Cobranza declarada" in text
-    assert "Pago confirmado" not in text.lower()
-    assert "verificado administrativamente: no" in text
+    assert "Transf" in text
+    assert "verificada" not in text.lower() or "no verificada" in text.lower()
 
 
 def test_share_url_has_no_group_id():
-    url = wa.whatsapp_share_url("hola")
+    bundle = wa.build_report_bundle(
+        {
+            "status": "completed",
+            "client_name": "X",
+            "documents": [],
+            "products": [],
+            "collections": [],
+            "signature_status": "sí",
+        }
+    )
+    url = bundle["share"]["whatsapp_url"]
     assert url.startswith("https://wa.me/?text=")
     assert "chat.whatsapp.com" not in url
