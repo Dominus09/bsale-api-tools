@@ -105,6 +105,13 @@ function ResultadoInner() {
   const closed = isClosedVisitStatus(status)
   const review = visit?.closure_review_status
 
+  const statusTone =
+    status === "completed"
+      ? "ok"
+      : status === "partial" || status === "not_delivered"
+        ? "warn"
+        : "neutral"
+
   if (loadingVisit || session.loading) {
     return <div className="empty">Cargando resultado…</div>
   }
@@ -133,15 +140,23 @@ function ResultadoInner() {
 
   return (
     <div className="stack-gap">
-      <div className="card">
-        <h2 style={{ marginTop: 0 }}>
-          {closed ? "Entrega finalizada" : "Estado de visita"}
+      <div className="card" style={{ textAlign: "center", paddingTop: 22 }}>
+        <div
+          className={`result-badge result-badge-${statusTone}`}
+          aria-hidden
+        >
+          {status === "completed" ? "✓" : status === "not_delivered" ? "✕" : "!"}
+        </div>
+        <h2 style={{ margin: "12px 0 4px", fontSize: "1.25rem" }}>
+          {closed ? "Entrega registrada" : "Estado de visita"}
         </h2>
-        <p style={{ margin: "0 0 8px" }}>
-          <strong>{session.clientName}</strong>
-        </p>
-        <div className="ficha-summary">
-          <span className={`pill${closed ? " pill-ok" : ""}`}>
+        <p style={{ margin: "0 0 10px", fontWeight: 650 }}>{session.clientName}</p>
+        <div className="ficha-summary" style={{ justifyContent: "center" }}>
+          <span
+            className={`pill${
+              statusTone === "ok" ? " pill-ok" : statusTone === "warn" ? " pill-warn" : ""
+            }`}
+          >
             {visitStatusLabel(status)}
           </span>
           <span className="pill">Visita #{visitId}</span>
@@ -155,16 +170,11 @@ function ResultadoInner() {
             </span>
           ) : null}
         </div>
-        <p className="muted" style={{ fontSize: "0.85rem", marginTop: 10 }}>
-          Datos leídos desde el servidor (visit_id={visitId}). No se inventa el
-          cierre en el cliente.
-        </p>
       </div>
 
       {closed ? (
-        <div className="card" style={{ padding: 12 }}>
-          <strong style={{ fontSize: "0.9rem" }}>Resumen persistido</strong>
-          <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: "0.85rem" }}>
+        <div className="card">
+          <ul className="result-summary-list">
             {summary.compactLines.map((line, i) => (
               <li key={`sum-${i}`}>{line}</li>
             ))}
@@ -186,7 +196,7 @@ function ResultadoInner() {
           share={report?.share}
           header={report?.header}
           busy={busy}
-          generateLabel="Generar / regenerar reporte"
+          generateLabel="Generar reporte"
           onGenerate={async () => {
             if (!visitId) return
             setBusy(true)
@@ -224,11 +234,8 @@ function ResultadoInner() {
         </Link>
       ) : null}
 
-      <Link href={clientsHref} className="btn btn-primary">
-        Volver a lista de clientes
-      </Link>
-      <Link href={fichaHref} className="btn btn-ghost">
-        Volver a ficha
+      <Link href={clientsHref} className="btn btn-secondary">
+        Volver a clientes
       </Link>
       {err ? <div className="banner banner-error">{err}</div> : null}
     </div>
