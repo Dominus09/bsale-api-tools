@@ -1880,6 +1880,7 @@ def submit_conformity(
     latitude: float | None,
     longitude: float | None,
     accuracy_m: float | None,
+    signature_content_type: str | None = None,
 ) -> dict[str, Any]:
     from backend.services.distribuidora import delivery_visit_closure as closure
 
@@ -1966,17 +1967,19 @@ def submit_conformity(
         sig_key = None
         sig_ctype = None
         if not refused and signature_png:
-            # Validar PNG/JPEG y re-encode PNG sin EXIF
+            # Claimed MIME = part multipart (canvas PWA = image/jpeg).
+            # Normalizer valida magia, re-encodea JPEG sin EXIF y devuelve mime final.
+            claimed = (signature_content_type or "").strip() or "image/jpeg"
             data_n, mime, _m = loc_svc._normalize_facade_image(  # noqa: SLF001
-                signature_png, "image/png"
+                signature_png, claimed
             )
-            # Facade normalizer returns JPEG; acceptable for storage
             sig_ctype = mime
+            ext = "jpg" if "jpeg" in mime else ("png" if "png" in mime else "bin")
             sig_key = storage.build_delivery_signature_object_key(
                 company_id=company_id,
                 plan_id=int(plan_id),
                 visit_id=int(visit_id),
-                ext="jpg" if "jpeg" in mime else "png",
+                ext=ext,
             )
             try:
                 storage.put_bytes(object_key=sig_key, body=data_n, content_type=mime)

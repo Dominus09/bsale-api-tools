@@ -452,12 +452,17 @@ async def submit_visit_conformity(
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
     sig_bytes = await signature.read() if signature is not None else None
+    sig_ctype = None
+    if signature is not None:
+        # MIME del part multipart (Blob.type del canvas). No hardcodear PNG.
+        sig_ctype = (signature.content_type or "").strip() or "image/jpeg"
     return visit_svc.submit_conformity(
         user=user,
         plan_id=int(plan_id),
         visit_id=int(visit_id),
         receptor_name=receptor_name,
         signature_png=sig_bytes,
+        signature_content_type=sig_ctype,
         refused=bool(refused),
         refuse_reason=refuse_reason,
         latitude=latitude,

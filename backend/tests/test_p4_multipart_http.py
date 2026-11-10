@@ -52,6 +52,7 @@ def multipart_client(monkeypatch):
         captured["conformity"] = {
             "receptor_name": kwargs.get("receptor_name"),
             "signature_len": len(kwargs.get("signature_png") or b""),
+            "signature_content_type": kwargs.get("signature_content_type"),
             "refused": kwargs.get("refused"),
         }
         return {
@@ -103,7 +104,8 @@ def multipart_client(monkeypatch):
 
 def test_conformity_multipart_receives_name_and_signature(multipart_client):
     client, captured = multipart_client
-    png = b"\x89PNG\r\n\x1a\n" + b"0" * 128
+    # Simula iPhone/Safari: canvas.toBlob("image/jpeg") → firma.jpg + image/jpeg.
+    jpeg = b"\xff\xd8\xff" + b"0" * 128
     res = client.post(
         "/distribuidora/pwa/driver/despachos/10/visitas/99/conformidad",
         headers=_token(42),
@@ -113,16 +115,30 @@ def test_conformity_multipart_receives_name_and_signature(multipart_client):
             "latitude": "-42.1",
             "longitude": "-73.2",
         },
-        files={"signature": ("firma.jpg", io.BytesIO(png), "image/jpeg")},
+        files={"signature": ("firma.jpg", io.BytesIO(jpeg), "image/jpeg")},
     )
     assert res.status_code == 200, res.text
     body = res.json()
     assert body.get("persisted") is True
     assert captured["conformity"]["receptor_name"] == "Yoyo"
-    assert captured["conformity"]["signature_len"] == len(png)
+    assert captured["conformity"]["signature_len"] == len(jpeg)
+    assert captured["conformity"]["signature_content_type"] == "image/jpeg"
     # Request fue multipart (TestClient lo fuerza al usar files=)
     assert "multipart/form-data" in (res.request.headers.get("content-type") or "")
     assert "boundary=" in (res.request.headers.get("content-type") or "")
+
+
+def test_conformity_multipart_forwards_png_claim_when_part_is_png(multipart_client):
+    client, captured = multipart_client
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    res = client.post(
+        "/distribuidora/pwa/driver/despachos/10/visitas/99/conformidad",
+        headers=_token(42),
+        data={"receptor_name": "Ana", "refused": "false"},
+        files={"signature": ("firma.png", io.BytesIO(png), "image/png")},
+    )
+    assert res.status_code == 200, res.text
+    assert captured["conformity"]["signature_content_type"] == "image/png"
 
 
 def test_conformity_rejects_without_jwt(multipart_client):
