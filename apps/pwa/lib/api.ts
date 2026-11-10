@@ -384,6 +384,8 @@ export async function saveVisitDocumentLines(
     document_total?: number | null
     result_status: string
     notes?: string | null
+    /** Control de concurrencia P4.1+; omitir solo en clientes legacy. */
+    expected_version?: number | null
     lines: Array<{
       source_detail_id: number
       line_number?: number | null

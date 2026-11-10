@@ -59,6 +59,20 @@ def get_visit(cur, visit_id: int) -> dict[str, Any] | None:
     return _row(cur, r) if r else None
 
 
+def get_visit_for_update(cur, visit_id: int) -> dict[str, Any] | None:
+    """Bloqueo de fila para control de versión en mutaciones concurrentes."""
+    cur.execute(
+        """
+        SELECT * FROM distribuidora.delivery_visits
+        WHERE id = %s
+        FOR UPDATE
+        """,
+        (int(visit_id),),
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None
+
+
 def find_by_idem(
     cur, *, driver_user_id: int, idempotency_key: str
 ) -> dict[str, Any] | None:

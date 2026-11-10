@@ -271,6 +271,8 @@ class SaveDocumentLinesBody(BaseModel):
     result_status: str = Field("partial", max_length=32)
     notes: str | None = Field(None, max_length=1000)
     lines: list[DeliveryLineBody]
+    # Opcional: PWA antigua no lo envía; P4.1+ detecta conflictos concurrentes.
+    expected_version: int | None = Field(None, ge=1)
 
 
 class DeclareCollectionBody(BaseModel):
@@ -314,6 +316,7 @@ def save_visit_document_lines(
         result_status=body.result_status,
         notes=body.notes,
         lines=[ln.model_dump() for ln in body.lines],
+        expected_version=body.expected_version,
     )
 
 

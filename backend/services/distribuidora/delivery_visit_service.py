@@ -645,8 +645,13 @@ def save_document_lines(
     result_status: str,
     notes: str | None,
     lines: list[dict[str, Any]],
+    expected_version: int | None = None,
 ) -> dict[str, Any]:
-    """Persiste cantidades entregadas por documento. No muta document_details/Bsale."""
+    """Persiste cantidades entregadas por documento. No muta document_details/Bsale.
+
+    expected_version es opcional para compatibilidad con PWA anteriores.
+    Si se envía, detecta conflictos concurrentes (409) y no sobrescribe a ciegas.
+    """
     if result_status not in {"pending", "full", "partial", "none", "skipped"}:
         raise HTTPException(status_code=400, detail="result_status inválido")
     if not lines:
@@ -721,13 +726,29 @@ def save_document_lines(
         )
 
     conn = get_connection()
+    bumped: dict[str, Any] | None = None
+    invalidated = False
     try:
         cur = conn.cursor()
         if not visit_repo.tables_ready(cur):
             raise HTTPException(status_code=503, detail="Migración 056 pendiente")
+        # FOR UPDATE evita dos escrituras concurrentes sobre la misma visita.
+        locked = visit_repo.get_visit_for_update(cur, int(visit_id))
+        if not locked:
+            raise HTTPException(status_code=404, detail="Visita no encontrada")
         visit = _require_own_open_visit(
             cur, user=user, plan_id=int(plan_id), visit_id=int(visit_id)
         )
+        if expected_version is not None:
+            current_ver = int(visit.get("version") or 1)
+            if current_ver != int(expected_version):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Conflicto de versión: la visita fue actualizada por otra "
+                        "operación. Recargue e intente de nuevo."
+                    ),
+                )
         uid = int(visit["driver_user_id"])
         # Validar source_detail_id contra document_details cuando el doc tiene líneas.
         detail_ids = [int(x["source_detail_id"]) for x in normalized]
@@ -840,8 +861,8 @@ def save_document_lines(
             int(visit_id),
             reason="Cantidades modificadas tras conformidad",
         )
-        if invalidated:
-            visit_repo.bump_visit_version(cur, int(visit_id))
+        # Siempre incrementar versión tras mutar líneas (concurrencia + firma).
+        bumped = visit_repo.bump_visit_version(cur, int(visit_id))
         visit_repo.insert_event(
             cur,
             visit_id=int(visit_id),
@@ -854,6 +875,8 @@ def save_document_lines(
                 "expected_detail_count": n_doc,
                 "result_status": result_status,
                 "conformity_invalidated": bool(invalidated),
+                "expected_version": expected_version,
+                "new_version": int((bumped or visit).get("version") or 0),
             },
         )
         conn.commit()
@@ -883,6 +906,8 @@ def save_document_lines(
             "lines_registered": len(saved_lines),
             "lines_expected": n_doc,
             "document_complete": len(saved_lines) >= n_doc,
+            "visit_version": int((bumped or visit).get("version") or 1),
+            "conformity_invalidated": bool(invalidated),
             "note_es": "Cantidades guardadas sin modificar Bsale ni picking histórico.",
         }
     )

@@ -416,7 +416,7 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
 
     # No delivered: líneas con entregado>0 bloquearían; limpiamos vía status none
     # Re-guardar líneas en 0 entregado
-    svc.save_document_lines(
+    cleared = svc.save_document_lines(
         user=_user(),
         plan_id=10,
         visit_id=vid,
@@ -446,12 +446,14 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
             },
         ],
     )
+    # Cada save_document_lines incrementa version; no usar la de start.
+    assert int(cleared["visit_version"]) >= int(ver)
 
     closed = svc.finalize_visit(
         user=_user(),
         plan_id=10,
         visit_id=vid,
-        expected_version=ver,
+        expected_version=int(cleared["visit_version"]),
         status="not_delivered",
         result_reason="closed_store",
         result_note="Local cerrado prueba",
@@ -756,3 +758,111 @@ def test_progressive_line_upsert_keeps_prior_lines(isolated_db, monkeypatch):
     assert float(by_id[88001]["delivered_units"]) == 2.0
     assert float(by_id[88002]["delivered_units"]) == 1.0
     assert by_id[88001]["undelivered_reason"] == "damaged"
+
+
+def test_save_lines_version_conflict_and_partial_registered(isolated_db, monkeypatch):
+    """expected_version desfasada → 409; parcial/cero quedan persistidas (registradas)."""
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42
+    )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_resolve_client",
+        lambda _p, _k: {"client_id": 9010, "customer_key": "id:9010"},
+    )
+    monkeypatch.setattr(svc.loc_svc, "_parse_client_id", lambda _k, _c: 9010)
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda _u, _p: 3
+    )
+
+    started = svc.start_visit(
+        user=_user(),
+        plan_id=10,
+        customer_key="id:9010",
+        latitude=-42.0,
+        longitude=-73.0,
+        accuracy_m=10.0,
+    )
+    vid = started["visit"]["id"]
+    v0 = int(started["visit"]["version"])
+
+    first = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=None,
+        document_number=9001,
+        document_type="boleta",
+        document_total=12000,
+        result_status="pending",
+        notes=None,
+        expected_version=v0,
+        lines=[
+            {
+                "source_detail_id": 88001,
+                "planned_units": 4,
+                "delivered_units": 0,
+                "undelivered_reason": "physical_shortage",
+                "product_name": "Prod A",
+            }
+        ],
+    )
+    assert first["persisted"] is True
+    assert first["document_complete"] is False
+    assert float(first["lines"][0]["delivered_units"]) == 0.0
+    v1 = int(first["visit_version"])
+    assert v1 == v0 + 1
+
+    with pytest.raises(HTTPException) as ei:
+        svc.save_document_lines(
+            user=_user(),
+            plan_id=10,
+            visit_id=vid,
+            related_document_id=555,
+            oc_document_id=None,
+            document_number=9001,
+            document_type="boleta",
+            document_total=12000,
+            result_status="pending",
+            notes=None,
+            expected_version=v0,  # stale
+            lines=[
+                {
+                    "source_detail_id": 88001,
+                    "planned_units": 4,
+                    "delivered_units": 4,
+                    "product_name": "Prod A",
+                }
+            ],
+        )
+    assert ei.value.status_code == 409
+
+    # Sin expected_version (PWA legacy) sigue funcionando.
+    legacy = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=None,
+        document_number=9001,
+        document_type="boleta",
+        document_total=12000,
+        result_status="pending",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 88002,
+                "planned_units": 2,
+                "delivered_units": 1,
+                "undelivered_reason": "damaged",
+                "product_name": "Prod A",
+            }
+        ],
+    )
+    assert legacy["document_complete"] is True
+    assert {int(x["source_detail_id"]) for x in legacy["lines"]} == {88001, 88002}
+    # 88001 no se borró ni se “des-registró”
+    zero = next(x for x in legacy["lines"] if int(x["source_detail_id"]) == 88001)
+    assert float(zero["delivered_units"]) == 0.0
+    assert zero["undelivered_reason"] == "physical_shortage"

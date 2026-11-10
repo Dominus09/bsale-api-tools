@@ -101,6 +101,15 @@ export default function EntregaDocumentoDetallePage() {
   const [err, setErr] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
+  const [visitVersion, setVisitVersion] = useState<number>(
+    session.activeVisit?.version || 1,
+  )
+
+  useEffect(() => {
+    if (session.activeVisit?.version != null) {
+      setVisitVersion(session.activeVisit.version)
+    }
+  }, [session.activeVisit?.version])
 
   async function hydrateFromServer() {
     if (!doc || !session.activeVisit?.id) return
@@ -163,6 +172,7 @@ export default function EntregaDocumentoDetallePage() {
         document_type: doc.document_type ?? null,
         document_total: doc.document_total ?? null,
         result_status: "pending",
+        expected_version: visitVersion,
         lines: [
           {
             source_detail_id: ln.source_detail_id,
@@ -181,10 +191,14 @@ export default function EntregaDocumentoDetallePage() {
         lines?: Array<Record<string, unknown>>
         document_complete?: boolean
         persisted?: boolean
+        visit_version?: number
       }
       if (!res.persisted) {
         setErr("El servidor no confirmó el guardado de la línea")
         return
+      }
+      if (typeof res.visit_version === "number") {
+        setVisitVersion(res.visit_version)
       }
       const savedByDetail = new Map<number, Record<string, unknown>>()
       for (const s of res.lines || []) {
@@ -219,7 +233,15 @@ export default function EntregaDocumentoDetallePage() {
         if (typeof window !== "undefined") window.scrollTo({ top: scrollY })
       })
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "No se pudo guardar la línea")
+      if (e instanceof ApiError && e.status === 409) {
+        setErr(
+          e.message ||
+            "Conflicto de versión: recargue la visita e intente de nuevo.",
+        )
+        session.reload()
+      } else {
+        setErr(e instanceof ApiError ? e.message : "No se pudo guardar la línea")
+      }
     } finally {
       setBusyId(null)
     }

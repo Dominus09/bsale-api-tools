@@ -234,6 +234,11 @@ def test_save_lines_rejects_when_document_has_no_details(monkeypatch):
     monkeypatch.setattr(svc, "get_connection", lambda: Conn())
     monkeypatch.setattr(svc.visit_repo, "tables_ready", lambda *_a, **_k: True)
     monkeypatch.setattr(
+        svc.visit_repo,
+        "get_visit_for_update",
+        lambda *_a, **_k: {"id": 1, "driver_user_id": 7, "version": 1, "status": "in_progress"},
+    )
+    monkeypatch.setattr(
         svc,
         "_require_own_open_visit",
         lambda *_a, **_k: {"id": 1, "driver_user_id": 7, "version": 1},
