@@ -993,6 +993,65 @@ def assign_driver_to_plan(
         conn.close()
 
 
+def _picking_totals_by_plan_ids(cur, plan_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Totales de picking por plan: Σ documents.total_amount (c/IVA) 1 vez por factura.
+
+    Fuente: OC del plan con factura confirmada (mismo criterio picking lite).
+    Dedup por ``invoicing_document_id`` para no sumar dos veces un documento
+    compartido entre filas de órdenes.
+    """
+    ids = sorted({int(x) for x in plan_ids if x is not None})
+    if not ids:
+        return {}
+    cur.execute(
+        """
+        SELECT
+            x.dispatch_plan_id,
+            COUNT(*)::int AS document_count,
+            COALESCE(SUM(x.total_amount), 0)::float AS amount_total
+        FROM (
+            SELECT DISTINCT
+                dpo.dispatch_plan_id,
+                st.invoicing_document_id AS related_document_id,
+                d.total_amount
+            FROM distribuidora.dispatch_plan_orders dpo
+            INNER JOIN distribuidora.v_orders_purchase_status st
+                ON st.document_id = dpo.oc_document_id
+               AND COALESCE(st.is_invoiced, FALSE) = TRUE
+               AND st.invoicing_document_id IS NOT NULL
+            INNER JOIN distribuidora.v_documents_latest d
+                ON d.document_id = st.invoicing_document_id
+            WHERE dpo.dispatch_plan_id = ANY(%s)
+        ) x
+        GROUP BY x.dispatch_plan_id
+        """,
+        (ids,),
+    )
+    out: dict[int, dict[str, Any]] = {}
+    for plan_id, document_count, amount_total in cur.fetchall():
+        out[int(plan_id)] = {
+            "document_count": int(document_count or 0),
+            "amount_total": float(amount_total or 0),
+            "amounts_basis": "document_total_with_tax",
+        }
+    return out
+
+
+def _attach_picking_totals(cur, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    totals = _picking_totals_by_plan_ids(cur, [int(r["id"]) for r in rows if r.get("id")])
+    for r in rows:
+        t = totals.get(int(r["id"]))
+        if t:
+            r["document_count"] = t["document_count"]
+            r["amount_total"] = t["amount_total"]
+            r["amounts_basis"] = t["amounts_basis"]
+        else:
+            r["document_count"] = 0
+            r["amount_total"] = None
+            r["amounts_basis"] = "document_total_with_tax"
+    return rows
+
+
 def list_plans_for_driver_user(driver_user_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
     """Despachos operativos del chofer (solo ``driver_user_id``; nunca por nombre)."""
     conn = get_connection()
@@ -1039,6 +1098,7 @@ def list_plans_for_driver_user(driver_user_id: int, *, limit: int = 50) -> list[
         )
         cols = [d[0] for d in cur.description]
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        _attach_picking_totals(cur, rows)
         cur.close()
         return rows
     finally:
@@ -1092,8 +1152,10 @@ def get_plan_summary_for_driver(
             cur.close()
             return None
         cols = [d[0] for d in cur.description]
+        plan = dict(zip(cols, row))
+        _attach_picking_totals(cur, [plan])
         cur.close()
-        return dict(zip(cols, row))
+        return plan
     finally:
         conn.close()
 

@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { ApiError, listMyDespachos, type DriverDespacho } from "@/lib/api"
+import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDate, statusLabel } from "@/lib/format"
 import { partitionPlansByDate, santiagoTodayYmd } from "@/lib/plan-buckets"
 
@@ -40,18 +41,18 @@ function PlanCard(props: {
           <span className="kpi-value">{p.client_count ?? "—"}</span>
         </div>
         <div className="kpi">
-          <span className="kpi-label">Órdenes</span>
-          <span className="kpi-value">{p.order_count ?? "—"}</span>
+          <span className="kpi-label">Documentos</span>
+          <span className="kpi-value">{p.document_count ?? "—"}</span>
         </div>
       </div>
       <div className="meta-row" style={{ marginTop: 10 }}>
         <span className="muted">Monto picking</span>
-        <span>Monto no disponible</span>
+        <span>
+          {typeof p.amount_total === "number"
+            ? moneyCLP(p.amount_total)
+            : "Monto no disponible"}
+        </span>
       </div>
-      <p className="muted" style={{ margin: "6px 0 0", fontSize: "0.72rem" }}>
-        El listado aún no expone el total con impuestos del picking; se mostrará
-        cuando la API lo confirme.
-      </p>
       <Link
         href={`/despachos/${p.id}`}
         className={`btn ${props.hero ? "btn-primary" : "btn-secondary"}`}

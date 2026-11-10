@@ -119,8 +119,20 @@ export function DeliveryMap({ markers, userLocation, onSelect, clientesHref }: P
           for (const m of markers) {
             const el = document.createElement("button")
             el.type = "button"
-            el.className = "map-marker"
-            el.setAttribute("aria-label", m.client_name || "Cliente")
+            const st = String(m.attention_status || "pending")
+            const tone =
+              st === "in_progress"
+                ? "map-marker-active"
+                : st === "completed"
+                  ? "map-marker-done"
+                  : st === "partial" || st === "not_delivered"
+                    ? "map-marker-issue"
+                    : "map-marker-pending"
+            el.className = `map-marker ${tone}`
+            el.setAttribute(
+              "aria-label",
+              `${m.client_name || "Cliente"} · ${m.attention_label_es || "Pendiente"}`,
+            )
             el.addEventListener("click", () => onSelect?.(m.customer_key))
             new Marker({ element: el }).setLngLat([m.longitude, m.latitude]).addTo(map)
             bounds.extend([m.longitude, m.latitude])

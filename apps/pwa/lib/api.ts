@@ -101,6 +101,11 @@ export type DriverDespacho = {
   confirmed_at?: string | null
   order_count?: number | null
   client_count?: number | null
+  /** Facturas confirmadas del picking (dedup). */
+  document_count?: number | null
+  /** Σ document_total c/IVA; null si no hay facturas. */
+  amount_total?: number | null
+  amounts_basis?: string | null
 }
 
 export type LoadGroupRef = {
@@ -186,6 +191,11 @@ export type DriverMapMarker = {
   coordinates_source?: string | null
   document_count: number
   units_total: number
+  amount_total?: number | null
+  visit_id?: number | null
+  visit_status?: string | null
+  attention_status?: string | null
+  attention_label_es?: string | null
   load_groups: LoadGroupRef[]
   distance_m?: number | null
   navigation?: {
@@ -306,7 +316,9 @@ export async function getMyCliente(
   last_closed_visit?: DeliveryVisit | null
   capabilities?: {
     start_delivery_visit?: boolean
+    create_new_visit_after_close?: boolean
     mode?: string
+    note_es?: string | null
   }
 }> {
   return apiFetch(

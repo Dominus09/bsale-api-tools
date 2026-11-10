@@ -759,6 +759,26 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
                 int(d.get("related_document_id") or 0),
             )
         )
+        # Monto cliente: Σ document_total (c/IVA) una vez por related_document_id.
+        amount = 0.0
+        amount_known = False
+        seen_docs: set[int] = set()
+        for d in c.get("documents") or []:
+            rel = d.get("related_document_id")
+            if rel is not None:
+                rid = int(rel)
+                if rid in seen_docs:
+                    continue
+                seen_docs.add(rid)
+            tot = d.get("document_total")
+            if tot is None:
+                continue
+            try:
+                amount += float(tot)
+                amount_known = True
+            except (TypeError, ValueError):
+                continue
+        c["amount_total"] = round(amount, 2) if amount_known else None
         c["search_text"] = " ".join(
             filter(
                 None,
@@ -820,40 +840,27 @@ def list_clients_for_driver(plan_id: int, *, q: str | None = None) -> dict[str, 
     query = (q or "").strip().lower()
     if query:
         items = [c for c in items if query in (c.get("search_text") or "")]
-    cards = []
-    for c in items:
-        # Monto: suma document_total (Bsale total_amount c/impuestos) una vez por documento.
-        amount = 0.0
-        amount_known = False
-        for d in c.get("documents") or []:
-            tot = d.get("document_total")
-            if tot is None:
-                continue
-            try:
-                amount += float(tot)
-                amount_known = True
-            except (TypeError, ValueError):
-                continue
-        cards.append(
-            {
-                "customer_key": c["customer_key"],
-                "client_id": c.get("client_id"),
-                "client_name": c.get("client_name"),
-                "fantasy_name": c.get("fantasy_name") or "",
-                "city": c.get("city") or "",
-                "address": c.get("address") or "",
-                "observations": c.get("observations") or "",
-                "document_count": c.get("document_count") or 0,
-                "units_total": c.get("units_total") or 0,
-                "amount_total": round(amount, 2) if amount_known else None,
-                "load_groups": [
-                    {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
-                    for g in (c.get("load_groups") or [])
-                ],
-                "has_coordinates": bool(c.get("has_coordinates")),
-                "route_order": c.get("route_order"),
-            }
-        )
+    cards = [
+        {
+            "customer_key": c["customer_key"],
+            "client_id": c.get("client_id"),
+            "client_name": c.get("client_name"),
+            "fantasy_name": c.get("fantasy_name") or "",
+            "city": c.get("city") or "",
+            "address": c.get("address") or "",
+            "observations": c.get("observations") or "",
+            "document_count": c.get("document_count") or 0,
+            "units_total": c.get("units_total") or 0,
+            "amount_total": c.get("amount_total"),
+            "load_groups": [
+                {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
+                for g in (c.get("load_groups") or [])
+            ],
+            "has_coordinates": bool(c.get("has_coordinates")),
+            "route_order": c.get("route_order"),
+        }
+        for c in items
+    ]
     return serialize_value(
         {
             "dispatch_plan_id": int(plan_id),
@@ -1023,6 +1030,15 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
     except Exception:
         last_closed_visit = None
 
+    closed_status = str((last_closed_visit or {}).get("status") or "")
+    blocking_closed = closed_status in {"completed", "partial", "not_delivered"}
+    has_active = bool(
+        active_visit and str(active_visit.get("status") or "") == "in_progress"
+    )
+    # Retomar activa siempre; crear nueva solo si no hay cierre válido previo.
+    can_create_new = (not blocking_closed) and (not has_active)
+    can_operate = has_active or can_create_new
+
     return serialize_value(
         {
             "dispatch_plan_id": int(plan_id),
@@ -1037,11 +1053,21 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
             "documents": documents_out,
             "document_count": len(documents_out),
             "units_total": client.get("units_total") or 0,
+            "amount_total": client.get("amount_total"),
             "future_contracts": FUTURE_CONTRACTS,
             "read_only": False,
             "capabilities": {
-                "start_delivery_visit": True,
+                "start_delivery_visit": can_operate,
+                "create_new_visit_after_close": can_create_new,
                 "mode": "online_only",
+                "note_es": (
+                    None
+                    if can_operate
+                    else (
+                        "Visita ya finalizada en este despacho. "
+                        "Solo consulta del resultado histórico."
+                    )
+                ),
             },
             "sources": {
                 **bundle["sources"],
@@ -1056,6 +1082,61 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
     )
 
 
+def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
+    """Una lectura batch: estado de atención por customer_key del plan."""
+    from backend.db import get_connection
+    from backend.repositories.distribuidora import delivery_visit_repo as visit_repo
+
+    labels = {
+        "in_progress": "En atención",
+        "completed": "Finalizado",
+        "partial": "Parcial",
+        "not_delivered": "No entregado",
+        "cancelled": "Anulado",
+    }
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not visit_repo.tables_ready(cur):
+            cur.close()
+            return {}
+        # Prioriza in_progress; si no, la visita más reciente del cliente.
+        cur.execute(
+            """
+            SELECT DISTINCT ON (customer_key)
+                customer_key,
+                id,
+                status
+            FROM distribuidora.delivery_visits
+            WHERE dispatch_plan_id = %s
+            ORDER BY
+                customer_key,
+                CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END,
+                id DESC
+            """,
+            (int(plan_id),),
+        )
+        rows = cur.fetchall()
+        cur.close()
+        out: dict[str, dict[str, Any]] = {}
+        for customer_key, visit_id, status in rows:
+            st = str(status or "")
+            out[str(customer_key)] = {
+                "visit_id": int(visit_id) if visit_id is not None else None,
+                "visit_status": st or None,
+                "attention_status": st if st else "pending",
+                "attention_label_es": labels.get(st, "Pendiente" if not st else st),
+            }
+        return out
+    except Exception:
+        return {}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def get_map_for_driver(
     plan_id: int,
     *,
@@ -1063,6 +1144,7 @@ def get_map_for_driver(
     origin_lng: float | None = None,
 ) -> dict[str, Any]:
     bundle = _build_client_index(int(plan_id))
+    attention = _visit_attention_by_customer(int(plan_id))
     markers = []
     for c in bundle["clients"]:
         if not c.get("has_coordinates"):
@@ -1072,6 +1154,12 @@ def get_map_for_driver(
         dist = None
         if origin_lat is not None and origin_lng is not None:
             dist = round(_haversine_m(origin_lat, origin_lng, lat, lng), 1)
+        att = attention.get(str(c["customer_key"])) or {
+            "visit_id": None,
+            "visit_status": None,
+            "attention_status": "pending",
+            "attention_label_es": "Pendiente",
+        }
         markers.append(
             {
                 "customer_key": c["customer_key"],
@@ -1084,6 +1172,11 @@ def get_map_for_driver(
                 "coordinates_source": c.get("coordinates_source"),
                 "document_count": c.get("document_count") or 0,
                 "units_total": c.get("units_total") or 0,
+                "amount_total": c.get("amount_total"),
+                "visit_id": att.get("visit_id"),
+                "visit_status": att.get("visit_status"),
+                "attention_status": att.get("attention_status") or "pending",
+                "attention_label_es": att.get("attention_label_es") or "Pendiente",
                 "load_groups": [
                     {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
                     for g in (c.get("load_groups") or [])

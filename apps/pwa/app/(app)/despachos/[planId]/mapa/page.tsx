@@ -5,6 +5,7 @@ import { useParams } from "next/navigation"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { DeliveryMap } from "@/components/delivery-map"
 import { ApiError, getMyMapa, type DriverMapMarker } from "@/lib/api"
+import { moneyCLP } from "@/lib/delivery-flow"
 type UserLoc = { lat: number; lng: number; accuracy: number | null }
 
 const GEO_PREF_KEY = "pwa.mapa.liveGps"
@@ -208,7 +209,15 @@ export default function MapaPage() {
               </div>
               <div className="meta-row">
                 <span className="muted">Monto</span>
-                <span>Ver ficha</span>
+                <span>
+                  {typeof selected.amount_total === "number"
+                    ? moneyCLP(selected.amount_total)
+                    : "Monto no disponible"}
+                </span>
+              </div>
+              <div className="meta-row">
+                <span className="muted">Estado</span>
+                <span>{selected.attention_label_es || "Pendiente"}</span>
               </div>
               <p className="muted" style={{ fontSize: "0.75rem", margin: "6px 0 10px" }}>
                 Coordenadas precargadas · no implica GPS verificado en terreno

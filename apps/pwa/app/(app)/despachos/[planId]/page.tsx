@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useState } from "react"
 import { ApiError, getMyDespacho, type DriverDespacho } from "@/lib/api"
+import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDate, statusLabel } from "@/lib/format"
 
 export default function DespachoDetailPage() {
@@ -84,18 +85,22 @@ export default function DespachoDetailPage() {
             <span className="kpi-value">{plan.client_count ?? "—"}</span>
           </div>
           <div className="kpi">
-            <span className="kpi-label">Órdenes</span>
-            <span className="kpi-value">{plan.order_count ?? "—"}</span>
+            <span className="kpi-label">Documentos</span>
+            <span className="kpi-value">{plan.document_count ?? "—"}</span>
           </div>
         </div>
 
         <div className="meta-row" style={{ marginTop: 12 }}>
           <span className="muted">Total picking</span>
-          <span>Monto no disponible</span>
+          <span>
+            {typeof plan.amount_total === "number"
+              ? moneyCLP(plan.amount_total)
+              : "Monto no disponible"}
+          </span>
         </div>
         <p className="muted" style={{ margin: "6px 0 0", fontSize: "0.75rem" }}>
-          Estado del plan = preparación operativa ({statusLabel(plan.status)}). No
-          equivale al avance de entregas en terreno.
+          Total = facturas confirmadas (c/IVA), sin duplicar documentos. Estado del
+          plan ({statusLabel(plan.status)}) es preparación, no avance de entregas.
         </p>
       </div>
 
