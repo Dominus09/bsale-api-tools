@@ -186,7 +186,6 @@ function ResultadoInner() {
           share={report?.share}
           header={report?.header}
           busy={busy}
-          showFamilyActions
           generateLabel="Generar / regenerar reporte"
           onGenerate={async () => {
             if (!visitId) return

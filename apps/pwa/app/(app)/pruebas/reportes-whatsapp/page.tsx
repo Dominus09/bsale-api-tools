@@ -52,8 +52,8 @@ export default function DemoWhatsappReportsPage() {
           🧪 Prueba — reportes WhatsApp
         </h2>
         <p className="muted" style={{ margin: 0, fontSize: "0.85rem" }}>
-          DATOS FICTICIOS — NO CORRESPONDE A UNA ENTREGA REAL. Use el compartir nativo
-          o WhatsApp y elija manualmente su grupo familiar. No se envía nada solo.
+          DATOS FICTICIOS — NO CORRESPONDE A UNA ENTREGA REAL. El botón abre el grupo
+          familiar de prueba con el mensaje precargado; confirme Enviar en WhatsApp.
         </p>
       </div>
 

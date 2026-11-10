@@ -155,6 +155,17 @@ input {
   color: var(--text);
 }
 
+.btn-whatsapp {
+  background: #25d366;
+  border-color: #1ebe57;
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn-whatsapp:hover:not(:disabled) {
+  background: #1ebe57;
+}
+
 .btn-row {
   display: flex;
   flex-wrap: wrap;

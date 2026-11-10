@@ -2,12 +2,8 @@
 
 import { useState } from "react"
 import {
-  buildWhatsappTextUrl,
-  copyReportAndOpenFamily,
-  copyTextSafe,
-  FAMILY_WHATSAPP_INVITE_URL,
-  openFamilyGroup,
-  openWhatsappWithText,
+  OPERATIONAL_WHATSAPP_INVITE_URL,
+  openWhatsappReport,
 } from "@/lib/family-whatsapp"
 
 type ShareMeta = {
@@ -20,99 +16,38 @@ type Props = {
   reportText: string | null
   share?: ShareMeta | null
   header?: string | null
+  /** Solo modo demostración familiar: destino = grupo de pruebas. */
   demo?: boolean
   busy?: boolean
-  /** Mostrar acciones de grupo familiar (resultado real o demo). */
-  showFamilyActions?: boolean
   onGenerate: () => Promise<void>
   generateLabel?: string
 }
 
-type SharePhase = "idle" | "generated" | "share_requested" | "cancelled" | "unavailable"
+type SharePhase = "idle" | "generated" | "opened" | "unavailable"
 
 export function WhatsappSharePanel(props: Props) {
   const [phase, setPhase] = useState<SharePhase>(props.reportText ? "generated" : "idle")
-  const [copied, setCopied] = useState(false)
-  const [familyMsg, setFamilyMsg] = useState<string | null>(null)
   const [localErr, setLocalErr] = useState<string | null>(null)
-  const [showManual, setShowManual] = useState(false)
-  const family = Boolean(props.demo || props.showFamilyActions)
 
-  async function copyText() {
-    if (!props.reportText) return
-    const ok = await copyTextSafe(props.reportText)
-    if (ok) {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-      setLocalErr(null)
-    } else {
-      setLocalErr("No se pudo copiar. Seleccione el texto manualmente.")
-      setShowManual(true)
-    }
-  }
-
-  async function copyAndOpenFamily() {
+  function sendReportByWhatsapp() {
     if (!props.reportText) return
     setLocalErr(null)
-    setFamilyMsg(null)
-    const res = await copyReportAndOpenFamily(props.reportText)
-    if (res.copied) {
-      setCopied(true)
-      setFamilyMsg("Reporte copiado. Pegue en el grupo familiar y envíe.")
-      setTimeout(() => setCopied(false), 2500)
-    } else {
-      setShowManual(true)
-      setLocalErr("No se pudo copiar automáticamente. Use Copiar reporte y luego Abrir grupo.")
-    }
-    if (!res.opened) {
-      setShowManual(true)
+    try {
+      openWhatsappReport(props.reportText, props.demo ? "demo" : "real")
+      setPhase("opened")
+    } catch {
+      setPhase("unavailable")
+      setLocalErr(
+        "No se pudo abrir WhatsApp. Genere el reporte de nuevo o copie el texto manualmente.",
+      )
     }
   }
 
-  function shareWithPrefill() {
-    if (!props.reportText) return
-    setLocalErr(null)
-    setPhase("share_requested")
-    // Mecanismo oficial: wa.me/?text= (el usuario elige el chat/grupo).
-    openWhatsappWithText(props.reportText)
-  }
-
-  async function shareNativeOrFallback() {
-    if (!props.reportText) return
-    setLocalErr(null)
-    setPhase("share_requested")
-
-    const canNative =
-      typeof navigator !== "undefined" &&
-      typeof navigator.share === "function" &&
-      (!navigator.canShare || navigator.canShare({ text: props.reportText }))
-
-    if (canNative) {
-      try {
-        await navigator.share({
-          title: props.header || "Reporte Quillotana",
-          text: props.reportText,
-        })
-        return
-      } catch (e) {
-        const name = e instanceof DOMException ? e.name : ""
-        if (name === "AbortError") {
-          setPhase("cancelled")
-          return
-        }
-      }
-    }
-
-    const url = props.share?.whatsapp_url || buildWhatsappTextUrl(props.reportText)
-    if (url) {
-      window.open(url, "_blank", "noopener,noreferrer")
-      return
-    }
-    setPhase("unavailable")
-    setLocalErr(
-      "WhatsApp / compartir no disponible. Copie el texto y péguelo manualmente.",
-    )
-  }
+  const hint = props.demo
+    ? "Abre el grupo familiar de prueba con el mensaje precargado. Debe confirmar Enviar en WhatsApp. La app no envía sola."
+    : OPERATIONAL_WHATSAPP_INVITE_URL
+      ? "Abre el grupo operativo con el mensaje precargado. Debe confirmar Enviar en WhatsApp. La app no envía sola."
+      : "Abre WhatsApp con el texto precargado para que elija el chat. Debe confirmar Enviar. La app no envía sola."
 
   return (
     <div className="stack-gap">
@@ -142,88 +77,27 @@ export function WhatsappSharePanel(props: Props) {
           <div className="ficha-summary">
             <span className="pill pill-ok">Reporte generado</span>
             <span className="pill">
-              {phase === "share_requested"
-                ? "Compartir solicitado (envío no verificable)"
-                : phase === "cancelled"
-                  ? "Compartir cancelado"
-                  : phase === "unavailable"
-                    ? "Compartir no disponible"
-                    : "Listo para compartir"}
+              {phase === "opened"
+                ? "WhatsApp abierto (envío no verificable)"
+                : phase === "unavailable"
+                  ? "WhatsApp no disponible"
+                  : "Listo para compartir"}
             </span>
           </div>
 
           <pre className="report-pre">{props.reportText}</pre>
 
-          {family ? (
-            <div className="stack-gap">
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={props.busy}
-                onClick={() => void copyAndOpenFamily()}
-              >
-                Copiar reporte y abrir grupo familiar
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={props.busy}
-                onClick={() => shareWithPrefill()}
-              >
-                Compartir con texto precargado
-              </button>
-              {showManual ? (
-                <div className="btn-row">
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => void copyText()}
-                  >
-                    {copied ? "Copiado" : "Copiar reporte"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => openFamilyGroup()}
-                  >
-                    Abrir grupo familiar
-                  </button>
-                </div>
-              ) : null}
-              <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
-                No se envía automáticamente. El enlace de invitación no recibe texto;
-                use &quot;texto precargado&quot; (wa.me) para elegir el grupo, o copie y pegue.
-                {props.demo
-                  ? ` Demo: ${FAMILY_WHATSAPP_INVITE_URL.split("?")[0]}`
-                  : ""}
-              </p>
-            </div>
-          ) : null}
-
-          <div className="btn-row">
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={props.busy}
-              onClick={() => void shareNativeOrFallback()}
-            >
-              Compartir por WhatsApp
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={props.busy}
-              onClick={() => void copyText()}
-            >
-              {copied ? "Copiado" : "Copiar mensaje"}
-            </button>
-          </div>
-
-          {familyMsg ? <div className="banner banner-info">{familyMsg}</div> : null}
+          <button
+            type="button"
+            className="btn btn-whatsapp"
+            disabled={props.busy}
+            onClick={() => sendReportByWhatsapp()}
+          >
+            Enviar reporte por WhatsApp
+          </button>
 
           <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
-            {props.share?.note_es ||
-              "Seleccione el grupo en WhatsApp y confirme el envío. Abrir el menú no acredita entrega."}
+            {props.share?.note_es || hint}
           </p>
         </>
       )}
