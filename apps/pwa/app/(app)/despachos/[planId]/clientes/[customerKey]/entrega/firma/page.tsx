@@ -1,38 +1,35 @@
 "use client"
 
 import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { useMemo, useState } from "react"
-import {
-  ApiError,
-  finalizeDeliveryVisit,
-  generateVisitWhatsappReport,
-  type WhatsappReportResponse,
-} from "@/lib/api"
+import { useMemo, useRef, useState } from "react"
+import { ApiError, finalizeDeliveryVisit } from "@/lib/api"
 import { DeliverySignaturePad } from "@/components/delivery-signature-pad"
 import { DeliveryStepChrome } from "@/components/delivery-step-chrome"
-import { WhatsappSharePanel } from "@/components/whatsapp-share-panel"
 import {
   filterActiveCollections,
   summarizeCollections,
 } from "@/lib/active-collections"
 import { docStatusLabel, paymentMethodLabel } from "@/lib/delivery-labels"
 import { buildEntregaHref, moneyCLP } from "@/lib/delivery-flow"
+import {
+  isClosedVisitStatus,
+  navigateToResultado,
+  resultadoHref,
+} from "@/lib/finalize-visit-nav"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
 
 export default function EntregaFirmaPage() {
   const { planId, customerKey } = useDeliveryParams()
-  const router = useRouter()
   const session = useVisitSession(planId, customerKey)
   const cobranzaHref = buildEntregaHref(planId, customerKey, "cobranza")
   const [conformityOk, setConformityOk] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [confirmEnd, setConfirmEnd] = useState(false)
-  const [report, setReport] = useState<WhatsappReportResponse | null>(null)
-  const [closed, setClosed] = useState(false)
+  const [closingMsg, setClosingMsg] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const finalizeLock = useRef(false)
 
   const detail = session.visitDetail
   const lines = detail?.lines || []
@@ -95,7 +92,7 @@ export default function EntregaFirmaPage() {
     if (summary.credit > 0) {
       compact.push(`Crédito: ${moneyCLP(summary.credit)}`)
     }
-    for (const [method, amt] of summary.byMethod) {
+    for (const [method, amt] of Array.from(summary.byMethod.entries())) {
       if (
         method === "cash" ||
         method === "transfer_declared" ||
@@ -148,10 +145,13 @@ export default function EntregaFirmaPage() {
     : compactLines
 
   async function onFinalize() {
+    if (finalizeLock.current || busy) return
     const visit = session.activeVisit
     if (!visit) return
+    finalizeLock.current = true
     setBusy(true)
     setErr(null)
+    setClosingMsg("Guardando cierre…")
     try {
       const gps = await new Promise<{
         lat: number
@@ -195,36 +195,60 @@ export default function EntregaFirmaPage() {
       })
       if (!res.persisted) {
         setErr("El servidor no confirmó el cierre.")
+        setClosingMsg(null)
         return
       }
-      setClosed(true)
-      setConfirmEnd(false)
-      try {
-        const wa = await generateVisitWhatsappReport(planId, res.visit.id, {
-          client_name: session.clientName,
-        })
-        setReport(wa)
-      } catch {
-        /* cierre ok */
+      const closedId = Number(res.visit?.id || visit.id)
+      if (!Number.isFinite(closedId) || closedId < 1) {
+        setErr("Cierre guardado, pero falta el id de visita. Abra la ficha.")
+        setClosingMsg(null)
+        return
       }
-      router.push(
-        buildEntregaHref(planId, customerKey, "resultado", {
-          query: { visitId: res.visit.id },
-        }),
-      )
+      setClosingMsg("Cierre confirmado. Abriendo resultado…")
+      setConfirmEnd(false)
+      // Navegación dura inmediata: no generar WhatsApp aquí (evita crash iOS/PWA).
+      navigateToResultado(planId, customerKey, closedId)
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        const closed = session.latestVisit
+        if (closed && isClosedVisitStatus(closed.status)) {
+          setClosingMsg("La visita ya estaba cerrada. Abriendo resultado…")
+          navigateToResultado(planId, customerKey, closed.id)
+          return
+        }
+      }
       setErr(e instanceof ApiError ? e.message : "No se pudo finalizar")
+      setClosingMsg(null)
     } finally {
+      finalizeLock.current = false
       setBusy(false)
     }
   }
 
   if (session.loading) return <div className="empty">Cargando conformidad…</div>
   if (session.error) return <div className="banner banner-error">{session.error}</div>
+
+  const latest = session.latestVisit
+  if (latest && isClosedVisitStatus(latest.status) && !session.activeVisit) {
+    return (
+      <div className="stack-gap">
+        <div className="banner banner-info">
+          Esta visita ya fue cerrada. No se inicia otra automáticamente.
+        </div>
+        <Link
+          href={resultadoHref(planId, customerKey, latest.id)}
+          className="btn btn-primary"
+        >
+          Ver resultado
+        </Link>
+        <Link href={buildEntregaHref(planId, customerKey, "ficha")} className="btn btn-ghost">
+          Ir a ficha
+        </Link>
+      </div>
+    )
+  }
+
   if (!session.activeVisit || session.activeVisit.status !== "in_progress") {
-    if (closed) {
-      return <div className="empty">Redirigiendo al resultado…</div>
-    }
     return (
       <div className="stack-gap">
         <div className="banner banner-info">Visita no activa.</div>
@@ -277,7 +301,7 @@ export default function EntregaFirmaPage() {
               disabled={busy}
               onClick={() => void onFinalize()}
             >
-              {busy ? "Cerrando…" : "Confirmar cierre"}
+              {busy ? "Guardando cierre…" : "Confirmar cierre"}
             </button>
           </div>
         ) : null
@@ -305,23 +329,8 @@ export default function EntregaFirmaPage() {
         />
       )}
 
+      {closingMsg ? <div className="banner banner-info">{closingMsg}</div> : null}
       {err ? <div className="banner banner-error">{err}</div> : null}
-
-      {report ? (
-        <WhatsappSharePanel
-          reportText={report.report_text}
-          share={report.share}
-          header={report.header}
-          onGenerate={async () => {
-            const res = await generateVisitWhatsappReport(
-              planId,
-              session.activeVisit!.id,
-              { client_name: session.clientName },
-            )
-            setReport(res)
-          }}
-        />
-      ) : null}
     </DeliveryStepChrome>
   )
 }

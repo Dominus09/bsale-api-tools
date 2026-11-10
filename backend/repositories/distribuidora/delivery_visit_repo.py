@@ -50,6 +50,25 @@ def get_active_visit(
     return _row(cur, r) if r else None
 
 
+def get_latest_visit(
+    cur, *, plan_id: int, customer_key: str
+) -> dict[str, Any] | None:
+    """Última visita del cliente en el plan (cualquier estado). Solo lectura."""
+    cur.execute(
+        """
+        SELECT *
+        FROM distribuidora.delivery_visits
+        WHERE dispatch_plan_id = %s
+          AND customer_key = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (int(plan_id), customer_key),
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None
+
+
 def get_visit(cur, visit_id: int) -> dict[str, Any] | None:
     cur.execute(
         "SELECT * FROM distribuidora.delivery_visits WHERE id = %s",

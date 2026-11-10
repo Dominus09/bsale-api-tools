@@ -2,10 +2,12 @@
 
 import { useState } from "react"
 import {
+  buildWhatsappTextUrl,
   copyReportAndOpenFamily,
   copyTextSafe,
   FAMILY_WHATSAPP_INVITE_URL,
   openFamilyGroup,
+  openWhatsappWithText,
 } from "@/lib/family-whatsapp"
 
 type ShareMeta = {
@@ -20,6 +22,8 @@ type Props = {
   header?: string | null
   demo?: boolean
   busy?: boolean
+  /** Mostrar acciones de grupo familiar (resultado real o demo). */
+  showFamilyActions?: boolean
   onGenerate: () => Promise<void>
   generateLabel?: string
 }
@@ -32,6 +36,7 @@ export function WhatsappSharePanel(props: Props) {
   const [familyMsg, setFamilyMsg] = useState<string | null>(null)
   const [localErr, setLocalErr] = useState<string | null>(null)
   const [showManual, setShowManual] = useState(false)
+  const family = Boolean(props.demo || props.showFamilyActions)
 
   async function copyText() {
     if (!props.reportText) return
@@ -64,6 +69,14 @@ export function WhatsappSharePanel(props: Props) {
     }
   }
 
+  function shareWithPrefill() {
+    if (!props.reportText) return
+    setLocalErr(null)
+    setPhase("share_requested")
+    // Mecanismo oficial: wa.me/?text= (el usuario elige el chat/grupo).
+    openWhatsappWithText(props.reportText)
+  }
+
   async function shareNativeOrFallback() {
     if (!props.reportText) return
     setLocalErr(null)
@@ -90,7 +103,7 @@ export function WhatsappSharePanel(props: Props) {
       }
     }
 
-    const url = props.share?.whatsapp_url
+    const url = props.share?.whatsapp_url || buildWhatsappTextUrl(props.reportText)
     if (url) {
       window.open(url, "_blank", "noopener,noreferrer")
       return
@@ -141,7 +154,7 @@ export function WhatsappSharePanel(props: Props) {
 
           <pre className="report-pre">{props.reportText}</pre>
 
-          {props.demo ? (
+          {family ? (
             <div className="stack-gap">
               <button
                 type="button"
@@ -150,6 +163,14 @@ export function WhatsappSharePanel(props: Props) {
                 onClick={() => void copyAndOpenFamily()}
               >
                 Copiar reporte y abrir grupo familiar
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={props.busy}
+                onClick={() => shareWithPrefill()}
+              >
+                Compartir con texto precargado
               </button>
               {showManual ? (
                 <div className="btn-row">
@@ -170,8 +191,11 @@ export function WhatsappSharePanel(props: Props) {
                 </div>
               ) : null}
               <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
-                No se envía automáticamente. Copie, abra el grupo, pegue y envíe.
-                Enlace demo: {FAMILY_WHATSAPP_INVITE_URL.split("?")[0]}
+                No se envía automáticamente. El enlace de invitación no recibe texto;
+                use &quot;texto precargado&quot; (wa.me) para elegir el grupo, o copie y pegue.
+                {props.demo
+                  ? ` Demo: ${FAMILY_WHATSAPP_INVITE_URL.split("?")[0]}`
+                  : ""}
               </p>
             </div>
           ) : null}

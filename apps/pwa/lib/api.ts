@@ -298,6 +298,7 @@ export async function getMyCliente(
     note_es?: string
   }
   active_visit?: DeliveryVisit | null
+  latest_visit?: DeliveryVisit | null
   capabilities?: {
     start_delivery_visit?: boolean
     mode?: string
@@ -331,6 +332,7 @@ export type DeliveryVisit = {
   }
   gps_exception_code?: string | null
   gps_exception_note?: string | null
+  closure_review_status?: string | null
   version: number
 }
 

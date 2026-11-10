@@ -1,7 +1,6 @@
 "use client"
 
 import Link from "next/link"
-import { useRouter } from "next/navigation"
 import { useRef, useState } from "react"
 import {
   ApiError,
@@ -10,6 +9,7 @@ import {
   uploadVisitEvidence,
 } from "@/lib/api"
 import { buildEntregaHref } from "@/lib/delivery-flow"
+import { navigateToResultado } from "@/lib/finalize-visit-nav"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
 
@@ -23,7 +23,6 @@ const REASONS = [
 
 export default function EntregaIncidenciaPage() {
   const { planId, customerKey } = useDeliveryParams()
-  const router = useRouter()
   const session = useVisitSession(planId, customerKey)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const [reason, setReason] = useState("closed_store")
@@ -142,11 +141,8 @@ export default function EntregaIncidenciaPage() {
         setErr("El servidor no confirmó el cierre.")
         return
       }
-      router.push(
-        buildEntregaHref(planId, customerKey, "resultado", {
-          query: { visitId: res.visit.id },
-        }),
-      )
+      const closedId = Number(res.visit?.id || visit.id)
+      navigateToResultado(planId, customerKey, closedId)
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "No se pudo finalizar")
     } finally {

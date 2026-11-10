@@ -147,11 +147,17 @@ export default function ClienteFichaPage() {
           <span className="pill">
             {totals.count} doc. · {moneyCLP(totals.amount)}
           </span>
-          <span className={`pill${visit?.status === "in_progress" ? " pill-ok" : ""}`}>
+          <span
+            className={`pill${
+              visit?.status === "in_progress" || data.latest_visit?.status
+                ? " pill-ok"
+                : ""
+            }`}
+          >
             Visita ·{" "}
             {visit?.status === "in_progress"
               ? "En atención"
-              : visitStatusLabel(visit?.status)}
+              : visitStatusLabel(data.latest_visit?.status || visit?.status)}
           </span>
           {(c.load_groups || []).map((g) => (
             <span key={`${g.load_batch_id}-${g.name}`} className="pill">
@@ -182,6 +188,7 @@ export default function ClienteFichaPage() {
         p4Ready={Boolean(data.p4?.tables_ready)}
         p4Note={data.p4?.note_es}
         activeVisit={data.active_visit || null}
+        latestVisit={data.latest_visit || data.active_visit || null}
         onChanged={() => setReloadToken((n) => n + 1)}
       />
 

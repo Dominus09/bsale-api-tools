@@ -984,6 +984,12 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
         )
     except Exception:
         active_visit = None
+    try:
+        latest_visit = visit_svc.get_latest_visit_for_client(
+            plan_id=int(plan_id), customer_key=key
+        )
+    except Exception:
+        latest_visit = active_visit
 
     return serialize_value(
         {
@@ -994,6 +1000,7 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
             "p3": p3_status,
             "p4": p4_status,
             "active_visit": active_visit,
+            "latest_visit": latest_visit,
             "documents": documents_out,
             "document_count": len(documents_out),
             "units_total": client.get("units_total") or 0,

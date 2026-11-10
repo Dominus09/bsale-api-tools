@@ -2,6 +2,15 @@
 export const FAMILY_WHATSAPP_INVITE_URL =
   "https://chat.whatsapp.com/K62IagsvHLD6ehQCknBnOI?s=cl&p=i&mlu=4&ilr=4&iam=2"
 
+/** URL oficial wa.me con texto precargado (el usuario elige el chat). */
+export function buildWhatsappTextUrl(text: string): string {
+  return `https://wa.me/?text=${encodeURIComponent(text)}`
+}
+
+export function openWhatsappWithText(text: string): void {
+  window.location.href = buildWhatsappTextUrl(text)
+}
+
 export async function copyTextSafe(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {

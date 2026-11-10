@@ -19,6 +19,8 @@ export type VisitSession = {
   documentCount: number
   documentTotal: number
   activeVisit: DeliveryVisit | null
+  /** Última visita del plan/cliente (activa o cerrada). */
+  latestVisit: DeliveryVisit | null
   visitDetail: Awaited<ReturnType<typeof getVisitDetail>> | null
   reload: () => void
   loading: boolean
@@ -52,7 +54,7 @@ export function useVisitSession(planId: number, customerKey: string): VisitSessi
         if (cancelled) return
         setClientPayload(res)
         setError(null)
-        const visit = res.active_visit
+        const visit = res.active_visit || res.latest_visit
         if (visit?.id) {
           try {
             const detail = await getVisitDetail(planId, visit.id)
@@ -98,6 +100,7 @@ export function useVisitSession(planId: number, customerKey: string): VisitSessi
     documentCount: clientPayload?.document_count || documents.length,
     documentTotal,
     activeVisit: clientPayload?.active_visit || null,
+    latestVisit: clientPayload?.latest_visit || clientPayload?.active_visit || null,
     visitDetail,
     reload,
     loading,

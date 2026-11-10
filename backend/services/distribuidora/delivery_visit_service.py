@@ -169,6 +169,25 @@ def get_active_visit_for_client(
     return _visit_public(row) if row else None
 
 
+def get_latest_visit_for_client(
+    *, plan_id: int, customer_key: str
+) -> dict[str, Any] | None:
+    """Última visita del cliente (activa o cerrada). No crea ni muta."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not visit_repo.tables_ready(cur):
+            cur.close()
+            return None
+        row = visit_repo.get_latest_visit(
+            cur, plan_id=int(plan_id), customer_key=customer_key.strip()
+        )
+        cur.close()
+    finally:
+        conn.close()
+    return _visit_public(row) if row else None
+
+
 def start_visit(
     *,
     user: dict[str, Any],

@@ -8,6 +8,10 @@ import {
   startDeliveryVisit,
 } from "@/lib/api"
 import { buildEntregaHref, visitStatusLabel } from "@/lib/delivery-flow"
+import {
+  isClosedVisitStatus,
+  resultadoHref,
+} from "@/lib/finalize-visit-nav"
 
 type Props = {
   planId: number
@@ -18,6 +22,7 @@ type Props = {
   p4Ready: boolean
   p4Note?: string | null
   activeVisit: DeliveryVisit | null
+  latestVisit?: DeliveryVisit | null
   onChanged: () => void
 }
 
@@ -54,9 +59,14 @@ export function DeliveryVisitStart(props: Props) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [confirmStart, setConfirmStart] = useState(false)
+  const [confirmNewAfterClosed, setConfirmNewAfterClosed] = useState(false)
 
   const visit = props.activeVisit
+  const latest = props.latestVisit || props.activeVisit
   const inProgress = visit?.status === "in_progress"
+  const closedLatest =
+    !inProgress && latest != null && isClosedVisitStatus(latest.status)
+
   const startLabel = useMemo(
     () => (inProgress ? "Retomar entrega" : "Comenzar entrega"),
     [inProgress],
@@ -88,6 +98,7 @@ export function DeliveryVisitStart(props: Props) {
           }
       const res = await startDeliveryVisit(props.planId, props.customerKey, body)
       setConfirmStart(false)
+      setConfirmNewAfterClosed(false)
       props.onChanged()
       const href = buildEntregaHref(props.planId, props.customerKey, "documentos")
       router.push(href)
@@ -112,6 +123,77 @@ export function DeliveryVisitStart(props: Props) {
       <div className="banner banner-info" style={{ fontSize: "0.85rem" }}>
         Visitas de entrega no disponibles aún
         {props.p4Note ? `: ${props.p4Note}` : " (migración 056 pendiente)."}
+      </div>
+    )
+  }
+
+  if (closedLatest && latest) {
+    return (
+      <div className="card">
+        <div className="ficha-summary" style={{ marginBottom: 10 }}>
+          <span className="pill pill-ok">{visitStatusLabel(latest.status)}</span>
+          <span className="pill">Visita #{latest.id}</span>
+          {latest.ended_at_local ? (
+            <span className="pill">
+              Cierre {String(latest.ended_at_local).slice(11, 16)}
+            </span>
+          ) : null}
+        </div>
+        <p className="muted" style={{ fontSize: "0.82rem", marginTop: 0 }}>
+          Entrega ya cerrada en servidor. No se crea otra visita al abrir el
+          resultado.
+        </p>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() =>
+            router.push(resultadoHref(props.planId, props.customerKey, latest.id))
+          }
+        >
+          Ver resultado
+        </button>
+        {!confirmNewAfterClosed ? (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            style={{ marginTop: 8 }}
+            disabled={busy}
+            onClick={() => setConfirmNewAfterClosed(true)}
+          >
+            Iniciar nueva visita
+          </button>
+        ) : (
+          <div className="stack-gap" style={{ marginTop: 8 }}>
+            <p style={{ margin: 0, fontSize: "0.85rem" }}>
+              Esto creará una visita nueva. Use solo si debe atender de nuevo al
+              mismo cliente.
+            </p>
+            <div className="btn-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={busy}
+                onClick={() => void onStart()}
+              >
+                {busy ? "Guardando…" : "Confirmar nueva visita"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={busy}
+                onClick={() => setConfirmNewAfterClosed(false)}
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+        {err ? (
+          <div className="banner banner-error" style={{ marginTop: 10 }}>
+            {err}
+          </div>
+        ) : null}
       </div>
     )
   }
