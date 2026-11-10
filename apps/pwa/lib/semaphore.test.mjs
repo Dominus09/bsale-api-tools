@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { resolveSemaphore } from "./semaphore.ts"
+import { resolveSemaphore, validationLabelEs } from "./semaphore.ts"
 
 describe("semaphore", () => {
   it("verde completa", () => {
@@ -23,5 +23,11 @@ describe("semaphore", () => {
   it("neutro pendiente", () => {
     const s = resolveSemaphore({ status: null })
     assert.equal(s.color, "neutral")
+  })
+  it("validación independiente no cambia semáforo", () => {
+    const s = resolveSemaphore({ status: "not_delivered", resultReason: "closed_store" })
+    assert.equal(s.color, "red")
+    assert.match(validationLabelEs("pending_review") || "", /pendiente de validación/i)
+    assert.match(validationLabelEs("verified") || "", /verificada/i)
   })
 })

@@ -7,7 +7,7 @@ import { ApiError, listMyClientes, type DriverClientCard } from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDistanceM, haversineMeters } from "@/lib/geo"
 import { asAmount } from "@/lib/money-display"
-import { resolveSemaphore } from "@/lib/semaphore"
+import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 
 type Filter = "all" | "pending" | "delivered"
 type SortMode = "route" | "near" | "name"
@@ -317,9 +317,19 @@ export default function ClientesPage() {
                   semaphoreColor: c.semaphore_color,
                   attentionLabel: c.attention_label_es,
                 })
+                const val = validationLabelEs(c.closure_review_status)
                 return (
                   <div className="group-row" style={{ marginTop: 6 }}>
                     <span className={`sem-pill ${sem.cssClass}`}>{sem.labelEs}</span>
+                    {val ? (
+                      <span
+                        className={`pill${
+                          c.closure_review_status === "pending_review" ? " pill-warn" : ""
+                        }`}
+                      >
+                        {val}
+                      </span>
+                    ) : null}
                   </div>
                 )
               })()}

@@ -5,7 +5,8 @@ import { useParams } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
 import { ApiError, getMyCliente } from "@/lib/api"
 import { formatRutDisplay } from "@/lib/format-rut"
-import { moneyCLP, visitStatusLabel } from "@/lib/delivery-flow"
+import { moneyCLP } from "@/lib/delivery-flow"
+import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 import { DeliveryLocalToolsHost } from "@/components/delivery-local-tools-host"
 import { DeliveryVisitStart } from "@/components/delivery-visit-start"
 import { asAmount } from "@/lib/money-display"
@@ -93,11 +94,16 @@ export default function ClienteFichaPage() {
     : visit?.status === "in_progress"
       ? "in_progress"
       : closed?.status || data.latest_visit?.status || visit?.status
+  const sem = resolveSemaphore({
+    status: operationalStatus,
+    resultReason: closed?.result_reason || visit?.result_reason,
+  })
   const operationalLabel = adminReview
-    ? `${visitStatusLabel(closed?.status)} · revisión admin`
+    ? `${sem.labelEs} · revisión admin`
     : visit?.status === "in_progress" && !adminReview
       ? "En atención"
-      : visitStatusLabel(operationalStatus)
+      : sem.labelEs
+  const valLabel = validationLabelEs(closed?.closure_review_status)
   const obs = (c.observations || "").trim()
   const backClients = `/despachos/${planId}/clientes`
   const loadGroup =
@@ -193,13 +199,16 @@ export default function ClienteFichaPage() {
         </div>
 
         <div className="group-row" style={{ marginTop: 10 }}>
-          <span
-            className={`pill${
-              operationalStatus && operationalStatus !== "cancelled" ? " pill-ok" : ""
-            }`}
-          >
-            {operationalLabel}
-          </span>
+          <span className={`sem-pill ${sem.cssClass}`}>{operationalLabel}</span>
+          {valLabel ? (
+            <span
+              className={`pill${
+                closed?.closure_review_status === "pending_review" ? " pill-warn" : ""
+              }`}
+            >
+              {valLabel}
+            </span>
+          ) : null}
         </div>
       </div>
 

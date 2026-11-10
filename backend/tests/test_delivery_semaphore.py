@@ -30,6 +30,33 @@ def test_within_300m_ok():
     assert out["distance_m"] <= 300
 
 
+def test_exactly_300m_accepted():
+    # ~300 m al norte: 300/111320 ≈ 0.002695°
+    delta = 300.0 / 111320.0
+    out = sem.assert_within_incident_radius(
+        driver_lat=-33.4500,
+        driver_lng=-70.6500,
+        client_lat=-33.4500 + delta,
+        client_lng=-70.6500,
+        max_m=300.0,
+    )
+    assert out["within_radius"] is True
+    assert out["distance_m"] <= 300.5
+
+
+def test_just_over_300m_rejected():
+    delta = 310.0 / 111320.0
+    with pytest.raises(HTTPException) as ei:
+        sem.assert_within_incident_radius(
+            driver_lat=-33.4500,
+            driver_lng=-70.6500,
+            client_lat=-33.4500 + delta,
+            client_lng=-70.6500,
+            max_m=300.0,
+        )
+    assert ei.value.detail["code"] == "GPS_OUT_OF_RANGE"
+
+
 def test_outside_300m_message():
     with pytest.raises(HTTPException) as ei:
         sem.assert_within_incident_radius(

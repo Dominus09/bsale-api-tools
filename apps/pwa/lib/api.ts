@@ -148,6 +148,7 @@ export type DriverClientCard = {
   attention_label_es?: string | null
   semaphore_color?: string | null
   semaphore_code?: string | null
+  closure_review_status?: string | null
   admin_review_pending?: boolean
 }
 
@@ -220,6 +221,7 @@ export type DriverMapMarker = {
   attention_label_es?: string | null
   semaphore_color?: string | null
   semaphore_code?: string | null
+  closure_review_status?: string | null
   load_groups: LoadGroupRef[]
   distance_m?: number | null
   navigation?: {

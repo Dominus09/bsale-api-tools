@@ -214,28 +214,18 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
 
     products = data.get("products") or []
     full_n, partial_n, none_n = _line_counts(products)
+    # Semáforo (resultado) ≠ validación (closure_review_status).
     pending_review = str(data.get("closure_review_status") or "") == "pending_review"
-    if pending_review and template in (
-        "closed_store",
-        "not_found",
-        "rejected_order",
-        "absent_customer",
-        "other_incident",
-        "partial",
-    ):
-        header = "🟡 QUILLOTANA | PENDIENTE DE VALIDACIÓN"
-    gps_line = (
-        "📍 GPS validado (≤300 m)"
-        if data.get("gps_within_radius") and not pending_review
-        else (
-            "📍 GPS: pendiente de validación"
-            if pending_review
-            else (
-                f"📍 GPS: {'registrado' if data.get('gps_registered') else 'no'} "
-                "(sin coords en mensaje)"
-            )
+    gps_ok = bool(data.get("gps_within_radius")) and not pending_review
+    if gps_ok:
+        gps_line = "📍 GPS validado (≤300 m)"
+    elif pending_review:
+        gps_line = "⚠️ GPS pendiente de validación"
+    else:
+        gps_line = (
+            f"📍 GPS: {'registrado' if data.get('gps_registered') else 'no'} "
+            "(sin coords en mensaje)"
         )
-    )
     evid = data.get("evidence_status") or "pendiente"
     if template in (
         "closed_store",
@@ -246,26 +236,29 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
     ):
         reason = data.get("result_reason")
         reason_es = REASON_ES.get(reason, reason or sem.get("label_es") or "Incidencia")
-        footer = (
-            "✍️ Datos de prueba"
-            if demo
-            else (
-                "✍️ PENDIENTE DE VALIDACIÓN"
-                if pending_review
-                else "✍️ Incidencia registrada"
-            )
-        )
+        # Máx. 6 líneas: header rojo/motivo + cliente + evidencia + GPS/validación.
         lines = [
-            header,
+            header,  # conserva 🔴 LOCAL CERRADO / RECHAZADO (no sustituir por amarillo)
             f"🏪 {client} · {docs_s}",
             f"📝 {reason_es}",
             f"📷 Evidencia: {evid}",
             gps_line,
-            footer,
+            (
+                "✍️ Datos de prueba"
+                if demo
+                else (
+                    "⚠️ Validación pendiente"
+                    if pending_review
+                    else "✍️ Incidencia registrada"
+                )
+            ),
         ]
     else:
         pay_line, pend_line = _collection_compact(list(data.get("collections") or []))
         sig = data.get("signature_status") or "pendiente"
+        if pending_review:
+            # Sustituye la línea de firma/aviso: no cambia el semáforo del header.
+            pend_line = "⚠️ Validación pendiente"
         lines = [
             header,
             f"🏪 {client} · {docs_s}",

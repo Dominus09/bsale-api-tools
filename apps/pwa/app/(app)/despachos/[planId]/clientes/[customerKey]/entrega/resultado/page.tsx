@@ -155,14 +155,12 @@ function ResultadoInner() {
         <div className="ficha-summary" style={{ justifyContent: "center" }}>
           <span className={`sem-pill ${sem.cssClass}`}>{sem.labelEs}</span>
           <span className="pill">Visita #{visitId}</span>
-          {review ? (
-            <span className="pill">
-              {review === "verified"
-                ? "Cierre verificado"
-                : review === "pending_review"
-                  ? "Pendiente de revisión"
-                  : String(review)}
-            </span>
+          {review === "verified" ? (
+            <span className="pill pill-ok">Validación: verificada</span>
+          ) : review === "pending_review" ? (
+            <span className="pill pill-warn">⚠️ GPS pendiente de validación</span>
+          ) : review ? (
+            <span className="pill">{String(review)}</span>
           ) : null}
         </div>
       </div>

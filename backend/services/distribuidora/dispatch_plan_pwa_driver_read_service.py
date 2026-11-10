@@ -895,6 +895,7 @@ def list_clients_for_driver(plan_id: int, *, q: str | None = None) -> dict[str, 
                 "attention_label_es": att.get("attention_label_es") or "Pendiente",
                 "semaphore_color": att.get("semaphore_color") or "neutral",
                 "semaphore_code": att.get("semaphore_code") or "pending",
+                "closure_review_status": att.get("closure_review_status"),
                 "admin_review_pending": bool(att.get("admin_review_pending")),
             }
         )
@@ -1142,8 +1143,12 @@ def resolve_visit_attention_rows(
     """Estado operativo por cliente.
 
     Filas: (customer_key, id, status, result_reason, ended_at
-            [, admin_classification, voided_at, voided_by, void_reason])
+            [, admin_classification, voided_at, voided_by, void_reason
+             [, closure_review_status]])
     Compat: filas antiguas sin result_reason (len<=4 con ended_at en [3]).
+
+    Semáforo (color) es resultado de entrega; closure_review_status es validación
+    independiente (nunca convierte rojo→amarillo).
     """
     from backend.services.distribuidora.delivery_semaphore import resolve_semaphore
 
@@ -1163,9 +1168,11 @@ def resolve_visit_attention_rows(
             actor = 0
         return actor > 0 and len(str(void_reason or "").strip()) > 0
 
-    def _parse_row(row: tuple[Any, ...]) -> tuple[str, int, str, str | None, Any] | None:
+    def _parse_row(
+        row: tuple[Any, ...],
+    ) -> tuple[str, int, str, str | None, Any, str | None] | None:
         """Soporta:
-        - Canónico: key,id,status,result_reason,ended_at[,admin...]
+        - Canónico: key,id,status,result_reason,ended_at[,admin...][,closure_review]
         - Legacy tests: key,id,status,ended_at[,admin...] (sin result_reason)
         """
         n = len(row)
@@ -1180,6 +1187,7 @@ def resolve_visit_attention_rows(
             voided_at = row[5] if n > 5 else None
             voided_by = row[6] if n > 6 else None
             void_reason = row[7] if n > 7 else None
+            review = (str(row[8]).strip() if n > 8 and row[8] else None) or None
             if _voided(admin_class, voided_at, voided_by, void_reason):
                 return None
             return (
@@ -1188,11 +1196,13 @@ def resolve_visit_attention_rows(
                 str(row[2] or ""),
                 None,
                 row[3] if n > 3 else None,
+                review,
             )
         admin_class = row[5] if n > 5 else None
         voided_at = row[6] if n > 6 else None
         voided_by = row[7] if n > 7 else None
         void_reason = row[8] if n > 8 else None
+        review = (str(row[9]).strip() if n > 9 and row[9] else None) or None
         if _voided(admin_class, voided_at, voided_by, void_reason):
             return None
         reason = row[3]
@@ -1202,17 +1212,20 @@ def resolve_visit_attention_rows(
             str(row[2] or ""),
             (str(reason).strip() if reason else None) or None,
             row[4],
+            review,
         )
 
-    by_key: dict[str, list[tuple[int, str, str | None, Any]]] = {}
+    by_key: dict[str, list[tuple[int, str, str | None, Any, str | None]]] = {}
     for row in rows:
         parsed = _parse_row(tuple(row))
         if not parsed:
             continue
-        key, visit_id, status, reason, ended_at = parsed
+        key, visit_id, status, reason, ended_at, review = parsed
         if not key:
             continue
-        by_key.setdefault(key, []).append((visit_id, status, reason, ended_at))
+        by_key.setdefault(key, []).append(
+            (visit_id, status, reason, ended_at, review)
+        )
 
     def _pack(
         *,
@@ -1221,6 +1234,7 @@ def resolve_visit_attention_rows(
         reason: str | None,
         admin_pending: bool,
         open_visit_id: int | None,
+        closure_review: str | None = None,
     ) -> dict[str, Any]:
         sem = resolve_semaphore(status=status, result_reason=reason)
         label = sem["label_es"]
@@ -1234,6 +1248,7 @@ def resolve_visit_attention_rows(
             "attention_label_es": label,
             "semaphore_color": sem["color"],
             "semaphore_code": sem["code"],
+            "closure_review_status": closure_review,
             "admin_review_pending": admin_pending,
             "open_visit_id": open_visit_id,
             "operational_visit_id": visit_id,
@@ -1258,6 +1273,7 @@ def resolve_visit_attention_rows(
                 reason=op[2],
                 admin_pending=bool(active),
                 open_visit_id=active[-1][0] if active else None,
+                closure_review=op[4],
             )
         elif active:
             op = active[-1]
@@ -1267,6 +1283,7 @@ def resolve_visit_attention_rows(
                 reason=None,
                 admin_pending=False,
                 open_visit_id=op[0],
+                closure_review=None,
             )
         elif other_closed:
             op = other_closed[-1]
@@ -1276,6 +1293,7 @@ def resolve_visit_attention_rows(
                 reason=op[2],
                 admin_pending=False,
                 open_visit_id=None,
+                closure_review=op[4],
             )
         else:
             out[key] = _pack(
@@ -1284,6 +1302,7 @@ def resolve_visit_attention_rows(
                 reason=None,
                 admin_pending=False,
                 open_visit_id=None,
+                closure_review=None,
             )
     return out
 
@@ -1304,7 +1323,8 @@ def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
                 """
                 SELECT customer_key, id, status, result_reason, ended_at,
                        admin_classification, voided_at,
-                       voided_by_user_id, void_reason
+                       voided_by_user_id, void_reason,
+                       closure_review_status
                 FROM distribuidora.delivery_visits
                 WHERE dispatch_plan_id = %s
                 ORDER BY customer_key, id
@@ -1314,7 +1334,9 @@ def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
         else:
             cur.execute(
                 """
-                SELECT customer_key, id, status, result_reason, ended_at
+                SELECT customer_key, id, status, result_reason, ended_at,
+                       NULL::text, NULL::timestamptz, NULL::int, NULL::text,
+                       closure_review_status
                 FROM distribuidora.delivery_visits
                 WHERE dispatch_plan_id = %s
                 ORDER BY customer_key, id
@@ -1379,6 +1401,7 @@ def get_map_for_driver(
                 "attention_label_es": att.get("attention_label_es") or "Pendiente",
                 "semaphore_color": att.get("semaphore_color") or "neutral",
                 "semaphore_code": att.get("semaphore_code") or "pending",
+                "closure_review_status": att.get("closure_review_status"),
                 "admin_review_pending": bool(att.get("admin_review_pending")),
                 "open_visit_id": att.get("open_visit_id"),
                 "operational_visit_id": att.get("operational_visit_id"),

@@ -82,3 +82,14 @@ export function mapMarkerClass(color: SemaphoreColor): string {
       return "map-marker map-marker-neutral"
   }
 }
+
+/** Validación (closure_review) independiente del semáforo de entrega. */
+export function validationLabelEs(
+  closureReviewStatus?: string | null,
+): string | null {
+  const s = (closureReviewStatus || "").trim()
+  if (s === "verified") return "Validación: verificada"
+  if (s === "pending_review") return "⚠️ GPS pendiente de validación"
+  if (!s) return null
+  return `Validación: ${s}`
+}

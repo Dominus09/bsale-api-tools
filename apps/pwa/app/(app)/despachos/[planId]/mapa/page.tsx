@@ -8,7 +8,7 @@ import { ApiError, getMyMapa, type DriverMapMarker } from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDistanceM } from "@/lib/geo"
 import { asAmount } from "@/lib/money-display"
-import { resolveSemaphore } from "@/lib/semaphore"
+import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 
 type UserLoc = { lat: number; lng: number; accuracy: number | null }
 
@@ -269,7 +269,23 @@ export default function MapaPage() {
                     semaphoreColor: selected.semaphore_color,
                     attentionLabel: selected.attention_label_es,
                   })
-                  return <span className={`sem-pill ${sem.cssClass}`}>{sem.labelEs}</span>
+                  const val = validationLabelEs(selected.closure_review_status)
+                  return (
+                    <>
+                      <span className={`sem-pill ${sem.cssClass}`}>{sem.labelEs}</span>
+                      {val ? (
+                        <span
+                          className={`pill${
+                            selected.closure_review_status === "pending_review"
+                              ? " pill-warn"
+                              : ""
+                          }`}
+                        >
+                          {val}
+                        </span>
+                      ) : null}
+                    </>
+                  )
                 })()}
                 {distLabel ? <span className="pill">{distLabel}</span> : null}
                 <span className="pill">

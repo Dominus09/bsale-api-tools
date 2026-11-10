@@ -70,7 +70,7 @@ def test_templates_a_to_f_compact():
             assert "$" not in text or "💵" in text  # sin montos CLP en forma de pago nueva
 
 
-def test_pending_review_whatsapp_header():
+def test_pending_review_keeps_red_semaphore_header():
     text = wa.build_report_text(
         {
             "status": "not_delivered",
@@ -86,9 +86,10 @@ def test_pending_review_whatsapp_header():
         }
     )
     lines = [ln for ln in text.splitlines() if ln.strip()]
-    assert lines[0] == "🟡 QUILLOTANA | PENDIENTE DE VALIDACIÓN"
-    assert "pendiente de validación" in text.lower()
+    assert lines[0] == "🔴 QUILLOTANA | LOCAL CERRADO"
+    assert "GPS pendiente de validación" in text
     assert "GPS validado" not in text
+    assert len(lines) <= 6
 
 
 def test_declarative_payment_no_amounts_in_whatsapp():
