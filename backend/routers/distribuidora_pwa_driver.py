@@ -283,6 +283,18 @@ class DeclareCollectionBody(BaseModel):
     note: str | None = Field(None, max_length=500)
 
 
+class MixedPaymentRow(BaseModel):
+    method: str = Field(..., max_length=32)
+    declared_amount: float | None = None
+    note: str | None = Field(None, max_length=500)
+
+
+class DeclareMixedCollectionBody(BaseModel):
+    document_result_id: int = Field(..., ge=1)
+    document_amount: float | None = None
+    payments: list[MixedPaymentRow]
+
+
 class WhatsAppReportBody(BaseModel):
     client_name: str | None = Field(None, max_length=200)
     planning_code: str | None = Field(None, max_length=64)
@@ -336,6 +348,24 @@ def declare_visit_collection(
         document_amount=body.document_amount,
         declared_amount=body.declared_amount,
         note=body.note,
+    )
+
+
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/cobranza/mixta")
+def declare_visit_collection_mixed(
+    plan_id: int,
+    visit_id: int,
+    body: DeclareMixedCollectionBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    """Pago mixto: reemplaza las declaraciones del documento."""
+    return visit_svc.declare_collections_mixed(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        document_result_id=int(body.document_result_id),
+        document_amount=body.document_amount,
+        payments=[p.model_dump() for p in body.payments],
     )
 
 

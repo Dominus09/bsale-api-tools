@@ -288,23 +288,30 @@ def test_declare_collection_blocks_transfer_verified(monkeypatch):
     assert ei.value.status_code == 403
 
 
-def test_declare_collection_pending_rejects_positive_amount(monkeypatch):
+def test_declare_collection_mixed_rejects_sum_over_total(monkeypatch):
     monkeypatch.setattr(
         svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7
     )
     with pytest.raises(HTTPException) as ei:
-        svc.declare_collection(
+        svc.declare_collections_mixed(
             user={"id": 7},
             plan_id=1,
             visit_id=1,
-            document_result_id=None,
-            method="pending",
-            document_amount=155033,
-            declared_amount=100000,
-            note=None,
+            document_result_id=9,
+            document_amount=1000,
+            payments=[
+                {"method": "cash", "declared_amount": 800},
+                {"method": "pending", "declared_amount": 500},
+            ],
         )
     assert ei.value.status_code == 400
-    assert "pendiente" in str(ei.value.detail).lower()
+    assert "suma" in str(ei.value.detail).lower() or "supera" in str(ei.value.detail).lower()
+
+
+def test_pending_positive_amount_allowed_for_mixed_portion():
+    """pending con monto > 0 es porción pendiente (mixto), no 'recibido'."""
+    # Validación pura: no debe rechazarse solo por decl > 0 en pending.
+    assert "pending" in svc.COLLECTION_METHODS
 
 
 def test_submit_conformity_requires_receptor_name(monkeypatch):

@@ -941,15 +941,14 @@ def declare_collection(
     decl = float(declared_amount) if declared_amount is not None else None
     if decl is not None and decl < 0:
         raise HTTPException(status_code=400, detail="Monto declarado inválido")
-    if method_n == "pending" and decl is not None and decl > 0:
-        raise HTTPException(
-            status_code=400,
-            detail="Pago pendiente no admite monto recibido positivo",
-        )
+    # pending admite monto > 0: es la porción declarada como pendiente (pago mixto),
+    # no un "recibido" verificable.
     if method_n == "pending" and decl is None:
         decl = 0.0
     pending = None
-    if doc_amt is not None and decl is not None:
+    if method_n == "pending":
+        pending = float(decl or 0)
+    elif doc_amt is not None and decl is not None:
         pending = round(doc_amt - decl, 2)
 
     conn = get_connection()
@@ -1016,6 +1015,150 @@ def declare_collection(
             "persisted": True,
             "note_es": (
                 "Declaración auditada. No es recibo oficial ni cuadratura Bsale."
+            ),
+        }
+    )
+
+
+def declare_collections_mixed(
+    *,
+    user: dict[str, Any],
+    plan_id: int,
+    visit_id: int,
+    document_result_id: int,
+    document_amount: float | None,
+    payments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Reemplaza las formas de pago de un documento (pago mixto auditado)."""
+    if not payments:
+        raise HTTPException(status_code=400, detail="Se requiere al menos una forma de pago")
+    doc_amt = float(document_amount) if document_amount is not None else None
+    normalized: list[dict[str, Any]] = []
+    sum_decl = 0.0
+    for raw in payments:
+        method_n = str(raw.get("method") or "").strip()
+        if method_n not in COLLECTION_METHODS:
+            raise HTTPException(status_code=400, detail="Método de cobranza inválido")
+        if method_n == "transfer_verified":
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "transfer_verified solo vía verificación administrativa; "
+                    "el chofer declara transfer_declared"
+                ),
+            )
+        try:
+            decl = (
+                float(raw["declared_amount"])
+                if raw.get("declared_amount") is not None
+                else None
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Monto declarado inválido") from exc
+        if decl is not None and decl < 0:
+            raise HTTPException(status_code=400, detail="Monto declarado inválido")
+        if method_n == "pending" and decl is None:
+            decl = 0.0
+        if method_n == "not_applicable" and decl is not None and decl > 0:
+            raise HTTPException(
+                status_code=400, detail="No corresponde no admite monto positivo"
+            )
+        if method_n != "not_applicable" and decl is not None:
+            sum_decl += float(decl)
+        pending = float(decl or 0) if method_n == "pending" else None
+        if pending is None and doc_amt is not None and decl is not None:
+            pending = None  # saldo global se calcula al final
+        normalized.append(
+            {
+                "method": method_n,
+                "declared_amount": decl,
+                "pending_balance": pending,
+                "note": (str(raw.get("note") or "").strip() or None),
+            }
+        )
+    if doc_amt is not None and sum_decl - float(doc_amt) > 0.009:
+        raise HTTPException(
+            status_code=400,
+            detail="La suma de montos supera el total del documento",
+        )
+    remaining = None
+    if doc_amt is not None:
+        remaining = round(float(doc_amt) - sum_decl, 2)
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not visit_repo.tables_ready(cur):
+            raise HTTPException(status_code=503, detail="Migración 056 pendiente")
+        visit = _require_own_open_visit(
+            cur, user=user, plan_id=int(plan_id), visit_id=int(visit_id)
+        )
+        uid = int(visit["driver_user_id"])
+        docs = visit_repo.list_document_results(cur, int(visit_id))
+        owned = {int(d["id"]) for d in docs}
+        if int(document_result_id) not in owned:
+            raise HTTPException(
+                status_code=422,
+                detail="document_result_id no pertenece a esta visita",
+            )
+        visit_repo.delete_collections_for_document(
+            cur, visit_id=int(visit_id), document_result_id=int(document_result_id)
+        )
+        rows: list[dict[str, Any]] = []
+        for item in normalized:
+            rows.append(
+                visit_repo.insert_collection(
+                    cur,
+                    visit_id=int(visit_id),
+                    document_result_id=int(document_result_id),
+                    method=item["method"],
+                    document_amount=doc_amt,
+                    declared_amount=item["declared_amount"],
+                    verified_amount=None,
+                    pending_balance=item["pending_balance"],
+                    note=item["note"],
+                    created_by_user_id=uid,
+                )
+            )
+        visit_repo.insert_event(
+            cur,
+            visit_id=int(visit_id),
+            action="collections_mixed_declared",
+            actor_user_id=uid,
+            payload={
+                "document_result_id": int(document_result_id),
+                "payment_count": len(rows),
+                "sum_declared": sum_decl,
+                "pending_balance": remaining,
+            },
+        )
+        conn.commit()
+        cur.close()
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=500, detail=f"No se pudo declarar cobranza mixta: {exc}"
+        ) from exc
+    finally:
+        conn.close()
+
+    return serialize_value(
+        {
+            "collections": rows,
+            "persisted": True,
+            "sum_declared": sum_decl,
+            "pending_balance": remaining,
+            "note_es": (
+                "Declaración mixta auditada. No es recibo oficial ni verificación Bsale."
             ),
         }
     )

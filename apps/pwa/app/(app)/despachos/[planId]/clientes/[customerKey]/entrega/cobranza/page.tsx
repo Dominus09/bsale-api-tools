@@ -3,29 +3,26 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
-import { ApiError, declareVisitCollection } from "@/lib/api"
+import { ApiError, declareVisitCollectionMixed } from "@/lib/api"
 import { DeliveryStepChrome } from "@/components/delivery-step-chrome"
+import {
+  newPaymentRow,
+  PAYMENT_METHODS,
+  pendingBalance,
+  sumDeclared,
+  validateMixedPayments,
+  type PaymentRow,
+} from "@/lib/delivery-collection"
 import { buildEntregaHref, docKeyFromDocument, moneyCLP } from "@/lib/delivery-flow"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
 
-const METHODS = [
-  { value: "cash", label: "Efectivo" },
-  { value: "transfer_declared", label: "Transferencia informada" },
-  { value: "credit", label: "Crédito autorizado" },
-  { value: "partial", label: "Pago mixto / parcial" },
-  { value: "pending", label: "Pago pendiente" },
-  { value: "not_applicable", label: "No corresponde" },
-]
-
-type DocPay = {
+type DocPayState = {
   related_document_id: number
   document_result_id: number | null
   label: string
   total: number
-  method: string
-  declared: string
-  note: string
+  rows: PaymentRow[]
   saved: boolean
 }
 
@@ -34,7 +31,7 @@ export default function EntregaCobranzaPage() {
   const router = useRouter()
   const session = useVisitSession(planId, customerKey)
   const docsHref = buildEntregaHref(planId, customerKey, "documentos")
-  const [rows, setRows] = useState<DocPay[]>([])
+  const [docs, setDocs] = useState<DocPayState[]>([])
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
@@ -44,7 +41,7 @@ export default function EntregaCobranzaPage() {
 
   useEffect(() => {
     if (!session.documents.length) return
-    const next: DocPay[] = session.documents
+    const next: DocPayState[] = session.documents
       .filter((d) => d.related_document_id != null)
       .map((d) => {
         const key = docKeyFromDocument(d)
@@ -52,65 +49,70 @@ export default function EntregaCobranzaPage() {
           (vd) => String(vd.related_document_id ?? "") === key,
         )
         const docResId = savedDoc?.id != null ? Number(savedDoc.id) : null
-        const col = collections.find(
-          (c) =>
-            docResId != null &&
-            Number(c.document_result_id) === docResId,
-        ) || collections.find((c) => c.document_result_id == null)
+        const cols = collections.filter(
+          (c) => docResId != null && Number(c.document_result_id) === docResId,
+        )
+        const rows: PaymentRow[] =
+          cols.length > 0
+            ? cols.map((c, i) =>
+                newPaymentRow({
+                  key: `saved-${c.id ?? i}`,
+                  method: (String(c.method || "cash") as PaymentRow["method"]),
+                  amount:
+                    c.declared_amount != null ? String(c.declared_amount) : "",
+                  note: String(c.note || ""),
+                }),
+              )
+            : [newPaymentRow({ method: "cash" })]
         return {
           related_document_id: Number(d.related_document_id),
           document_result_id: docResId,
           label: `${d.document_type || "Doc"} ${d.document_number ?? "—"}`,
           total: typeof d.document_total === "number" ? d.document_total : 0,
-          method: String(col?.method || "cash"),
-          declared:
-            col?.declared_amount != null ? String(col.declared_amount) : "",
-          note: String(col?.note || ""),
-          saved: Boolean(col),
+          rows,
+          saved: cols.length > 0,
         }
       })
-    setRows(next)
+    setDocs(next)
   }, [session.documents, visitDocs, collections])
 
   const allSaved = useMemo(
-    () => rows.length > 0 && rows.every((r) => r.saved),
-    [rows],
+    () => docs.length > 0 && docs.every((d) => d.saved),
+    [docs],
   )
 
-  async function saveRow(row: DocPay) {
+  async function saveDoc(doc: DocPayState) {
     if (!session.activeVisit) return
-    const amt = row.declared.trim() === "" ? null : Number(row.declared)
-    if (amt != null && (!Number.isFinite(amt) || amt < 0)) {
-      setErr("Monto inválido")
-      return
-    }
-    if (row.method === "pending" && amt != null && amt > 0) {
-      setErr("Pago pendiente no admite monto recibido positivo")
-      return
-    }
-    if (!row.document_result_id) {
+    if (!doc.document_result_id) {
       setErr("Guarde primero las cantidades del documento (paso 1)")
       return
     }
-    setBusyKey(String(row.related_document_id))
+    const validation = validateMixedPayments(doc.total, doc.rows)
+    if (validation) {
+      setErr(validation)
+      return
+    }
+    setBusyKey(String(doc.related_document_id))
     setErr(null)
     setInfo(null)
     try {
-      await declareVisitCollection(planId, session.activeVisit.id, {
-        document_result_id: row.document_result_id,
-        method: row.method,
-        document_amount: row.total,
-        declared_amount: row.method === "pending" ? 0 : amt,
-        note: row.note.trim() || null,
+      await declareVisitCollectionMixed(planId, session.activeVisit.id, {
+        document_result_id: doc.document_result_id,
+        document_amount: doc.total,
+        payments: doc.rows.map((r) => ({
+          method: r.method,
+          declared_amount: r.amount.trim() === "" ? 0 : Number(r.amount),
+          note: r.note.trim() || null,
+        })),
       })
-      setRows((all) =>
-        all.map((r) =>
-          r.related_document_id === row.related_document_id
-            ? { ...r, saved: true }
-            : r,
+      setDocs((all) =>
+        all.map((d) =>
+          d.related_document_id === doc.related_document_id
+            ? { ...d, saved: true }
+            : d,
         ),
       )
-      setInfo(`Cobranza de ${row.label} guardada (declaración auditada).`)
+      setInfo(`Cobranza de ${doc.label} guardada (mixto auditado).`)
       session.reload()
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : "Error al guardar cobranza")
@@ -152,102 +154,173 @@ export default function EntregaCobranzaPage() {
       }
     >
       <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
-        Declaración del chofer. No es recibo oficial ni verificación Bsale. La
-        transferencia informada no se marca como verificada.
+        Declaración del chofer con pagos mixtos. No es recibo ni verificación Bsale.
+        La transferencia informada no se marca como verificada.
       </p>
 
       <div className="stack-gap">
-        {rows.map((row) => {
-          const declaredN =
-            row.declared.trim() === "" ? null : Number(row.declared)
-          const pending =
-            Number.isFinite(declaredN as number) && row.method !== "pending"
-              ? Math.max(0, row.total - Number(declaredN))
-              : row.method === "pending"
-                ? row.total
-                : null
+        {docs.map((doc) => {
+          const declared = sumDeclared(doc.rows)
+          const pending = pendingBalance(doc.total, doc.rows)
           return (
-            <div key={row.related_document_id} className="card">
+            <div key={doc.related_document_id} className="card">
               <div className="client-card-head">
-                <h3 style={{ margin: 0, fontSize: "1rem" }}>{row.label}</h3>
-                <span className={`pill${row.saved ? " pill-ok" : ""}`}>
-                  {row.saved ? "Guardado" : "Pendiente"}
+                <h3 style={{ margin: 0, fontSize: "1rem" }}>{doc.label}</h3>
+                <span className={`pill${doc.saved ? " pill-ok" : ""}`}>
+                  {doc.saved ? "Guardado" : "Pendiente"}
                 </span>
               </div>
               <div className="meta-row">
                 <span className="muted">Total documento</span>
-                <span>{moneyCLP(row.total)}</span>
+                <span>{moneyCLP(doc.total)}</span>
               </div>
-              <label className="field">
-                Método
-                <select
-                  value={row.method}
-                  onChange={(e) =>
-                    setRows((all) =>
-                      all.map((r) =>
-                        r.related_document_id === row.related_document_id
-                          ? {
-                              ...r,
-                              method: e.target.value,
-                              saved: false,
-                              declared:
-                                e.target.value === "pending" ? "0" : r.declared,
-                            }
-                          : r,
-                      ),
-                    )
-                  }
-                >
-                  {METHODS.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                Monto recibido declarado
-                <input
-                  inputMode="decimal"
-                  disabled={row.method === "pending" || row.method === "not_applicable"}
-                  value={row.method === "pending" ? "0" : row.declared}
-                  onChange={(e) =>
-                    setRows((all) =>
-                      all.map((r) =>
-                        r.related_document_id === row.related_document_id
-                          ? { ...r, declared: e.target.value, saved: false }
-                          : r,
-                      ),
-                    )
-                  }
-                />
-              </label>
+              <div className="meta-row">
+                <span className="muted">Total declarado</span>
+                <span>{moneyCLP(declared)}</span>
+              </div>
               <div className="meta-row">
                 <span className="muted">Saldo pendiente</span>
-                <span>{pending == null ? "—" : moneyCLP(pending)}</span>
+                <span>{moneyCLP(pending)}</span>
               </div>
-              <label className="field">
-                Observación
-                <input
-                  value={row.note}
-                  onChange={(e) =>
-                    setRows((all) =>
-                      all.map((r) =>
-                        r.related_document_id === row.related_document_id
-                          ? { ...r, note: e.target.value, saved: false }
-                          : r,
-                      ),
-                    )
-                  }
-                />
-              </label>
+
+              <strong style={{ display: "block", margin: "10px 0 6px", fontSize: "0.9rem" }}>
+                Formas de pago declaradas
+              </strong>
+              <div className="stack-gap">
+                {doc.rows.map((row) => (
+                  <div key={row.key} className="card" style={{ padding: 10 }}>
+                    <label className="field">
+                      Método
+                      <select
+                        value={row.method}
+                        onChange={(e) =>
+                          setDocs((all) =>
+                            all.map((d) =>
+                              d.related_document_id === doc.related_document_id
+                                ? {
+                                    ...d,
+                                    saved: false,
+                                    rows: d.rows.map((r) =>
+                                      r.key === row.key
+                                        ? {
+                                            ...r,
+                                            method: e.target
+                                              .value as PaymentRow["method"],
+                                          }
+                                        : r,
+                                    ),
+                                  }
+                                : d,
+                            ),
+                          )
+                        }
+                      >
+                        {PAYMENT_METHODS.map((m) => (
+                          <option key={m.value} value={m.value}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      Monto
+                      <input
+                        inputMode="decimal"
+                        value={row.amount}
+                        onChange={(e) =>
+                          setDocs((all) =>
+                            all.map((d) =>
+                              d.related_document_id === doc.related_document_id
+                                ? {
+                                    ...d,
+                                    saved: false,
+                                    rows: d.rows.map((r) =>
+                                      r.key === row.key
+                                        ? { ...r, amount: e.target.value }
+                                        : r,
+                                    ),
+                                  }
+                                : d,
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      Observación
+                      <input
+                        value={row.note}
+                        onChange={(e) =>
+                          setDocs((all) =>
+                            all.map((d) =>
+                              d.related_document_id === doc.related_document_id
+                                ? {
+                                    ...d,
+                                    saved: false,
+                                    rows: d.rows.map((r) =>
+                                      r.key === row.key
+                                        ? { ...r, note: e.target.value }
+                                        : r,
+                                    ),
+                                  }
+                                : d,
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                    {doc.rows.length > 1 ? (
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() =>
+                          setDocs((all) =>
+                            all.map((d) =>
+                              d.related_document_id === doc.related_document_id
+                                ? {
+                                    ...d,
+                                    saved: false,
+                                    rows: d.rows.filter((r) => r.key !== row.key),
+                                  }
+                                : d,
+                            ),
+                          )
+                        }
+                      >
+                        Eliminar fila
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
               <button
                 type="button"
                 className="btn btn-secondary"
-                disabled={busyKey === String(row.related_document_id)}
-                onClick={() => void saveRow(row)}
+                style={{ marginTop: 8 }}
+                onClick={() =>
+                  setDocs((all) =>
+                    all.map((d) =>
+                      d.related_document_id === doc.related_document_id
+                        ? {
+                            ...d,
+                            saved: false,
+                            rows: [...d.rows, newPaymentRow()],
+                          }
+                        : d,
+                    ),
+                  )
+                }
               >
-                {busyKey === String(row.related_document_id)
+                + Agregar forma de pago
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ marginTop: 8 }}
+                disabled={busyKey === String(doc.related_document_id)}
+                onClick={() => void saveDoc(doc)}
+              >
+                {busyKey === String(doc.related_document_id)
                   ? "Guardando…"
                   : "Guardar declaración"}
               </button>

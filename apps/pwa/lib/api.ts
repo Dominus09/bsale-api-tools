@@ -430,6 +430,29 @@ export async function declareVisitCollection(
   )
 }
 
+export async function declareVisitCollectionMixed(
+  planId: number,
+  visitId: number,
+  body: {
+    document_result_id: number
+    document_amount?: number | null
+    payments: Array<{
+      method: string
+      declared_amount?: number | null
+      note?: string | null
+    }>
+  },
+): Promise<Record<string, unknown>> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/cobranza/mixta`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
 export type WhatsappReportResponse = {
   report_text: string
   snapshot_id?: number

@@ -866,3 +866,71 @@ def test_save_lines_version_conflict_and_partial_registered(isolated_db, monkeyp
     zero = next(x for x in legacy["lines"] if int(x["source_detail_id"]) == 88001)
     assert float(zero["delivered_units"]) == 0.0
     assert zero["undelivered_reason"] == "physical_shortage"
+
+
+def test_mixed_collections_cash_and_pending(isolated_db, monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42
+    )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_resolve_client",
+        lambda _p, _k: {"client_id": 9010, "customer_key": "id:9010"},
+    )
+    monkeypatch.setattr(svc.loc_svc, "_parse_client_id", lambda _k, _c: 9010)
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda _u, _p: 3
+    )
+    started = svc.start_visit(
+        user=_user(),
+        plan_id=10,
+        customer_key="id:9010",
+        latitude=-42.0,
+        longitude=-73.0,
+        accuracy_m=10.0,
+    )
+    vid = started["visit"]["id"]
+    saved = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=None,
+        document_number=9001,
+        document_type="boleta",
+        document_total=155033,
+        result_status="full",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 88001,
+                "planned_units": 4,
+                "delivered_units": 4,
+                "product_name": "A",
+            },
+            {
+                "source_detail_id": 88002,
+                "planned_units": 2,
+                "delivered_units": 2,
+                "product_name": "B",
+            },
+        ],
+    )
+    doc_res_id = int(saved["document_result"]["id"])
+    mixed = svc.declare_collections_mixed(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_res_id,
+        document_amount=155033,
+        payments=[
+            {"method": "cash", "declared_amount": 50000},
+            {"method": "pending", "declared_amount": 105033},
+        ],
+    )
+    assert mixed["persisted"] is True
+    assert len(mixed["collections"]) == 2
+    assert float(mixed["sum_declared"]) == 155033.0
+    assert float(mixed["pending_balance"] or 0) == 0.0
+    methods = {c["method"] for c in mixed["collections"]}
+    assert methods == {"cash", "pending"}

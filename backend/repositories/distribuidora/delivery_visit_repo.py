@@ -351,6 +351,19 @@ def insert_collection(cur, **kw) -> dict[str, Any]:
     return _row(cur, cur.fetchone())
 
 
+def delete_collections_for_document(
+    cur, *, visit_id: int, document_result_id: int
+) -> int:
+    cur.execute(
+        """
+        DELETE FROM distribuidora.delivery_collections
+        WHERE visit_id = %s AND document_result_id = %s
+        """,
+        (int(visit_id), int(document_result_id)),
+    )
+    return int(cur.rowcount or 0)
+
+
 def list_collections(cur, visit_id: int) -> list[dict[str, Any]]:
     cur.execute(
         """
