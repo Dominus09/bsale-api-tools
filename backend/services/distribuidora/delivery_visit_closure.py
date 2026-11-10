@@ -148,8 +148,9 @@ def assert_finalize_ready(
                     status_code=422, detail="Nombre del receptor requerido"
                 )
             # La firma debe corresponder al resumen actual (anti-reuso / anti-cambio silencioso)
+            collections = visit_repo.list_collections(cur, visit_id)
             current_summary = build_conformity_summary(
-                visit=visit, docs=docs, lines=lines
+                visit=visit, docs=docs, lines=lines, collections=collections
             )
             current_sha = hashlib.sha256(
                 json.dumps(current_summary, sort_keys=True, default=str).encode("utf-8")
@@ -159,8 +160,8 @@ def assert_finalize_ready(
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "La conformidad firmada no coincide con las cantidades "
-                        "actuales; vuelva a firmar tras el cambio"
+                        "La conformidad firmada no coincide con cantidades/"
+                        "cobranza actuales; vuelva a firmar tras el cambio"
                     ),
                 )
             signed_ver = conf.get("visit_version_at_sign")
@@ -237,8 +238,13 @@ def build_conformity_summary(
     visit: dict[str, Any],
     docs: list[dict[str, Any]],
     lines: list[dict[str, Any]],
+    collections: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Resumen canónico firmado. Orden estable + números normalizados (anti-flap SHA)."""
+    """Resumen canónico firmado. Orden estable + números normalizados (anti-flap SHA).
+
+    Incluye cobranza declarada: si cambian montos/métodos tras firmar, el SHA
+    deja de coincidir y hay que renovar la conformidad.
+    """
     docs_n = sorted(
         docs,
         key=lambda d: (
@@ -257,6 +263,18 @@ def build_conformity_summary(
             int(ln["variant_id"]) if ln.get("variant_id") is not None else 0,
             str(ln.get("sku_code") or ""),
             str(ln.get("product_name") or ""),
+        ),
+    )
+    cols_src = list(collections or [])
+    cols_n = sorted(
+        cols_src,
+        key=lambda c: (
+            int(c["document_result_id"])
+            if c.get("document_result_id") is not None
+            else 0,
+            str(c.get("method") or ""),
+            _num(c.get("declared_amount")) or 0.0,
+            int(c["id"]) if c.get("id") is not None else 0,
         ),
     )
     return {
@@ -286,5 +304,16 @@ def build_conformity_summary(
                 "undelivered_reason": ln.get("undelivered_reason"),
             }
             for ln in lines_n
+        ],
+        "collections": [
+            {
+                "document_result_id": c.get("document_result_id"),
+                "method": c.get("method"),
+                "document_amount": _num(c.get("document_amount")),
+                "declared_amount": _num(c.get("declared_amount")),
+                "pending_balance": _num(c.get("pending_balance")),
+                "note": c.get("note"),
+            }
+            for c in cols_n
         ],
     }

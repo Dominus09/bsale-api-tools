@@ -951,6 +951,9 @@ def declare_collection(
     elif doc_amt is not None and decl is not None:
         pending = round(doc_amt - decl, 2)
 
+    invalidated = False
+    bumped: dict[str, Any] | None = None
+    visit: dict[str, Any] | None = None
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -983,12 +986,23 @@ def declare_collection(
             note=(note or "").strip() or None,
             created_by_user_id=uid,
         )
+        invalidated = visit_repo.invalidate_conformity(
+            cur,
+            int(visit_id),
+            reason="Cobranza modificada tras conformidad",
+        )
+        bumped = visit_repo.bump_visit_version(cur, int(visit_id))
         visit_repo.insert_event(
             cur,
             visit_id=int(visit_id),
             action="collection_declared",
             actor_user_id=uid,
-            payload={"method": method_n, "declared_amount": decl},
+            payload={
+                "method": method_n,
+                "declared_amount": decl,
+                "conformity_invalidated": bool(invalidated),
+                "new_version": int((bumped or visit).get("version") or 0),
+            },
         )
         conn.commit()
         cur.close()
@@ -1013,6 +1027,8 @@ def declare_collection(
         {
             "collection": row,
             "persisted": True,
+            "visit_version": int((bumped or visit).get("version") or 1),
+            "conformity_invalidated": bool(invalidated),
             "note_es": (
                 "Declaración auditada. No es recibo oficial ni cuadratura Bsale."
             ),
@@ -1085,6 +1101,9 @@ def declare_collections_mixed(
     if doc_amt is not None:
         remaining = round(float(doc_amt) - sum_decl, 2)
 
+    invalidated = False
+    bumped: dict[str, Any] | None = None
+    visit: dict[str, Any] | None = None
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -1120,6 +1139,12 @@ def declare_collections_mixed(
                     created_by_user_id=uid,
                 )
             )
+        invalidated = visit_repo.invalidate_conformity(
+            cur,
+            int(visit_id),
+            reason="Cobranza modificada tras conformidad",
+        )
+        bumped = visit_repo.bump_visit_version(cur, int(visit_id))
         visit_repo.insert_event(
             cur,
             visit_id=int(visit_id),
@@ -1130,6 +1155,8 @@ def declare_collections_mixed(
                 "payment_count": len(rows),
                 "sum_declared": sum_decl,
                 "pending_balance": remaining,
+                "conformity_invalidated": bool(invalidated),
+                "new_version": int((bumped or visit).get("version") or 0),
             },
         )
         conn.commit()
@@ -1157,6 +1184,8 @@ def declare_collections_mixed(
             "persisted": True,
             "sum_declared": sum_decl,
             "pending_balance": remaining,
+            "visit_version": int((bumped or visit).get("version") or 1),
+            "conformity_invalidated": bool(invalidated),
             "note_es": (
                 "Declaración mixta auditada. No es recibo oficial ni verificación Bsale."
             ),
@@ -1867,13 +1896,14 @@ def submit_conformity(
         )
         docs = visit_repo.list_document_results(cur, int(visit_id))
         lines = visit_repo.list_line_results(cur, int(visit_id))
+        collections = visit_repo.list_collections(cur, int(visit_id))
         if not refused and (not docs or not lines):
             raise HTTPException(
                 status_code=422,
                 detail="Registre cantidades antes de solicitar conformidad",
             )
         summary = closure.build_conformity_summary(
-            visit=visit, docs=docs, lines=lines
+            visit=visit, docs=docs, lines=lines, collections=collections
         )
         import json
 
@@ -1953,7 +1983,8 @@ def submit_conformity(
             "persisted": True,
             "valid": True,
             "note_es": (
-                "Conformidad registrada. Cambios posteriores de cantidades la invalidan."
+                "Conformidad registrada. Cambios posteriores de cantidades "
+                "o cobranza la invalidan."
             ),
         }
     )

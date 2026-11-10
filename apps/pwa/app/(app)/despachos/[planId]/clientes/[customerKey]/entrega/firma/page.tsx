@@ -66,20 +66,22 @@ export default function EntregaFirmaPage() {
       `Líneas: ${fullN} completas · ${partialN} parciales · ${noneN} no entregadas`,
     )
     const byMethod = new Map<string, number>()
-    let pendingSum = 0
+    let declaredAll = 0
+    let pendingExplicit = 0
     for (const c of cols) {
       const method = String(c.method || "—")
       const declared =
         typeof c.declared_amount === "number" ? c.declared_amount : 0
       byMethod.set(method, (byMethod.get(method) || 0) + declared)
-      if (method === "pending") pendingSum += declared
-      else if (typeof c.pending_balance === "number") {
-        pendingSum += Math.max(0, c.pending_balance)
-      }
+      if (method !== "not_applicable") declaredAll += declared
+      if (method === "pending") pendingExplicit += declared
       full.push(
         `Cobranza ${method}: ${moneyCLP(declared)}${c.note ? ` · ${c.note}` : ""}`,
       )
     }
+    // No doble-contar: pending explícito + remanente solo si la suma no cubre el total.
+    const implicitRemaining = Math.max(0, totalAmt - declaredAll)
+    const pendingSum = pendingExplicit + implicitRemaining
     for (const [method, amt] of byMethod) {
       compact.push(`Cobranza ${method}: ${moneyCLP(amt)}`)
     }

@@ -934,3 +934,273 @@ def test_mixed_collections_cash_and_pending(isolated_db, monkeypatch):
     assert float(mixed["pending_balance"] or 0) == 0.0
     methods = {c["method"] for c in mixed["collections"]}
     assert methods == {"cash", "pending"}
+    cash_row = next(c for c in mixed["collections"] if c["method"] == "cash")
+    pending_row = next(c for c in mixed["collections"] if c["method"] == "pending")
+    assert cash_row.get("verified_amount") is None
+    assert float(cash_row["declared_amount"]) == 50000.0
+    assert float(pending_row["declared_amount"]) == 105033.0
+    assert float(pending_row["pending_balance"] or 0) == 105033.0
+
+    # Reintento reemplaza (no duplica) y permite transferencia informada + pending.
+    mixed2 = svc.declare_collections_mixed(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_res_id,
+        document_amount=155033,
+        payments=[
+            {"method": "cash", "declared_amount": 50000},
+            {"method": "transfer_declared", "declared_amount": 70000},
+            {"method": "pending", "declared_amount": 35033},
+        ],
+    )
+    assert mixed2["persisted"] is True
+    assert len(mixed2["collections"]) == 3
+    assert float(mixed2["sum_declared"]) == 155033.0
+    assert float(mixed2["pending_balance"] or 0) == 0.0
+    by_m = {c["method"]: c for c in mixed2["collections"]}
+    assert float(by_m["cash"]["declared_amount"]) == 50000.0
+    assert float(by_m["transfer_declared"]["declared_amount"]) == 70000.0
+    assert float(by_m["pending"]["declared_amount"]) == 35033.0
+    assert by_m["transfer_declared"].get("verified_amount") is None
+    assert "credit" not in by_m or by_m.get("credit") is None
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        rows = visit_repo.list_collections(cur, int(vid))
+        assert len(rows) == 3
+        assert {r["method"] for r in rows} == {
+            "cash",
+            "transfer_declared",
+            "pending",
+        }
+        cur.close()
+    finally:
+        conn.close()
+
+    # Endpoint simple sigue compatible (append de una fila).
+    simple = svc.declare_collection(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_res_id,
+        method="credit",
+        document_amount=155033,
+        declared_amount=0,
+        note="compat",
+    )
+    assert simple["persisted"] is True
+    assert simple["collection"]["method"] == "credit"
+    assert simple["collection"].get("verified_amount") is None
+
+
+def test_mixed_collection_error_keeps_prior_rows(isolated_db, monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42
+    )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_resolve_client",
+        lambda _p, _k: {"client_id": 9010, "customer_key": "id:9010"},
+    )
+    monkeypatch.setattr(svc.loc_svc, "_parse_client_id", lambda _k, _c: 9010)
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda _u, _p: 3
+    )
+    started = svc.start_visit(
+        user=_user(),
+        plan_id=10,
+        customer_key="id:9010",
+        latitude=-42.0,
+        longitude=-73.0,
+        accuracy_m=10.0,
+    )
+    vid = started["visit"]["id"]
+    saved = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=None,
+        document_number=9001,
+        document_type="boleta",
+        document_total=1000,
+        result_status="full",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 88001,
+                "planned_units": 1,
+                "delivered_units": 1,
+                "product_name": "A",
+            },
+            {
+                "source_detail_id": 88002,
+                "planned_units": 1,
+                "delivered_units": 1,
+                "product_name": "B",
+            },
+        ],
+    )
+    doc_res_id = int(saved["document_result"]["id"])
+    ok = svc.declare_collections_mixed(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_res_id,
+        document_amount=1000,
+        payments=[{"method": "cash", "declared_amount": 1000}],
+    )
+    assert ok["persisted"] is True
+
+    with pytest.raises(HTTPException) as ei:
+        svc.declare_collections_mixed(
+            user=_user(),
+            plan_id=10,
+            visit_id=vid,
+            document_result_id=doc_res_id,
+            document_amount=1000,
+            payments=[
+                {"method": "cash", "declared_amount": 800},
+                {"method": "pending", "declared_amount": 500},
+            ],
+        )
+    assert ei.value.status_code == 400
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        rows = visit_repo.list_collections(cur, int(vid))
+        assert len(rows) == 1
+        assert rows[0]["method"] == "cash"
+        assert float(rows[0]["declared_amount"]) == 1000.0
+        cur.close()
+    finally:
+        conn.close()
+
+
+def test_collection_after_conformity_invalidates(isolated_db, monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42
+    )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_resolve_client",
+        lambda _p, _k: {"client_id": 9010, "customer_key": "id:9010"},
+    )
+    monkeypatch.setattr(svc.loc_svc, "_parse_client_id", lambda _k, _c: 9010)
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda _u, _p: 3
+    )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_normalize_facade_image",
+        lambda raw, _mime: (raw, "image/png", "png"),
+    )
+
+    class _FakeStorage:
+        ObjectStorageNotConfigured = type("ObjectStorageNotConfigured", (Exception,), {})
+
+        @staticmethod
+        def build_delivery_signature_object_key(**_k):
+            return "sig/test.png"
+
+        @staticmethod
+        def put_bytes(**_k):
+            return None
+
+        @staticmethod
+        def object_exists(_k):
+            return True
+
+    monkeypatch.setattr(svc, "storage", _FakeStorage)
+
+    started = svc.start_visit(
+        user=_user(),
+        plan_id=10,
+        customer_key="id:9010",
+        latitude=-42.0,
+        longitude=-73.0,
+        accuracy_m=10.0,
+    )
+    vid = started["visit"]["id"]
+    ver0 = int(started["visit"]["version"])
+    saved = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=None,
+        document_number=9001,
+        document_type="boleta",
+        document_total=155033,
+        result_status="full",
+        notes=None,
+        lines=[
+            {
+                "source_detail_id": 88001,
+                "planned_units": 4,
+                "delivered_units": 4,
+                "product_name": "A",
+            },
+            {
+                "source_detail_id": 88002,
+                "planned_units": 2,
+                "delivered_units": 2,
+                "product_name": "B",
+            },
+        ],
+    )
+    doc_res_id = int(saved["document_result"]["id"])
+    svc.declare_collections_mixed(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_res_id,
+        document_amount=155033,
+        payments=[
+            {"method": "cash", "declared_amount": 50000},
+            {"method": "transfer_declared", "declared_amount": 70000},
+            {"method": "pending", "declared_amount": 35033},
+        ],
+    )
+    conf = svc.submit_conformity(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        receptor_name="Receptor Test",
+        signature_png=b"\x89PNG\r\n\x1a\n" + b"0" * 64,
+        refused=False,
+        refuse_reason=None,
+        latitude=-42.0,
+        longitude=-73.0,
+        accuracy_m=8.0,
+    )
+    assert conf["persisted"] is True
+    assert conf["valid"] is True
+    assert "collections" in (conf["conformity"].get("summary_payload") or {})
+
+    changed = svc.declare_collections_mixed(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=doc_res_id,
+        document_amount=155033,
+        payments=[
+            {"method": "cash", "declared_amount": 10000},
+            {"method": "pending", "declared_amount": 145033},
+        ],
+    )
+    assert changed["conformity_invalidated"] is True
+    assert int(changed["visit_version"]) > ver0
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        row = visit_repo.get_conformity(cur, int(vid))
+        assert row is not None
+        assert row.get("invalidated_at") is not None
+        cur.close()
+    finally:
+        conn.close()
