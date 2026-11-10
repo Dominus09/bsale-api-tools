@@ -17,6 +17,7 @@ import {
   productBarcodeLabel,
   productCategoryLabel,
 } from "@/lib/delivery-labels"
+import { breakdownBoxUnits } from "@/lib/box-units"
 import {
   filterLines,
   lineOutcome,
@@ -40,6 +41,9 @@ type LineDraft = LineUiRow & {
   key: string
   line_number?: number | null
   variant_id?: number | null
+  units_per_box?: number | null
+  sin_unidad_caja?: boolean
+  equivalence_status?: string | null
 }
 
 function buildLines(doc: DriverDocument, savedByDetail: Map<number, Record<string, unknown>>): LineDraft[] {
@@ -69,6 +73,9 @@ function buildLines(doc: DriverDocument, savedByDetail: Map<number, Record<strin
           : "physical_shortage",
         note: persisted ? String(saved?.undelivered_note || "") : "",
         persisted,
+        units_per_box: p.units_per_box ?? null,
+        sin_unidad_caja: Boolean(p.sin_unidad_caja),
+        equivalence_status: p.equivalence_status ?? null,
       }
     })
 }
@@ -231,12 +238,10 @@ export default function EntregaDocumentoDetallePage() {
       setMsg(
         res.document_complete
           ? "Documento completo en servidor"
-          : `Línea ${ln.source_detail_id} registrada`,
+          : "Registrado",
       )
-      if (!opts?.stayOnRegistered && filter === "pending") {
-        /* la línea sale sola del filtro; no forzar scroll al top */
-      }
-      session.reload()
+      // No recargar ficha completa: la respuesta del POST ya actualiza la línea.
+      // Evita refetch N+1 y el bloqueo visual tras cada "Registrar línea".
       requestAnimationFrame(() => {
         if (typeof window !== "undefined") window.scrollTo({ top: scrollY })
       })
@@ -433,10 +438,32 @@ export default function EntregaDocumentoDetallePage() {
                         ? `Código de barras: ${ln.barcode}`
                         : "Código de barras: no disponible"}
                     </div>
-                    <div className="meta-row">
-                      <span className="muted">Documentado</span>
-                      <span>{ln.planned}</span>
-                    </div>
+                    {(() => {
+                      const boxes = breakdownBoxUnits(ln.planned, ln.units_per_box, {
+                        sinUnidadCaja: ln.sin_unidad_caja,
+                        equivalenceStatus: ln.equivalence_status,
+                      })
+                      return (
+                        <div style={{ margin: "8px 0 10px" }}>
+                          <div className="muted" style={{ fontSize: "0.75rem" }}>
+                            Documentado
+                          </div>
+                          <div className="qty-doc">{ln.planned} unidades</div>
+                          {boxes.available && boxes.label ? (
+                            <>
+                              <div className="qty-boxes">{boxes.label}</div>
+                              {boxes.unitsPerBox != null ? (
+                                <div className="qty-factor">
+                                  Factor: {boxes.unitsPerBox} un. por caja
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <div className="qty-factor">Equivalencia en cajas no disponible</div>
+                          )}
+                        </div>
+                      )
+                    })()}
                     <div className="btn-row" style={{ marginBottom: 8 }}>
                       <button
                         type="button"
@@ -454,7 +481,10 @@ export default function EntregaDocumentoDetallePage() {
                         disabled={busy}
                         onClick={() =>
                           patchLine({
-                            delivered: Math.max(0, Math.min(ln.planned, Math.floor(ln.planned / 2))),
+                            delivered: Math.max(
+                              0,
+                              Math.min(ln.planned, Math.floor(ln.planned / 2)),
+                            ),
                             reason: ln.reason || "physical_shortage",
                           })
                         }
@@ -476,9 +506,9 @@ export default function EntregaDocumentoDetallePage() {
                       </button>
                     </div>
                     <label className="field">
-                      Entregado
+                      Entregado (unidades)
                       <input
-                        inputMode="decimal"
+                        inputMode="numeric"
                         value={String(ln.delivered)}
                         disabled={busy}
                         onChange={(e) => {
