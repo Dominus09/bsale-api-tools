@@ -11,28 +11,35 @@ import { CONNECT_ERROR_ES } from "./api-proxy-target"
 
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  code: string | null
+  constructor(status: number, message: string, code: string | null = null) {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
-async function parseError(res: Response): Promise<string> {
+type ParsedApiError = { message: string; code: string | null }
+
+async function parseError(res: Response): Promise<ParsedApiError> {
   const raw = await res.text().catch(() => "")
   try {
     const j = JSON.parse(raw) as { detail?: unknown }
     const d = j.detail
-    if (typeof d === "string") return d
-    if (d && typeof d === "object" && !Array.isArray(d) && "message" in d) {
-      return String((d as { message?: string }).message || raw)
+    if (typeof d === "string") return { message: d, code: null }
+    if (d && typeof d === "object" && !Array.isArray(d)) {
+      const obj = d as { message?: string; message_es?: string; code?: string }
+      const message = String(obj.message || obj.message_es || raw)
+      const code = typeof obj.code === "string" ? obj.code : null
+      return { message, code }
     }
   } catch {
     /* raw */
   }
   if (res.status === 502 || res.status === 503 || res.status === 504) {
-    return CONNECT_ERROR_ES
+    return { message: CONNECT_ERROR_ES, code: null }
   }
-  return raw.slice(0, 240) || `Error ${res.status}`
+  return { message: raw.slice(0, 240) || `Error ${res.status}`, code: null }
 }
 
 function networkErrorMessage(_err: unknown): string {
@@ -60,7 +67,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(401, "Sesión expirada")
   }
   if (!res.ok) {
-    throw new ApiError(res.status, await parseError(res))
+    const parsed = await parseError(res)
+    throw new ApiError(res.status, parsed.message, parsed.code)
   }
   return res.json() as Promise<T>
 }
@@ -78,7 +86,10 @@ export async function login(email: string, password: string): Promise<LoginRespo
     headers: { Accept: "application/json", "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   })
-  if (!res.ok) throw new ApiError(res.status, await parseError(res))
+  if (!res.ok) {
+    const parsed = await parseError(res)
+    throw new ApiError(res.status, parsed.message, parsed.code)
+  }
   return res.json()
 }
 
@@ -582,7 +593,10 @@ export async function uploadVisitEvidence(
     if (typeof window !== "undefined") window.location.href = "/login?expired=1"
     throw new ApiError(401, "Sesión expirada")
   }
-  if (!res.ok) throw new ApiError(res.status, await parseError(res))
+  if (!res.ok) {
+    const parsed = await parseError(res)
+    throw new ApiError(res.status, parsed.message, parsed.code)
+  }
   return res.json()
 }
 
@@ -660,7 +674,8 @@ export async function submitVisitConformity(
         name_len: name.length,
       })
     }
-    throw new ApiError(res.status, await parseError(res))
+    const parsed = await parseError(res)
+    throw new ApiError(res.status, parsed.message, parsed.code)
   }
   return res.json()
 }
@@ -731,7 +746,10 @@ export async function uploadFacadePhoto(
     if (typeof window !== "undefined") window.location.href = "/login?expired=1"
     throw new ApiError(401, "Sesión expirada")
   }
-  if (!res.ok) throw new ApiError(res.status, await parseError(res))
+  if (!res.ok) {
+    const parsed = await parseError(res)
+    throw new ApiError(res.status, parsed.message, parsed.code)
+  }
   return res.json()
 }
 

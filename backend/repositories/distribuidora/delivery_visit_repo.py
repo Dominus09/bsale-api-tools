@@ -89,6 +89,56 @@ def get_last_closed_visit(
     return _row(cur, r) if r else None
 
 
+def get_valid_closed_visit(
+    cur,
+    *,
+    plan_id: int,
+    customer_key: str,
+    exclude_visit_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Cierre válido persistido: completed|partial|not_delivered con ended_at.
+
+    No incluye cancelled ni visitas solo iniciadas.
+    """
+    params: list[Any] = [int(plan_id), customer_key]
+    exclude_sql = ""
+    if exclude_visit_id is not None:
+        exclude_sql = " AND id <> %s"
+        params.append(int(exclude_visit_id))
+    cur.execute(
+        f"""
+        SELECT *
+        FROM distribuidora.delivery_visits
+        WHERE dispatch_plan_id = %s
+          AND customer_key = %s
+          AND status IN ('completed', 'partial', 'not_delivered')
+          AND ended_at IS NOT NULL
+          {exclude_sql}
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        tuple(params),
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None
+
+
+def lock_visits_for_client(cur, *, plan_id: int, customer_key: str) -> list[dict[str, Any]]:
+    """Bloqueo transaccional de filas del plan+cliente (serializa start_visit)."""
+    cur.execute(
+        """
+        SELECT *
+        FROM distribuidora.delivery_visits
+        WHERE dispatch_plan_id = %s
+          AND customer_key = %s
+        ORDER BY id ASC
+        FOR UPDATE
+        """,
+        (int(plan_id), customer_key),
+    )
+    return [_row(cur, r) for r in cur.fetchall()]
+
+
 def list_visit_events(cur, visit_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
     """Eventos de una visita (solo lectura)."""
     cur.execute(

@@ -209,6 +209,12 @@ function ResultadoInner() {
         </div>
       )}
 
+      {recovery.adminReviewPending ? (
+        <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
+          Existe una visita anterior pendiente de revisión administrativa.
+        </div>
+      ) : null}
+
       {recovery.canResumeActive && recovery.active?.id !== visitId ? (
         <Link
           href={buildEntregaHref(planId, customerKey, "documentos")}

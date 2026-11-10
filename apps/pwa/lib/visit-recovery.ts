@@ -12,12 +12,20 @@ function isClosed(status: string | null | undefined): boolean {
   )
 }
 
+/** Cierre válido operativo (bloquea nueva visita / retom de duplicada). */
+export function isValidClosedStatus(status: string | null | undefined): boolean {
+  const s = String(status || "")
+  return s === "completed" || s === "partial" || s === "not_delivered"
+}
+
 export type VisitRecoveryState = {
   active: DeliveryVisit | null
   latest: DeliveryVisit | null
   lastClosed: DeliveryVisit | null
   canResumeActive: boolean
   canViewClosedResult: boolean
+  /** Activa abierta coexistiendo con cierre válido → revisión admin. */
+  adminReviewPending: boolean
   requiresExplicitNewVisit: boolean
   /** visitId preferido para pantalla resultado sin query. */
   preferredResultVisitId: number | null
@@ -41,13 +49,21 @@ export function resolveVisitRecovery(input: {
     lastClosed = null
   }
 
+  const hasValidClose = Boolean(
+    lastClosed && isValidClosedStatus(lastClosed.status),
+  )
+  const adminReviewPending = Boolean(active && hasValidClose)
+  // Solo retomar si no hay cierre válido previo del mismo plan+cliente.
+  const canResumeActive = Boolean(active) && !adminReviewPending
+
   return {
     active,
     latest,
     lastClosed,
-    canResumeActive: Boolean(active),
+    canResumeActive,
     canViewClosedResult: Boolean(lastClosed && isClosed(lastClosed.status)),
-    requiresExplicitNewVisit: !active,
+    adminReviewPending,
+    requiresExplicitNewVisit: !active && !hasValidClose,
     preferredResultVisitId: lastClosed?.id ?? null,
   }
 }

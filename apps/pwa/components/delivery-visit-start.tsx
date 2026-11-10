@@ -73,8 +73,10 @@ export function DeliveryVisitStart(props: Props) {
     [props.activeVisit, props.latestVisit, props.lastClosedVisit],
   )
 
-  const inProgress = recovery.canResumeActive
-  const closedOnly = !inProgress && recovery.canViewClosedResult
+  const canResume = recovery.canResumeActive
+  const closedWithAdminDup = recovery.adminReviewPending
+  const closedOnly =
+    !canResume && !closedWithAdminDup && recovery.canViewClosedResult
 
   async function onStart() {
     setBusy(true)
@@ -130,7 +132,7 @@ export function DeliveryVisitStart(props: Props) {
   return (
     <div className="card">
       <div className="ficha-summary" style={{ marginBottom: 10 }}>
-        {inProgress && recovery.active ? (
+        {canResume && recovery.active ? (
           <>
             <span className="pill pill-ok">En atención #{recovery.active.id}</span>
             {recovery.active.started_at_local ? (
@@ -155,8 +157,34 @@ export function DeliveryVisitStart(props: Props) {
         )}
       </div>
 
-      {/* Caso dual: activa + histórica — ambos accesibles. */}
-      {inProgress && recovery.active ? (
+      {/* Duplicada abierta + cierre válido: resultado histórico + aviso admin. */}
+      {closedWithAdminDup && recovery.lastClosed ? (
+        <div className="stack-gap">
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy}
+            onClick={() =>
+              router.push(
+                resultadoHref(
+                  props.planId,
+                  props.customerKey,
+                  recovery.lastClosed!.id,
+                ),
+              )
+            }
+          >
+            Ver resultado de entrega
+          </button>
+          <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
+            {props.blockNote ||
+              "Existe una visita anterior pendiente de revisión administrativa."}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Visita normal activa (sin cierre válido previo). */}
+      {canResume && recovery.active ? (
         <div className="stack-gap">
           {!confirmStart ? (
             <button
@@ -206,24 +234,6 @@ export function DeliveryVisitStart(props: Props) {
               Ir al circuito de entrega
             </button>
           ) : null}
-          {recovery.canViewClosedResult && recovery.lastClosed ? (
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy}
-              onClick={() =>
-                router.push(
-                  resultadoHref(
-                    props.planId,
-                    props.customerKey,
-                    recovery.lastClosed!.id,
-                  ),
-                )
-              }
-            >
-              Ver resultado visita #{recovery.lastClosed.id}
-            </button>
-          ) : null}
         </div>
       ) : null}
 
@@ -246,7 +256,7 @@ export function DeliveryVisitStart(props: Props) {
               )
             }
           >
-            Ver resultado
+            Ver resultado de entrega
           </button>
           {props.allowCreateAfterClose === false ? (
             <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
@@ -290,7 +300,7 @@ export function DeliveryVisitStart(props: Props) {
         </div>
       ) : null}
 
-      {!inProgress && !closedOnly ? (
+      {!canResume && !closedOnly && !closedWithAdminDup ? (
         <div className="stack-gap">
           {!confirmStart ? (
             <button

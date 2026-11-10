@@ -15,18 +15,18 @@ describe("resolveVisitRecovery Romeo Alfa dual-visit", () => {
     version: 2,
   }
 
-  it("permite retomar activa y ver resultado histórico a la vez", () => {
+  it("con cierre válido + activa: no retomar; sí ver resultado + aviso admin", () => {
     const r = resolveVisitRecovery({
       activeVisit: active,
       latestVisit: active,
       lastClosedVisit: closed,
     })
-    assert.equal(r.canResumeActive, true)
+    assert.equal(r.canResumeActive, false)
+    assert.equal(r.adminReviewPending, true)
     assert.equal(r.canViewClosedResult, true)
     assert.equal(r.active.id, 3)
     assert.equal(r.lastClosed.id, 1)
     assert.equal(r.preferredResultVisitId, 1)
-    assert.equal(r.requiresExplicitNewVisit, false)
   })
 
   it("no oculta cerrada aunque latest sea la activa", () => {
@@ -38,14 +38,37 @@ describe("resolveVisitRecovery Romeo Alfa dual-visit", () => {
     assert.notEqual(r.lastClosed?.id, r.active?.id)
   })
 
-  it("sin activa: muestra resultado y exige nueva visita explícita", () => {
+  it("sin activa: muestra resultado y no exige nueva visita tras cierre válido", () => {
     const r = resolveVisitRecovery({
       activeVisit: null,
       latestVisit: closed,
       lastClosedVisit: closed,
     })
     assert.equal(r.canResumeActive, false)
+    assert.equal(r.adminReviewPending, false)
     assert.equal(r.canViewClosedResult, true)
-    assert.equal(r.requiresExplicitNewVisit, true)
+    assert.equal(r.requiresExplicitNewVisit, false)
+  })
+
+  it("activa legítima sin cierre previo: puede retomar", () => {
+    const r = resolveVisitRecovery({
+      activeVisit: active,
+      latestVisit: active,
+      lastClosedVisit: null,
+    })
+    assert.equal(r.canResumeActive, true)
+    assert.equal(r.adminReviewPending, false)
+    assert.equal(r.canViewClosedResult, false)
+  })
+
+  it("cancelled no bloquea retomar de una activa", () => {
+    const cancelled = { id: 1, status: "cancelled", version: 2 }
+    const r = resolveVisitRecovery({
+      activeVisit: active,
+      latestVisit: active,
+      lastClosedVisit: cancelled,
+    })
+    assert.equal(r.canResumeActive, true)
+    assert.equal(r.adminReviewPending, false)
   })
 })

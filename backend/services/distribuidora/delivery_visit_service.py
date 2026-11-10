@@ -36,6 +36,33 @@ SANTIAGO = ZoneInfo("America/Santiago")
 VISIT_RESULT_STATUSES = frozenset(
     {"completed", "partial", "not_delivered", "cancelled"}
 )
+VALID_CLOSE_STATUSES = frozenset({"completed", "partial", "not_delivered"})
+
+# Códigos estables para UI (detail.code).
+ERR_VISIT_ALREADY_CLOSED = "VISIT_ALREADY_CLOSED"
+ERR_VISIT_SUPERSEDED_BY_CLOSED = "VISIT_SUPERSEDED_BY_CLOSED"
+ERR_VISIT_CLOSED_NOT_EDITABLE = "VISIT_CLOSED_NOT_EDITABLE"
+
+
+def _http_409(code: str, message_es: str, **extra: Any) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": code,
+            "message": message_es,
+            "message_es": message_es,
+            **extra,
+        },
+    )
+
+
+def is_valid_closed_visit(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    return (
+        str(row.get("status") or "") in VALID_CLOSE_STATUSES
+        and row.get("ended_at") is not None
+    )
 NOT_DELIVERED_REASONS = frozenset(
     {
         "closed_store",
@@ -191,16 +218,21 @@ def get_latest_visit_for_client(
 def get_last_closed_visit_for_client(
     *, plan_id: int, customer_key: str
 ) -> dict[str, Any] | None:
-    """Última visita cerrada del cliente. Independiente de una in_progress."""
+    """Última visita cerrada del cliente. Prefiere cierre válido (ended_at)."""
     conn = get_connection()
     try:
         cur = conn.cursor()
         if not visit_repo.tables_ready(cur):
             cur.close()
             return None
-        row = visit_repo.get_last_closed_visit(
-            cur, plan_id=int(plan_id), customer_key=customer_key.strip()
+        key = customer_key.strip()
+        row = visit_repo.get_valid_closed_visit(
+            cur, plan_id=int(plan_id), customer_key=key
         )
+        if not row:
+            row = visit_repo.get_last_closed_visit(
+                cur, plan_id=int(plan_id), customer_key=key
+            )
         cur.close()
     finally:
         conn.close()
@@ -297,6 +329,15 @@ def start_visit(
                     }
                 )
 
+        # Serializa aperturas concurrentes del mismo plan+cliente.
+        visit_repo.lock_visits_for_client(
+            cur, plan_id=int(plan_id), customer_key=key
+        )
+
+        valid_closed = visit_repo.get_valid_closed_visit(
+            cur, plan_id=int(plan_id), customer_key=key
+        )
+
         active = visit_repo.get_active_visit(
             cur, plan_id=int(plan_id), customer_key=key
         )
@@ -305,6 +346,21 @@ def start_visit(
                 raise HTTPException(
                     status_code=409,
                     detail="Ya hay una visita en atención de otro chofer",
+                )
+            # Duplicada abierta tras cierre válido: no retomar operativamente.
+            if is_valid_closed_visit(valid_closed) and int(valid_closed["id"]) != int(
+                active["id"]
+            ):
+                raise _http_409(
+                    ERR_VISIT_SUPERSEDED_BY_CLOSED,
+                    (
+                        "Ya existe una entrega finalizada para este cliente en el "
+                        "despacho. La visita abierta quedó pendiente de revisión "
+                        "administrativa y no se puede continuar."
+                    ),
+                    closed_visit_id=int(valid_closed["id"]),
+                    open_visit_id=int(active["id"]),
+                    closed_status=str(valid_closed.get("status")),
                 )
             visit_repo.insert_event(
                 cur,
@@ -328,19 +384,15 @@ def start_visit(
             )
 
         # Bloqueo: no abrir visita normal tras cierre válido del mismo plan+cliente.
-        # cancelled no bloquea (permite reintento). Reprogramación legítima = flujo admin futuro.
-        prior_closed = visit_repo.get_last_closed_visit(
-            cur, plan_id=int(plan_id), customer_key=key
-        )
-        blocking = {"completed", "partial", "not_delivered"}
-        if prior_closed and str(prior_closed.get("status") or "") in blocking:
-            raise HTTPException(
-                status_code=409,
-                detail=(
+        if is_valid_closed_visit(valid_closed):
+            raise _http_409(
+                ERR_VISIT_ALREADY_CLOSED,
+                (
                     "Este cliente ya tiene una visita finalizada en este despacho. "
-                    "Consulte el resultado histórico; no se inicia otra visita normal. "
-                    f"(visita #{prior_closed.get('id')} · {prior_closed.get('status')})"
+                    "Consulte el resultado histórico; no se inicia otra visita normal."
                 ),
+                closed_visit_id=int(valid_closed["id"]),
+                closed_status=str(valid_closed.get("status")),
             )
 
         row = visit_repo.insert_visit(
@@ -554,9 +606,30 @@ def finalize_visit(
                         "mode": "online_only",
                     }
                 )
-            raise HTTPException(
-                status_code=409,
-                detail=f"Visita ya cerrada ({current.get('status')})",
+            raise _http_409(
+                ERR_VISIT_CLOSED_NOT_EDITABLE,
+                f"Visita ya cerrada ({current.get('status')})",
+                visit_id=int(visit_id),
+                visit_status=str(current.get("status") or ""),
+            )
+
+        prior = visit_repo.get_valid_closed_visit(
+            cur,
+            plan_id=int(plan_id),
+            customer_key=str(current.get("customer_key") or ""),
+            exclude_visit_id=int(visit_id),
+        )
+        if is_valid_closed_visit(prior):
+            raise _http_409(
+                ERR_VISIT_SUPERSEDED_BY_CLOSED,
+                (
+                    "Esta visita abierta quedó pendiente de revisión administrativa. "
+                    "Ya existe una entrega finalizada para el cliente; no se permite "
+                    "cerrar ni modificar esta visita duplicada."
+                ),
+                closed_visit_id=int(prior["id"]),
+                open_visit_id=int(visit_id),
+                closed_status=str(prior.get("status")),
             )
 
         # Propagar excepción GPS de cierre a la fila si aplica
@@ -682,7 +755,31 @@ def _require_own_open_visit(
     if int(row["driver_user_id"]) != uid:
         raise HTTPException(status_code=403, detail="Visita de otro chofer")
     if row.get("status") != "in_progress":
-        raise HTTPException(status_code=409, detail="Visita cerrada; no editable")
+        raise _http_409(
+            ERR_VISIT_CLOSED_NOT_EDITABLE,
+            "Visita cerrada; no editable",
+            visit_id=int(visit_id),
+            visit_status=str(row.get("status") or ""),
+        )
+    # Visita abierta pero ya hay cierre válido del mismo plan+cliente → solo admin.
+    prior = visit_repo.get_valid_closed_visit(
+        cur,
+        plan_id=int(plan_id),
+        customer_key=str(row.get("customer_key") or ""),
+        exclude_visit_id=int(visit_id),
+    )
+    if is_valid_closed_visit(prior):
+        raise _http_409(
+            ERR_VISIT_SUPERSEDED_BY_CLOSED,
+            (
+                "Esta visita abierta quedó pendiente de revisión administrativa. "
+                "Ya existe una entrega finalizada para el cliente; no se permiten "
+                "nuevos registros."
+            ),
+            closed_visit_id=int(prior["id"]),
+            open_visit_id=int(visit_id),
+            closed_status=str(prior.get("status")),
+        )
     return row
 
 

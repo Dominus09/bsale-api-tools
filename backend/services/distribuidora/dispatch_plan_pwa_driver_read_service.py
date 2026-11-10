@@ -1035,9 +1035,22 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
     has_active = bool(
         active_visit and str(active_visit.get("status") or "") == "in_progress"
     )
-    # Retomar activa siempre; crear nueva solo si no hay cierre válido previo.
+    # Duplicada abierta tras cierre válido: no retomar; solo resultado histórico.
+    admin_review_pending = bool(blocking_closed and has_active)
+    can_resume_active = has_active and (not admin_review_pending)
     can_create_new = (not blocking_closed) and (not has_active)
-    can_operate = has_active or can_create_new
+    can_operate = can_resume_active or can_create_new
+    note_es = None
+    if admin_review_pending:
+        note_es = (
+            "Existe una visita anterior pendiente de revisión administrativa. "
+            "Consulte el resultado de la entrega finalizada."
+        )
+    elif blocking_closed and not has_active:
+        note_es = (
+            "Visita ya finalizada en este despacho. "
+            "Solo consulta del resultado histórico."
+        )
 
     return serialize_value(
         {
@@ -1058,16 +1071,11 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
             "read_only": False,
             "capabilities": {
                 "start_delivery_visit": can_operate,
+                "resume_active_visit": can_resume_active,
                 "create_new_visit_after_close": can_create_new,
+                "admin_review_pending": admin_review_pending,
                 "mode": "online_only",
-                "note_es": (
-                    None
-                    if can_operate
-                    else (
-                        "Visita ya finalizada en este despacho. "
-                        "Solo consulta del resultado histórico."
-                    )
-                ),
+                "note_es": note_es,
             },
             "sources": {
                 **bundle["sources"],
