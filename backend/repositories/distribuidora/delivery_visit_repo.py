@@ -62,25 +62,28 @@ def admin_void_columns_ready(cur) -> bool:
 
 
 def _not_admin_voided_sql(cur) -> str:
-    """Filtro SQL: excluye anuladas / pruebas cuando exista 058."""
+    """Filtro SQL: excluye solo anulaciones administrativas auditadas (058).
+
+    Requiere voided_at IS NOT NULL y admin_classification = 'voided_admin'.
+    pilot_test solo (sin void) NO salta el bloqueo operativo.
+    """
     if not admin_void_columns_ready(cur):
         return ""
     return """
-          AND COALESCE(admin_classification, 'operational')
-              NOT IN ('voided_admin', 'pilot_test')
-          AND voided_at IS NULL
+          AND NOT (
+              voided_at IS NOT NULL
+              AND COALESCE(admin_classification, 'operational') = 'voided_admin'
+          )
     """
 
 
 def is_admin_voided_row(row: dict[str, Any] | None) -> bool:
+    """True solo con anulación administrativa auditada (voided_at + voided_admin)."""
     if not row:
         return False
-    if row.get("voided_at") is not None:
-        return True
-    return str(row.get("admin_classification") or "") in {
-        "voided_admin",
-        "pilot_test",
-    }
+    if row.get("voided_at") is None:
+        return False
+    return str(row.get("admin_classification") or "") == "voided_admin"
 
 
 def get_active_visit(
@@ -154,7 +157,8 @@ def get_valid_closed_visit(
 ) -> dict[str, Any] | None:
     """Cierre válido operativo: completed|partial|not_delivered con ended_at.
 
-    Excluye cancelled, solo iniciadas y anulaciones admin / pilot_test (058).
+    Excluye cancelled, solo iniciadas y anulaciones auditadas
+    (voided_admin + voided_at). pilot_test sin void sigue bloqueando.
     """
     params: list[Any] = [int(plan_id), customer_key]
     exclude_sql = ""

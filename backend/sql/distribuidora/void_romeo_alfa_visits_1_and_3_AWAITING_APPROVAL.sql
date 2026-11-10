@@ -5,34 +5,34 @@
 -- Prerrequisito: aplicar 058_delivery_visit_admin_void.sql (también con autorización).
 --
 -- Reglas:
---   - Sin DELETE de visitas ni hijos.
---   - #1 (finalizada partial): NO cambiar status; marcar voided_admin + auditoría.
---     Cambiar a cancelled rompería el sentido histórico del cierre de prueba.
---   - #3 (in_progress): status → cancelled + voided_admin para liberar
---     uq_delivery_visit_active y permitir una visita operativa nueva.
---   - Solo ids 1 y 3 del plan 82 / customer_key id:3575.
---   - No crea visita nueva.
---   - No toca Bsale / picking / factura 51819.
+--   - Sin DELETE de visitas ni hijos (docs/líneas/cobranza/evidencia/conformidad/eventos).
+--   - #1 (finalizada partial): CONSERVA status=partial y ended_at; solo marca void.
+--   - #3 (in_progress): status → cancelled + void (libera uq_delivery_visit_active).
+--   - Solo ids 1 y 3, plan_id 82, customer_key id:3575.
+--   - Una sola transacción; si falla cualquier guarda → ROLLBACK total.
+--   - No crea visita nueva. No toca Bsale / picking / factura 51819.
 --
--- Sustituir el literal ACTOR_USER_ID (abajo) por el id entero del administrador.
+-- Antes de ejecutar: reemplazar TODOS los /* ACTOR_USER_ID */ 0 por el id admin (>0).
 -- =============================================================================
 
 BEGIN;
 
--- >>> EDITAR ANTES DE EJECUTAR <<<
--- Ejemplo: 42
--- Usar el mismo valor en los cuatro lugares marcados ACTOR_USER_ID.
-
--- 0) Respaldo lógico (conteos pre)
-CREATE TEMP TABLE IF NOT EXISTS _void_romeo_pre AS
+-- 0) Respaldo lógico pre
+CREATE TEMP TABLE _void_romeo_pre ON COMMIT DROP AS
 SELECT
     v.id,
     v.status,
+    v.ended_at,
     v.admin_classification,
     v.voided_at,
+    (SELECT count(*) FROM distribuidora.delivery_document_results d WHERE d.visit_id = v.id) AS docs_n,
     (SELECT count(*) FROM distribuidora.delivery_line_results l WHERE l.visit_id = v.id) AS lines_n,
     (SELECT coalesce(sum(l.delivered_units), 0)
-       FROM distribuidora.delivery_line_results l WHERE l.visit_id = v.id) AS delivered_sum
+       FROM distribuidora.delivery_line_results l WHERE l.visit_id = v.id) AS delivered_sum,
+    (SELECT count(*) FROM distribuidora.delivery_collections c WHERE c.visit_id = v.id) AS collections_n,
+    (SELECT count(*) FROM distribuidora.delivery_evidence e WHERE e.visit_id = v.id) AS evidence_n,
+    (SELECT count(*) FROM distribuidora.delivery_conformity f WHERE f.visit_id = v.id) AS conformity_n,
+    (SELECT count(*) FROM distribuidora.delivery_visit_events ev WHERE ev.visit_id = v.id) AS events_n
 FROM distribuidora.delivery_visits v
 WHERE v.dispatch_plan_id = 82
   AND v.customer_key = 'id:3575'
@@ -40,35 +40,70 @@ WHERE v.dispatch_plan_id = 82
 
 SELECT * FROM _void_romeo_pre ORDER BY id;
 
--- Guardas: abortar si no coinciden estados esperados / actor sin editar
+-- Guardas previas (abortan la transacción completa)
 DO $$
 DECLARE
     s1 text;
     s3 text;
+    ended1 timestamptz;
+    void1 timestamptz;
+    void3 timestamptz;
     n int;
+    other_touched int;
     actor int := /* ACTOR_USER_ID */ 0;
 BEGIN
     IF actor IS NULL OR actor <= 0 THEN
         RAISE EXCEPTION 'Reemplazar ACTOR_USER_ID por el id del administrador (>0)';
     END IF;
-    SELECT status INTO s1 FROM distribuidora.delivery_visits
-     WHERE id = 1 AND dispatch_plan_id = 82 AND customer_key = 'id:3575';
-    SELECT status INTO s3 FROM distribuidora.delivery_visits
-     WHERE id = 3 AND dispatch_plan_id = 82 AND customer_key = 'id:3575';
+
+    SELECT status, ended_at, voided_at
+      INTO s1, ended1, void1
+      FROM distribuidora.delivery_visits
+     WHERE id = 1 AND dispatch_plan_id = 82 AND customer_key = 'id:3575'
+     FOR UPDATE;
+    SELECT status, voided_at
+      INTO s3, void3
+      FROM distribuidora.delivery_visits
+     WHERE id = 3 AND dispatch_plan_id = 82 AND customer_key = 'id:3575'
+     FOR UPDATE;
+
+    IF s1 IS NULL OR s3 IS NULL THEN
+        RAISE EXCEPTION 'No se encontraron ambas visitas #1 y #3 para plan 82 / id:3575';
+    END IF;
     IF s1 IS DISTINCT FROM 'partial' THEN
         RAISE EXCEPTION 'Visita #1 status inesperado: % (se esperaba partial)', s1;
+    END IF;
+    IF ended1 IS NULL THEN
+        RAISE EXCEPTION 'Visita #1 sin ended_at; abortando';
     END IF;
     IF s3 IS DISTINCT FROM 'in_progress' THEN
         RAISE EXCEPTION 'Visita #3 status inesperado: % (se esperaba in_progress)', s3;
     END IF;
-    SELECT count(*) INTO n FROM distribuidora.delivery_visits
+    IF void1 IS NOT NULL OR void3 IS NOT NULL THEN
+        RAISE EXCEPTION 'Alguna visita ya está anulada; abortando para evitar doble void';
+    END IF;
+
+    SELECT count(*) INTO n
+      FROM distribuidora.delivery_visits
      WHERE dispatch_plan_id = 82 AND customer_key = 'id:3575' AND id IN (1, 3);
     IF n <> 2 THEN
         RAISE EXCEPTION 'Se esperaban exactamente 2 filas alvo; encontradas %', n;
     END IF;
+
+    -- Asegurar que no hay otras filas del cliente con ids distintos en el lote alvo
+    SELECT count(*) INTO other_touched
+      FROM distribuidora.delivery_visits
+     WHERE dispatch_plan_id = 82
+       AND customer_key = 'id:3575'
+       AND id NOT IN (1, 3)
+       AND status = 'in_progress';
+    -- Informativo: otras activas del mismo cliente serían anomalía (índice único)
+    IF other_touched > 0 THEN
+        RAISE EXCEPTION 'Hay otra visita in_progress del mismo cliente; abortando';
+    END IF;
 END $$;
 
--- 1) Anular #1 (cierre de prueba) — conservar status=partial / ended_at
+-- 1) Anular #1 — conserva status/ended_at/hijos
 UPDATE distribuidora.delivery_visits
 SET
     admin_classification = 'voided_admin',
@@ -84,6 +119,30 @@ WHERE id = 1
   AND ended_at IS NOT NULL
   AND voided_at IS NULL;
 
+DO $$
+BEGIN
+    IF NOT FOUND THEN
+        -- NOT FOUND tras UPDATE en DO no aplica al UPDATE externo; se valida por rowcount abajo
+        NULL;
+    END IF;
+END $$;
+
+-- Validar exactamente 1 fila #1
+DO $$
+DECLARE
+    n int;
+BEGIN
+    SELECT count(*) INTO n
+      FROM distribuidora.delivery_visits
+     WHERE id = 1 AND dispatch_plan_id = 82 AND customer_key = 'id:3575'
+       AND admin_classification = 'voided_admin'
+       AND voided_at IS NOT NULL
+       AND status = 'partial';
+    IF n <> 1 THEN
+        RAISE EXCEPTION 'Void #1 falló (filas voided=%). ROLLBACK.', n;
+    END IF;
+END $$;
+
 INSERT INTO distribuidora.delivery_visit_events (visit_id, action, actor_user_id, payload)
 VALUES (
     1,
@@ -95,11 +154,11 @@ VALUES (
         'kept_status', 'partial',
         'admin_classification', 'voided_admin',
         'ticket', 'PILOT-ROMEO-ALFA-VOID',
-        'note_es', 'Cierre de prueba anulado; no cuenta como entrega operativa ni bloquea nueva visita.'
+        'note_es', 'Cierre de prueba anulado; historial conservado; no bloquea nueva visita.'
     )
 );
 
--- 2) Anular #3 (abierta de prueba) — cancelled para liberar índice único activo
+-- 2) Anular #3 — cancelled + void (libera índice único activo)
 UPDATE distribuidora.delivery_visits
 SET
     status = 'cancelled',
@@ -115,6 +174,21 @@ WHERE id = 3
   AND status = 'in_progress'
   AND voided_at IS NULL;
 
+DO $$
+DECLARE
+    n int;
+BEGIN
+    SELECT count(*) INTO n
+      FROM distribuidora.delivery_visits
+     WHERE id = 3 AND dispatch_plan_id = 82 AND customer_key = 'id:3575'
+       AND admin_classification = 'voided_admin'
+       AND voided_at IS NOT NULL
+       AND status = 'cancelled';
+    IF n <> 1 THEN
+        RAISE EXCEPTION 'Void #3 falló (filas voided=%). ROLLBACK de #1 y #3.', n;
+    END IF;
+END $$;
+
 INSERT INTO distribuidora.delivery_visit_events (visit_id, action, actor_user_id, payload)
 VALUES (
     3,
@@ -126,45 +200,60 @@ VALUES (
         'new_status', 'cancelled',
         'admin_classification', 'voided_admin',
         'ticket', 'PILOT-ROMEO-ALFA-VOID',
-        'note_es', 'Visita abierta de prueba anulada; libera uq_delivery_visit_active.'
+        'note_es', 'Visita abierta de prueba anulada; libera uq_delivery_visit_active; historial conservado.'
     )
 );
 
--- 3) Verificación post (debe devolver 2 filas voided; 0 in_progress para el cliente)
-SELECT
-    id, status, admin_classification, voided_at, voided_by_user_id, void_ticket_ref
+-- 3) Verificación final dentro de la misma transacción
+DO $$
+DECLARE
+    ip int;
+    blocking int;
+    lines1 int;
+    lines3 int;
+    pre1 int;
+    pre3 int;
+BEGIN
+    SELECT count(*) INTO ip
+      FROM distribuidora.delivery_visits
+     WHERE dispatch_plan_id = 82 AND customer_key = 'id:3575' AND status = 'in_progress';
+    IF ip <> 0 THEN
+        RAISE EXCEPTION 'Aún hay in_progress para Romeo Alfa; abortando';
+    END IF;
+
+    SELECT count(*) INTO blocking
+      FROM distribuidora.delivery_visits
+     WHERE dispatch_plan_id = 82
+       AND customer_key = 'id:3575'
+       AND status IN ('completed', 'partial', 'not_delivered')
+       AND ended_at IS NOT NULL
+       AND NOT (
+           voided_at IS NOT NULL
+           AND COALESCE(admin_classification, 'operational') = 'voided_admin'
+       );
+    IF blocking <> 0 THEN
+        RAISE EXCEPTION 'Aún hay cierre operativo bloqueante; abortando';
+    END IF;
+
+    SELECT lines_n INTO pre1 FROM _void_romeo_pre WHERE id = 1;
+    SELECT lines_n INTO pre3 FROM _void_romeo_pre WHERE id = 3;
+    SELECT count(*) INTO lines1 FROM distribuidora.delivery_line_results WHERE visit_id = 1;
+    SELECT count(*) INTO lines3 FROM distribuidora.delivery_line_results WHERE visit_id = 3;
+    IF lines1 IS DISTINCT FROM pre1 OR lines3 IS DISTINCT FROM pre3 THEN
+        RAISE EXCEPTION 'Conteo de líneas cambió tras void; abortando (no debería ocurrir)';
+    END IF;
+END $$;
+
+SELECT id, status, admin_classification, voided_at, voided_by_user_id, void_ticket_ref, ended_at
 FROM distribuidora.delivery_visits
-WHERE dispatch_plan_id = 82
-  AND customer_key = 'id:3575'
-  AND id IN (1, 3)
+WHERE dispatch_plan_id = 82 AND customer_key = 'id:3575' AND id IN (1, 3)
 ORDER BY id;
 
-SELECT count(*) AS still_in_progress
-FROM distribuidora.delivery_visits
-WHERE dispatch_plan_id = 82
-  AND customer_key = 'id:3575'
-  AND status = 'in_progress';
+SELECT id, lines_n AS lines_pre, delivered_sum AS delivered_pre
+FROM _void_romeo_pre
+ORDER BY id;
 
--- Cierre válido operativo restante (debe ser 0)
-SELECT count(*) AS valid_closed_blocking
-FROM distribuidora.delivery_visits
-WHERE dispatch_plan_id = 82
-  AND customer_key = 'id:3575'
-  AND status IN ('completed', 'partial', 'not_delivered')
-  AND ended_at IS NOT NULL
-  AND COALESCE(admin_classification, 'operational') NOT IN ('voided_admin', 'pilot_test')
-  AND voided_at IS NULL;
-
--- Hijos intactos (mismo conteo que pre)
-SELECT
-    v.id,
-    (SELECT count(*) FROM distribuidora.delivery_line_results l WHERE l.visit_id = v.id) AS lines_n,
-    (SELECT coalesce(sum(l.delivered_units), 0)
-       FROM distribuidora.delivery_line_results l WHERE l.visit_id = v.id) AS delivered_sum
-FROM distribuidora.delivery_visits v
-WHERE v.id IN (1, 3)
-ORDER BY v.id;
-
--- Si todo OK: COMMIT; si no: ROLLBACK;
+-- Si todo OK en pgAdmin: ejecutar COMMIT;
+-- Si algo falló (exception): la transacción queda abortada → ROLLBACK;
 -- COMMIT;
 -- ROLLBACK;

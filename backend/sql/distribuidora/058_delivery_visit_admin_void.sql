@@ -50,9 +50,9 @@ CREATE INDEX IF NOT EXISTS idx_delivery_visits_admin_class
 -- +go
 
 COMMENT ON COLUMN distribuidora.delivery_visits.admin_classification IS
-    'operational | pilot_test | duplicate_pending_review | voided_admin. voided_admin/pilot_test no bloquean ni cuentan como entrega operativa.';
+    'operational | pilot_test | duplicate_pending_review | voided_admin. Solo voided_admin + voided_at excluye del bloqueo/estado operativo. pilot_test sin void NO salta restricciones.';
 -- +go
 
 COMMENT ON COLUMN distribuidora.delivery_visits.voided_at IS
-    'Timestamp de anulación administrativa. No implica DELETE.';
+    'Timestamp de anulación administrativa auditada (obligatorio junto a voided_admin). No implica DELETE.';
 -- +go

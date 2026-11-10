@@ -19,9 +19,16 @@ def test_is_admin_voided_row():
     assert repo.is_admin_voided_row(
         {"admin_classification": "voided_admin", "voided_at": ENDED}
     )
-    assert repo.is_admin_voided_row({"admin_classification": "pilot_test"})
+    # pilot_test sin voided_at NO es anulación auditada
+    assert not repo.is_admin_voided_row({"admin_classification": "pilot_test"})
+    assert not repo.is_admin_voided_row(
+        {"admin_classification": "pilot_test", "voided_at": ENDED}
+    )
     assert not repo.is_admin_voided_row(
         {"admin_classification": "operational", "voided_at": None}
+    )
+    assert not repo.is_admin_voided_row(
+        {"admin_classification": "voided_admin", "voided_at": None}
     )
 
 
@@ -43,6 +50,19 @@ def test_is_valid_closed_excludes_voided_partial():
             "voided_at": None,
         }
     )
+
+
+def test_pilot_test_label_alone_still_blocks_as_valid_close():
+    """pilot_test sin voided_admin+voided_at NO debe saltar el bloqueo."""
+    pilot_only = {
+        "id": 1,
+        "status": "partial",
+        "ended_at": ENDED,
+        "admin_classification": "pilot_test",
+        "voided_at": None,
+    }
+    assert svc.is_valid_closed_visit(pilot_only)
+    assert not repo.is_admin_voided_row(pilot_only)
 
 
 def test_attention_ignores_voided_visits_enables_pending():

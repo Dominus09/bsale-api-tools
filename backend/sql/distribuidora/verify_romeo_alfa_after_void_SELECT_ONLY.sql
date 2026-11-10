@@ -20,9 +20,12 @@ WHERE dispatch_plan_id = 82
   AND customer_key = 'id:3575'
   AND status IN ('completed', 'partial', 'not_delivered')
   AND ended_at IS NOT NULL
-  AND COALESCE(admin_classification, 'operational') NOT IN ('voided_admin', 'pilot_test')
-  AND voided_at IS NULL;
+  AND NOT (
+      voided_at IS NOT NULL
+      AND COALESCE(admin_classification, 'operational') = 'voided_admin'
+  );
 -- Esperado: 0  → chofer puede iniciar visita operativa nueva
+-- Nota: pilot_test SIN voided_at seguiría contando aquí (no salta el bloqueo).
 
 SELECT visit_id, action, payload->>'ticket' AS ticket, created_at
 FROM distribuidora.delivery_visit_events

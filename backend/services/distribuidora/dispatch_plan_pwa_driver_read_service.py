@@ -1138,9 +1138,8 @@ def resolve_visit_attention_rows(
     valid_close = {"completed", "partial", "not_delivered"}
 
     def _voided(admin_class: Any, voided_at: Any) -> bool:
-        if voided_at is not None:
-            return True
-        return str(admin_class or "") in {"voided_admin", "pilot_test"}
+        # Solo anulación auditada; pilot_test sin voided_at sigue contando/bloqueando.
+        return voided_at is not None and str(admin_class or "") == "voided_admin"
 
     by_key: dict[str, list[tuple[int, str, Any]]] = {}
     for row in rows:
