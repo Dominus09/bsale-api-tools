@@ -890,8 +890,11 @@ def list_clients_for_driver(plan_id: int, *, q: str | None = None) -> dict[str, 
                 "route_order": c.get("route_order"),
                 "visit_id": att.get("visit_id"),
                 "visit_status": att.get("visit_status"),
+                "result_reason": att.get("result_reason"),
                 "attention_status": att.get("attention_status") or "pending",
                 "attention_label_es": att.get("attention_label_es") or "Pendiente",
+                "semaphore_color": att.get("semaphore_color") or "neutral",
+                "semaphore_code": att.get("semaphore_code") or "pending",
                 "admin_review_pending": bool(att.get("admin_review_pending")),
             }
         )
@@ -1138,23 +1141,12 @@ def resolve_visit_attention_rows(
 ) -> dict[str, dict[str, Any]]:
     """Estado operativo por cliente.
 
-    Filas: (customer_key, id, status, ended_at[, admin_classification[, voided_at]])
-
-    Prioridad:
-    1) Cierre válido no anulado → estado operativo.
-       Si además hay in_progress no anulada → admin_review_pending.
-    2) Solo in_progress legítima → En atención.
-    3) Otro cierre no anulado (p.ej. cancelled operativo) → ese estado.
-    4) Solo anuladas / sin visitas → pending (cliente habilitado a iniciar).
+    Filas: (customer_key, id, status, result_reason, ended_at
+            [, admin_classification, voided_at, voided_by, void_reason])
+    Compat: filas antiguas sin result_reason (len<=4 con ended_at en [3]).
     """
-    labels = {
-        "in_progress": "En atención",
-        "completed": "Finalizado",
-        "partial": "Parcial",
-        "not_delivered": "No entregado",
-        "cancelled": "Anulado",
-        "admin_review": "Pendiente revisión admin",
-    }
+    from backend.services.distribuidora.delivery_semaphore import resolve_semaphore
+
     valid_close = {"completed", "partial", "not_delivered"}
 
     def _voided(
@@ -1163,7 +1155,6 @@ def resolve_visit_attention_rows(
         voided_by: Any = None,
         void_reason: Any = None,
     ) -> bool:
-        # Solo anulación completa; pilot_test/duplicate_pending_review son informativos.
         if str(admin_class or "") != "voided_admin" or voided_at is None:
             return False
         try:
@@ -1172,32 +1163,87 @@ def resolve_visit_attention_rows(
             actor = 0
         return actor > 0 and len(str(void_reason or "").strip()) > 0
 
-    by_key: dict[str, list[tuple[int, str, Any]]] = {}
-    for row in rows:
-        customer_key = row[0]
-        visit_id = row[1]
-        status = row[2]
-        ended_at = row[3]
-        admin_class = row[4] if len(row) > 4 else None
-        voided_at = row[5] if len(row) > 5 else None
-        voided_by = row[6] if len(row) > 6 else None
-        void_reason = row[7] if len(row) > 7 else None
+    def _parse_row(row: tuple[Any, ...]) -> tuple[str, int, str, str | None, Any] | None:
+        """Soporta:
+        - Canónico: key,id,status,result_reason,ended_at[,admin...]
+        - Legacy tests: key,id,status,ended_at[,admin...] (sin result_reason)
+        """
+        n = len(row)
+        # Legacy: [3] es ended_at (datetime/None) y no hay hueco de reason.
+        legacy = n == 4 or (
+            n >= 5
+            and (row[3] is None or hasattr(row[3], "year"))
+            and not isinstance(row[3], str)
+        )
+        if legacy:
+            admin_class = row[4] if n > 4 else None
+            voided_at = row[5] if n > 5 else None
+            voided_by = row[6] if n > 6 else None
+            void_reason = row[7] if n > 7 else None
+            if _voided(admin_class, voided_at, voided_by, void_reason):
+                return None
+            return (
+                str(row[0] or ""),
+                int(row[1]),
+                str(row[2] or ""),
+                None,
+                row[3] if n > 3 else None,
+            )
+        admin_class = row[5] if n > 5 else None
+        voided_at = row[6] if n > 6 else None
+        voided_by = row[7] if n > 7 else None
+        void_reason = row[8] if n > 8 else None
         if _voided(admin_class, voided_at, voided_by, void_reason):
-            continue  # no cuentan para estado operativo
-        key = str(customer_key or "")
+            return None
+        reason = row[3]
+        return (
+            str(row[0] or ""),
+            int(row[1]),
+            str(row[2] or ""),
+            (str(reason).strip() if reason else None) or None,
+            row[4],
+        )
+
+    by_key: dict[str, list[tuple[int, str, str | None, Any]]] = {}
+    for row in rows:
+        parsed = _parse_row(tuple(row))
+        if not parsed:
+            continue
+        key, visit_id, status, reason, ended_at = parsed
         if not key:
             continue
-        by_key.setdefault(key, []).append(
-            (int(visit_id), str(status or ""), ended_at)
-        )
+        by_key.setdefault(key, []).append((visit_id, status, reason, ended_at))
+
+    def _pack(
+        *,
+        visit_id: int | None,
+        status: str | None,
+        reason: str | None,
+        admin_pending: bool,
+        open_visit_id: int | None,
+    ) -> dict[str, Any]:
+        sem = resolve_semaphore(status=status, result_reason=reason)
+        label = sem["label_es"]
+        if admin_pending:
+            label = f"{label} · revisión admin"
+        return {
+            "visit_id": visit_id,
+            "visit_status": status,
+            "result_reason": reason,
+            "attention_status": status or "pending",
+            "attention_label_es": label,
+            "semaphore_color": sem["color"],
+            "semaphore_code": sem["code"],
+            "admin_review_pending": admin_pending,
+            "open_visit_id": open_visit_id,
+            "operational_visit_id": visit_id,
+        }
 
     out: dict[str, dict[str, Any]] = {}
     for key, visits in by_key.items():
         visits_sorted = sorted(visits, key=lambda x: x[0])
         closed_valid = [
-            v
-            for v in visits_sorted
-            if v[1] in valid_close and v[2] is not None
+            v for v in visits_sorted if v[1] in valid_close and v[3] is not None
         ]
         active = [v for v in visits_sorted if v[1] == "in_progress"]
         other_closed = [
@@ -1205,54 +1251,40 @@ def resolve_visit_attention_rows(
         ]
 
         if closed_valid:
-            op = closed_valid[-1]  # último cierre válido
-            admin_pending = bool(active)
-            st = op[1]
-            label = labels.get(st, st)
-            if admin_pending:
-                label = f"{label} · revisión admin"
-            out[key] = {
-                "visit_id": op[0],
-                "visit_status": st,
-                "attention_status": st,
-                "attention_label_es": label,
-                "admin_review_pending": admin_pending,
-                "open_visit_id": active[-1][0] if active else None,
-                "operational_visit_id": op[0],
-            }
+            op = closed_valid[-1]
+            out[key] = _pack(
+                visit_id=op[0],
+                status=op[1],
+                reason=op[2],
+                admin_pending=bool(active),
+                open_visit_id=active[-1][0] if active else None,
+            )
         elif active:
             op = active[-1]
-            out[key] = {
-                "visit_id": op[0],
-                "visit_status": "in_progress",
-                "attention_status": "in_progress",
-                "attention_label_es": labels["in_progress"],
-                "admin_review_pending": False,
-                "open_visit_id": op[0],
-                "operational_visit_id": op[0],
-            }
+            out[key] = _pack(
+                visit_id=op[0],
+                status="in_progress",
+                reason=None,
+                admin_pending=False,
+                open_visit_id=op[0],
+            )
         elif other_closed:
             op = other_closed[-1]
-            st = op[1]
-            out[key] = {
-                "visit_id": op[0],
-                "visit_status": st or None,
-                "attention_status": st if st else "pending",
-                "attention_label_es": labels.get(st, "Pendiente" if not st else st),
-                "admin_review_pending": False,
-                "open_visit_id": None,
-                "operational_visit_id": op[0],
-            }
+            out[key] = _pack(
+                visit_id=op[0],
+                status=op[1] or None,
+                reason=op[2],
+                admin_pending=False,
+                open_visit_id=None,
+            )
         else:
-            out[key] = {
-                "visit_id": None,
-                "visit_status": None,
-                "attention_status": "pending",
-                "attention_label_es": "Pendiente",
-                "admin_review_pending": False,
-                "open_visit_id": None,
-                "operational_visit_id": None,
-            }
+            out[key] = _pack(
+                visit_id=None,
+                status=None,
+                reason=None,
+                admin_pending=False,
+                open_visit_id=None,
+            )
     return out
 
 
@@ -1270,7 +1302,7 @@ def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
         if visit_repo.admin_void_columns_ready(cur):
             cur.execute(
                 """
-                SELECT customer_key, id, status, ended_at,
+                SELECT customer_key, id, status, result_reason, ended_at,
                        admin_classification, voided_at,
                        voided_by_user_id, void_reason
                 FROM distribuidora.delivery_visits
@@ -1282,7 +1314,7 @@ def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
         else:
             cur.execute(
                 """
-                SELECT customer_key, id, status, ended_at
+                SELECT customer_key, id, status, result_reason, ended_at
                 FROM distribuidora.delivery_visits
                 WHERE dispatch_plan_id = %s
                 ORDER BY customer_key, id
@@ -1342,8 +1374,11 @@ def get_map_for_driver(
                 "amount_total": c.get("amount_total"),
                 "visit_id": att.get("visit_id"),
                 "visit_status": att.get("visit_status"),
+                "result_reason": att.get("result_reason"),
                 "attention_status": att.get("attention_status") or "pending",
                 "attention_label_es": att.get("attention_label_es") or "Pendiente",
+                "semaphore_color": att.get("semaphore_color") or "neutral",
+                "semaphore_code": att.get("semaphore_code") or "pending",
                 "admin_review_pending": bool(att.get("admin_review_pending")),
                 "open_visit_id": att.get("open_visit_id"),
                 "operational_visit_id": att.get("operational_visit_id"),

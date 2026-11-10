@@ -11,6 +11,12 @@ from typing import Any
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+from backend.services.distribuidora.delivery_semaphore import (
+    REASON_LABEL_ES,
+    WHATSAPP_HEADERS,
+    resolve_semaphore,
+)
+
 SANTIAGO = ZoneInfo("America/Santiago")
 
 PAYMENT_METHOD_ES = {
@@ -23,26 +29,11 @@ PAYMENT_METHOD_ES = {
     "not_applicable": "No corresponde",
 }
 
-REASON_ES = {
-    "closed_store": "Local cerrado",
-    "not_found": "Local no encontrado",
-    "rejected_order": "Pedido rechazado",
-    "absent_customer": "Cliente ausente",
-    "other": "Otra incidencia",
-    "physical_shortage": "Faltante físico",
-    "damaged": "Producto dañado",
-    "customer_rejection": "Rechazo del cliente",
-    "prep_error": "Error de preparación",
-}
+REASON_ES = dict(REASON_LABEL_ES)
+REASON_ES.setdefault("other", "Otra incidencia")
 
-TEMPLATE_HEADERS = {
-    "completed": "✅ QUILLOTANA | ENTREGA COMPLETA",
-    "partial": "⚠️ QUILLOTANA | ENTREGA PARCIAL",
-    "closed_store": "🔒 QUILLOTANA | LOCAL CERRADO",
-    "not_found": "📍 QUILLOTANA | LOCAL NO ENCONTRADO",
-    "rejected_order": "❌ QUILLOTANA | PEDIDO RECHAZADO",
-    "other_incident": "⚠️ QUILLOTANA | INCIDENCIA",
-}
+TEMPLATE_HEADERS = dict(WHATSAPP_HEADERS)
+TEMPLATE_HEADERS.setdefault("absent_customer", "🔴 QUILLOTANA | CLIENTE AUSENTE")
 
 MAX_REPORT_LINES = 6
 
@@ -130,6 +121,8 @@ def resolve_template_key(
             return "not_found"
         if reason == "rejected_order":
             return "rejected_order"
+        if reason == "absent_customer":
+            return "absent_customer"
         return "other_incident"
     return "other_incident"
 
@@ -213,7 +206,7 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
     if demo:
         header = header.replace("QUILLOTANA", "QUILLOTANA · PRUEBA")
         if not header.startswith("🧪"):
-            header = "🧪 " + header.lstrip("✅⚠️🔒📍❌ ")
+            header = "🧪 " + header
 
     docs = data.get("documents") or []
     doc_bits: list[str] = []
@@ -224,18 +217,30 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
         doc_bits.append(f"{dtype} {folio_s}")
     docs_s = " · ".join(doc_bits) if doc_bits else "Sin documento"
     client = data.get("client_name") or "—"
+    sem = resolve_semaphore(
+        status=data.get("status"), result_reason=data.get("result_reason")
+    )
 
     products = data.get("products") or []
     full_n, partial_n, none_n = _line_counts(products)
-    if template in ("closed_store", "not_found", "rejected_order", "other_incident"):
+    gps_line = "📍 GPS validado (radio)" if data.get("gps_within_radius") else (
+        f"📍 GPS: {'sí' if data.get('gps_registered') else 'no'} (sin coords en mensaje)"
+    )
+    if template in (
+        "closed_store",
+        "not_found",
+        "rejected_order",
+        "absent_customer",
+        "other_incident",
+    ):
         reason = data.get("result_reason")
-        reason_es = REASON_ES.get(reason, reason or "Incidencia")
+        reason_es = REASON_ES.get(reason, reason or sem.get("label_es") or "Incidencia")
         lines = [
             header,
             f"🏪 {client} · {docs_s}",
-            f"📝 Motivo: {reason_es}",
+            f"📝 {reason_es}",
             f"📷 Evidencia: {data.get('evidence_status') or 'pendiente'}",
-            f"📍 GPS: {'sí' if data.get('gps_registered') else 'no'} (sin coordenadas)",
+            gps_line,
             "✍️ Datos de prueba" if demo else "✍️ Incidencia registrada",
         ]
     else:
@@ -388,6 +393,13 @@ def visit_row_to_report_data(
         "products": products,
         "collections": collections,
         "gps_registered": bool(gps_ok),
+        # Solo afirmamos radio OK si el cierre quedó verified (excepción → pending_review).
+        "gps_within_radius": (
+            bool(gps_ok)
+            and str(visit.get("closure_review_status") or "") == "verified"
+            and str(visit.get("result_reason") or "")
+            in ("closed_store", "rejected_order")
+        ),
         "evidence_status": evid,
         "signature_status": sig,
         "observations": visit.get("result_note"),
@@ -575,6 +587,7 @@ def demo_scenarios() -> list[dict[str, Any]]:
                     }
                 ],
                 "gps_registered": True,
+                "gps_within_radius": True,
                 "evidence_status": "sí",
                 "signature_status": "no",
                 "observations": "Fotografía de fachada cerrada requerida en flujo real",
@@ -641,7 +654,8 @@ def demo_scenarios() -> list[dict[str, Any]]:
                     }
                 ],
                 "gps_registered": True,
-                "evidence_status": "no",
+                "gps_within_radius": True,
+                "evidence_status": "sí",
                 "signature_status": "rechazada / pendiente revisión",
                 "observations": "Pedido completo rechazado",
             },

@@ -79,6 +79,25 @@ NOT_DELIVERED_REASONS = frozenset(
 )
 
 
+def _client_ref_coords(
+    plan_id: int, customer_key: str
+) -> tuple[float | None, float | None]:
+    """Coordenadas referenciales del cliente en el despacho (sin inventar)."""
+    try:
+        bundle = read_svc._build_client_index(int(plan_id))  # noqa: SLF001
+        for c in bundle.get("clients") or []:
+            if str(c.get("customer_key") or "") != str(customer_key or ""):
+                continue
+            lat = c.get("latitude")
+            lng = c.get("longitude")
+            if lat is None or lng is None:
+                return None, None
+            return float(lat), float(lng)
+    except Exception:
+        return None, None
+    return None, None
+
+
 def schema_status() -> dict[str, Any]:
     conn = get_connection()
     try:
@@ -666,6 +685,21 @@ def finalize_visit(
         expected_ids = _expected_related_document_ids(
             int(plan_id), str(current.get("customer_key") or "")
         )
+        client_lat, client_lng = _client_ref_coords(
+            int(plan_id), str(current.get("customer_key") or "")
+        )
+        prox_exc_codes = {
+            "gps_out_of_range",
+            "client_gps_missing",
+            "gps_denied",
+            "gps_unavailable",
+            "gps_inaccurate",
+            "access_blocked",
+        }
+        proximity_exception = (
+            (gps_exception_code or "").strip() in prox_exc_codes
+            and len((gps_exception_note or "").strip()) >= 8
+        )
         gate = closure.assert_finalize_ready(
             cur,
             visit=current,
@@ -674,7 +708,29 @@ def finalize_visit(
             result_note=result_note,
             has_end_gps=has_gps,
             expected_related_ids=expected_ids,
+            end_lat=lat_f,
+            end_lng=lng_f,
+            end_accuracy_m=float(accuracy_m) if accuracy_m is not None else None,
+            end_gps_captured_at=gps_captured_at,
+            client_lat=client_lat,
+            client_lng=client_lng,
+            proximity_exception=proximity_exception,
         )
+
+        # Incidencia total: marcar documentos esperados como no entregados.
+        if st == "not_delivered" and expected_ids:
+            for rid in expected_ids:
+                visit_repo.upsert_document_result(
+                    cur,
+                    visit_id=int(visit_id),
+                    related_document_id=int(rid),
+                    oc_document_id=None,
+                    document_number=None,
+                    document_type=None,
+                    document_total=None,
+                    result_status="none",
+                    notes=f"Incidencia: {reason}",
+                )
 
         updated = visit_repo.finalize_visit(
             cur,
@@ -708,6 +764,8 @@ def finalize_visit(
                 "has_end_gps": has_gps,
                 "closure_review_status": gate["closure_review_status"],
                 "gate_notes": gate.get("notes") or [],
+                "gps_meta": gate.get("gps_meta") or {},
+                "proximity_exception": proximity_exception,
             },
         )
         conn.commit()
@@ -1861,7 +1919,16 @@ def upload_incident_evidence(
     longitude: float | None,
     accuracy_m: float | None,
     idempotency_key: str | None,
+    gps_captured_at: str | None = None,
+    proximity_exception_code: str | None = None,
+    proximity_exception_note: str | None = None,
 ) -> dict[str, Any]:
+    from backend.services.distribuidora.delivery_semaphore import (
+        PROXIMITY_REQUIRED_REASONS,
+        assert_fresh_gps,
+        assert_within_incident_radius,
+    )
+
     kind = (evidence_kind or "").strip()
     if kind not in EVIDENCE_KINDS or kind == "signature":
         raise HTTPException(status_code=400, detail="evidence_kind inválido")
@@ -1871,6 +1938,10 @@ def upload_incident_evidence(
     data_n, mime, _meta = loc_svc._normalize_facade_image(data, content_type)  # noqa: SLF001
     digest = hashlib.sha256(data_n).hexdigest()
     idem = (idempotency_key or "").strip() or None
+    gps_meta: dict[str, Any] = {}
+    prox_exc_code = (proximity_exception_code or "").strip() or None
+    prox_exc_note = (proximity_exception_note or "").strip() or None
+    allow_prox_exc = bool(prox_exc_code) and len(prox_exc_note or "") >= 8
 
     conn = get_connection()
     try:
@@ -1880,6 +1951,43 @@ def upload_incident_evidence(
         visit = _require_own_open_visit(
             cur, user=user, plan_id=int(plan_id), visit_id=int(visit_id)
         )
+
+        if kind in PROXIMITY_REQUIRED_REASONS:
+            if allow_prox_exc:
+                gps_meta = {
+                    "proximity_exception": True,
+                    "exception_code": prox_exc_code,
+                    "exception_note": prox_exc_note,
+                }
+                if latitude is not None and longitude is not None:
+                    try:
+                        fresh = assert_fresh_gps(
+                            latitude=latitude,
+                            longitude=longitude,
+                            gps_captured_at=gps_captured_at,
+                            accuracy_m=accuracy_m,
+                        )
+                        gps_meta.update(fresh)
+                    except HTTPException:
+                        pass
+            else:
+                fresh = assert_fresh_gps(
+                    latitude=latitude,
+                    longitude=longitude,
+                    gps_captured_at=gps_captured_at,
+                    accuracy_m=accuracy_m,
+                )
+                client_lat, client_lng = _client_ref_coords(
+                    int(plan_id), str(visit.get("customer_key") or "")
+                )
+                prox = assert_within_incident_radius(
+                    driver_lat=fresh["latitude"],
+                    driver_lng=fresh["longitude"],
+                    client_lat=client_lat,
+                    client_lng=client_lng,
+                )
+                gps_meta = {**fresh, **prox}
+
         if idem:
             existing = visit_repo.find_evidence_by_idem(
                 cur, user_id=uid, idempotency_key=idem
@@ -1924,7 +2032,14 @@ def upload_incident_evidence(
             visit_id=int(visit_id),
             action="evidence_uploaded",
             actor_user_id=uid,
-            payload={"kind": kind, "sha256": digest},
+            payload={
+                "kind": kind,
+                "sha256": digest,
+                "gps_meta": {
+                    k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                    for k, v in (gps_meta or {}).items()
+                },
+            },
         )
         row = visit_repo.insert_evidence(
             cur,
@@ -1941,7 +2056,11 @@ def upload_incident_evidence(
             capture_accuracy_m=float(accuracy_m) if accuracy_m is not None else None,
             upload_confirmed=True,
             validation_status="pending",
-            exception_note=None,
+            exception_note=(
+                f"proximity:{prox_exc_code}: {prox_exc_note}"
+                if allow_prox_exc
+                else None
+            ),
             idempotency_key=idem,
             visit_event_id=event_id,
         )
@@ -1966,7 +2085,18 @@ def upload_incident_evidence(
     safe = dict(row)
     safe.pop("object_key", None)
     return serialize_value(
-        {"evidence": safe, "created": True, "persisted": True, "idempotent_replay": False}
+        {
+            "evidence": safe,
+            "created": True,
+            "persisted": True,
+            "idempotent_replay": False,
+            "gps_meta": {
+                k: (v.isoformat() if hasattr(v, "isoformat") else v)
+                for k, v in (gps_meta or {}).items()
+            }
+            if gps_meta
+            else None,
+        }
     )
 
 

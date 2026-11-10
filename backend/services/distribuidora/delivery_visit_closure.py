@@ -9,6 +9,12 @@ from typing import Any
 from fastapi import HTTPException
 
 from backend.repositories.distribuidora import delivery_visit_repo as visit_repo
+from backend.services.distribuidora.delivery_semaphore import (
+    PHOTO_REQUIRED_REASONS,
+    PROXIMITY_REQUIRED_REASONS,
+    assert_fresh_gps,
+    assert_within_incident_radius,
+)
 
 INCIDENT_KINDS = frozenset(
     {"closed_store", "not_found", "rejected_order", "absent_customer", "other"}
@@ -33,6 +39,13 @@ def assert_finalize_ready(
     result_note: str | None,
     has_end_gps: bool,
     expected_related_ids: list[int],
+    end_lat: float | None = None,
+    end_lng: float | None = None,
+    end_accuracy_m: float | None = None,
+    end_gps_captured_at: str | None = None,
+    client_lat: float | None = None,
+    client_lng: float | None = None,
+    proximity_exception: bool = False,
 ) -> dict[str, Any]:
     """Devuelve {closure_review_status, notes}. Lanza HTTPException si bloquea."""
     visit_id = int(visit["id"])
@@ -43,6 +56,7 @@ def assert_finalize_ready(
 
     review = "verified"
     notes: list[str] = []
+    gps_meta: dict[str, Any] = {}
 
     # GPS: real o excepción ya registrada en la visita / cierre
     if not has_end_gps:
@@ -124,6 +138,30 @@ def assert_finalize_ready(
                 detail="Entrega parcial requiere diferencias registradas",
             )
 
+        # Rechazo parcial de productos → foto de rechazo obligatoria.
+        rejection_lines = [
+            ln
+            for ln in lines
+            if (ln.get("undelivered_reason") or "").strip() == "customer_rejection"
+            and float(ln.get("undelivered_units") or 0) > 0
+        ]
+        if rejection_lines:
+            confirmed_rej = [
+                e
+                for e in evidence
+                if e.get("evidence_kind") == "rejected_order"
+                and e.get("upload_confirmed")
+                and e.get("validation_status") in ("pending", "approved")
+            ]
+            if not confirmed_rej:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Rechazo parcial de productos requiere fotografía "
+                        "del establecimiento confirmada en el servidor"
+                    ),
+                )
+
         # Conformidad
         if not conf:
             raise HTTPException(
@@ -182,14 +220,7 @@ def assert_finalize_ready(
                 detail="Incidencia no entregada no puede tener cantidades recibidas",
             )
 
-        kind_map = {
-            "closed_store": "closed_store",
-            "not_found": "not_found",
-            "rejected_order": "rejected_order",
-            "absent_customer": "absent_customer",
-            "other": "other",
-        }
-        want = kind_map[reason]
+        want = reason
         confirmed = [
             e
             for e in evidence
@@ -203,7 +234,18 @@ def assert_finalize_ready(
             if e.get("evidence_kind") == want
             and e.get("validation_status") == "exception"
         ]
-        if confirmed:
+
+        # Local cerrado / rechazo / ausente: foto SIEMPRE obligatoria.
+        if reason in PHOTO_REQUIRED_REASONS:
+            if not confirmed:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Esta incidencia requiere fotografía del establecimiento "
+                        "confirmada en el servidor antes de finalizar"
+                    ),
+                )
+        elif confirmed:
             pass
         elif exceptions:
             review = "pending_review"
@@ -216,12 +258,60 @@ def assert_finalize_ready(
                     "o excepción auditable pendiente de revisión"
                 ),
             )
+
+        # Radio 300 m para local cerrado / rechazo (servidor).
+        if reason in PROXIMITY_REQUIRED_REASONS:
+            if proximity_exception:
+                review = "pending_review"
+                notes.append("gps_proximity_exception")
+            elif has_end_gps and end_lat is not None and end_lng is not None:
+                try:
+                    fresh = assert_fresh_gps(
+                        latitude=end_lat,
+                        longitude=end_lng,
+                        gps_captured_at=end_gps_captured_at,
+                        accuracy_m=end_accuracy_m,
+                    )
+                    prox = assert_within_incident_radius(
+                        driver_lat=fresh["latitude"],
+                        driver_lng=fresh["longitude"],
+                        client_lat=client_lat,
+                        client_lng=client_lng,
+                    )
+                    gps_meta = {**fresh, **prox}
+                    if fresh.get("accuracy_warn"):
+                        review = "pending_review"
+                        notes.append("gps_accuracy_warn")
+                except HTTPException as exc:
+                    # Sin radio OK no se cierra como verificado positivo.
+                    detail = exc.detail
+                    raise HTTPException(status_code=exc.status_code, detail=detail) from exc
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "GPS_REQUIRED",
+                        "message": (
+                            "Debes estar a menos de 300 metros del cliente "
+                            "para registrar esta incidencia"
+                        ),
+                        "message_es": (
+                            "Debes estar a menos de 300 metros del cliente "
+                            "para registrar esta incidencia"
+                        ),
+                    },
+                )
+
         if reason == "other" and not (result_note or "").strip():
             raise HTTPException(
                 status_code=422, detail="Observación obligatoria para 'other'"
             )
 
-    return {"closure_review_status": review, "notes": notes}
+    return {
+        "closure_review_status": review,
+        "notes": notes,
+        "gps_meta": gps_meta,
+    }
 
 
 def _num(v: Any) -> float | None:

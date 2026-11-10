@@ -394,6 +394,9 @@ async def upload_visit_evidence(
     latitude: float | None = Form(None),
     longitude: float | None = Form(None),
     accuracy_m: float | None = Form(None),
+    gps_captured_at: str | None = Form(None),
+    proximity_exception_code: str | None = Form(None),
+    proximity_exception_note: str | None = Form(None),
     idempotency_key: str | None = Form(None),
     file: UploadFile = File(...),
     user: dict = Depends(require_pwa_profiles("chofer")),
@@ -410,6 +413,9 @@ async def upload_visit_evidence(
         longitude=longitude,
         accuracy_m=accuracy_m,
         idempotency_key=idempotency_key,
+        gps_captured_at=gps_captured_at,
+        proximity_exception_code=proximity_exception_code,
+        proximity_exception_note=proximity_exception_note,
     )
 
 

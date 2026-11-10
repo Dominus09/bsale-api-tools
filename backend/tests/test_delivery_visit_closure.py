@@ -474,6 +474,7 @@ def test_collection_change_breaks_signed_sha(monkeypatch):
 
 
 def test_incident_exception_pending_review(monkeypatch):
+    """Foto obligatoria + excepción GPS auditable → pending_review (no OK falso)."""
     monkeypatch.setattr(closure.visit_repo, "list_document_results", lambda *_a, **_k: [])
     monkeypatch.setattr(closure.visit_repo, "list_line_results", lambda *_a, **_k: [])
     monkeypatch.setattr(
@@ -482,8 +483,8 @@ def test_incident_exception_pending_review(monkeypatch):
         lambda *_a, **_k: [
             {
                 "evidence_kind": "closed_store",
-                "upload_confirmed": False,
-                "validation_status": "exception",
+                "upload_confirmed": True,
+                "validation_status": "pending",
             }
         ],
     )
@@ -496,5 +497,152 @@ def test_incident_exception_pending_review(monkeypatch):
         result_note="obs",
         has_end_gps=True,
         expected_related_ids=[],
+        proximity_exception=True,
     )
     assert gate["closure_review_status"] == "pending_review"
+    assert "gps_proximity_exception" in gate["notes"]
+
+
+def test_closed_store_requires_photo_even_with_gps_exception(monkeypatch):
+    monkeypatch.setattr(closure.visit_repo, "list_document_results", lambda *_a, **_k: [])
+    monkeypatch.setattr(closure.visit_repo, "list_line_results", lambda *_a, **_k: [])
+    monkeypatch.setattr(closure.visit_repo, "list_evidence", lambda *_a, **_k: [])
+    monkeypatch.setattr(closure.visit_repo, "get_conformity", lambda *_a, **_k: None)
+    with pytest.raises(HTTPException) as ei:
+        closure.assert_finalize_ready(
+            FakeCur(),
+            visit={"id": 1},
+            status="not_delivered",
+            result_reason="closed_store",
+            result_note="obs",
+            has_end_gps=False,
+            expected_related_ids=[],
+            proximity_exception=True,
+        )
+    assert "fotografía" in str(ei.value.detail).lower()
+
+
+def test_closed_store_out_of_range_blocks(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(closure.visit_repo, "list_document_results", lambda *_a, **_k: [])
+    monkeypatch.setattr(closure.visit_repo, "list_line_results", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        closure.visit_repo,
+        "list_evidence",
+        lambda *_a, **_k: [
+            {
+                "evidence_kind": "closed_store",
+                "upload_confirmed": True,
+                "validation_status": "pending",
+            }
+        ],
+    )
+    monkeypatch.setattr(closure.visit_repo, "get_conformity", lambda *_a, **_k: None)
+    now = datetime.now(timezone.utc).isoformat()
+    with pytest.raises(HTTPException) as ei:
+        closure.assert_finalize_ready(
+            FakeCur(),
+            visit={"id": 1},
+            status="not_delivered",
+            result_reason="closed_store",
+            result_note=None,
+            has_end_gps=True,
+            expected_related_ids=[],
+            end_lat=-33.45,
+            end_lng=-70.66,
+            end_accuracy_m=20,
+            end_gps_captured_at=now,
+            client_lat=-33.46,
+            client_lng=-70.70,  # ~ several km
+            proximity_exception=False,
+        )
+    assert ei.value.status_code == 422
+    detail = ei.value.detail
+    assert isinstance(detail, dict)
+    assert detail.get("code") == "GPS_OUT_OF_RANGE"
+
+
+def test_closed_store_within_300m_ok(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(closure.visit_repo, "list_document_results", lambda *_a, **_k: [])
+    monkeypatch.setattr(closure.visit_repo, "list_line_results", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        closure.visit_repo,
+        "list_evidence",
+        lambda *_a, **_k: [
+            {
+                "evidence_kind": "closed_store",
+                "upload_confirmed": True,
+                "validation_status": "pending",
+            }
+        ],
+    )
+    monkeypatch.setattr(closure.visit_repo, "get_conformity", lambda *_a, **_k: None)
+    now = datetime.now(timezone.utc).isoformat()
+    # ~111 m por 0.001° lat
+    gate = closure.assert_finalize_ready(
+        FakeCur(),
+        visit={"id": 1},
+        status="not_delivered",
+        result_reason="closed_store",
+        result_note=None,
+        has_end_gps=True,
+        expected_related_ids=[],
+        end_lat=-33.4500,
+        end_lng=-70.6500,
+        end_accuracy_m=15,
+        end_gps_captured_at=now,
+        client_lat=-33.4505,
+        client_lng=-70.6500,
+        proximity_exception=False,
+    )
+    assert gate["closure_review_status"] == "verified"
+    assert gate["gps_meta"].get("within_radius") is True
+    assert float(gate["gps_meta"]["distance_m"]) <= 300
+
+
+def test_partial_customer_rejection_requires_photo(monkeypatch):
+    monkeypatch.setattr(
+        closure.visit_repo,
+        "list_document_results",
+        lambda *_a, **_k: [{"related_document_id": 1, "result_status": "partial"}],
+    )
+    monkeypatch.setattr(
+        closure.visit_repo,
+        "list_line_results",
+        lambda *_a, **_k: [
+            {
+                "source_detail_id": 1,
+                "planned_units": 10,
+                "delivered_units": 6,
+                "undelivered_units": 4,
+                "undelivered_reason": "customer_rejection",
+            }
+        ],
+    )
+    monkeypatch.setattr(closure.visit_repo, "list_evidence", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        closure.visit_repo,
+        "get_conformity",
+        lambda *_a, **_k: {
+            "signature_object_key": "k",
+            "receptor_name": "Ana",
+            "refused": False,
+            "invalidated_at": None,
+            "accepted_summary_sha256": "x",
+            "visit_version_at_sign": 1,
+        },
+    )
+    with pytest.raises(HTTPException) as ei:
+        closure.assert_finalize_ready(
+            FakeCur(),
+            visit={"id": 1, "version": 1},
+            status="partial",
+            result_reason=None,
+            result_note=None,
+            has_end_gps=True,
+            expected_related_ids=[1],
+        )
+    assert "fotografía" in str(ei.value.detail).lower()

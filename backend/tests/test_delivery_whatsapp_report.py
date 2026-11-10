@@ -59,9 +59,13 @@ def test_templates_a_to_f_compact():
         )
         visible = [ln for ln in text.splitlines() if ln.strip()]
         assert len(visible) <= 6
+        assert visible[0].startswith(("🟢", "🟡", "🔴"))
+        assert "QUILLOTANA |" in visible[0]
         assert "-42." not in text
         assert "chat.whatsapp.com" not in text.lower()
         assert "cash" not in text.lower() or "Efectivo" in text
+        assert "r2.dev" not in text.lower()
+        assert "cloudflare" not in text.lower()
 
 
 def test_demo_scenarios_marked_compact_and_safe():
