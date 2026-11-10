@@ -1,28 +1,49 @@
-/** Helpers de cobranza mixta (declaración auditada, no contable). */
+/** Forma de pago DECLARATIVA (Operativa 2.0). Sin montos. */
 
 export type PaymentMethod =
   | "cash"
   | "transfer_declared"
-  | "credit"
+  | "cash_and_transfer"
   | "pending"
   | "not_applicable"
-
-export type PaymentRow = {
-  key: string
-  method: PaymentMethod
-  amount: string
-  note: string
-}
 
 export const PAYMENT_METHODS: ReadonlyArray<{ value: PaymentMethod; label: string }> = [
   { value: "cash", label: "Efectivo" },
   { value: "transfer_declared", label: "Transferencia informada" },
-  { value: "credit", label: "Crédito autorizado" },
-  { value: "pending", label: "Saldo pendiente" },
-  { value: "not_applicable", label: "No corresponde" },
+  { value: "cash_and_transfer", label: "Efectivo + transferencia" },
+  { value: "pending", label: "Pago pendiente" },
+  { value: "not_applicable", label: "Sin cobro / No aplica" },
 ]
 
-/** Acepta "50000", "50.000", "$50.000". */
+export function paymentMethodLabel(method: string | null | undefined): string {
+  const m = String(method || "")
+  return PAYMENT_METHODS.find((x) => x.value === m)?.label || m || "—"
+}
+
+/** True si la fila es del flujo declarativo (sin monto inventado). */
+export function isDeclarativeCollection(row: {
+  declared_amount?: number | null
+  method?: string | null
+}): boolean {
+  return row.declared_amount == null
+}
+
+export function validatePaymentMethod(method: string | null | undefined): string | null {
+  if (!method || !PAYMENT_METHODS.some((m) => m.value === method)) {
+    return "Seleccione cómo pagó el cliente"
+  }
+  return null
+}
+
+/** @deprecated legado con montos — conservado para tests históricos. */
+export type PaymentRow = {
+  key: string
+  method: PaymentMethod | string
+  amount: string
+  note: string
+}
+
+/** @deprecated */
 export function parseAmount(raw: string): number | null {
   const t = String(raw || "").trim()
   if (!t) return null
@@ -36,7 +57,7 @@ export function parseAmount(raw: string): number | null {
   return Number.isFinite(n) ? n : null
 }
 
-/** Suma de montos declarados en filas (pending cuenta como monto asignado a pendiente). */
+/** @deprecated */
 export function sumDeclared(rows: PaymentRow[]): number {
   return rows.reduce((acc, r) => {
     if (r.method === "not_applicable") return acc
@@ -45,10 +66,12 @@ export function sumDeclared(rows: PaymentRow[]): number {
   }, 0)
 }
 
+/** @deprecated */
 export function pendingBalance(documentTotal: number, rows: PaymentRow[]): number {
-  return Math.max(0, round2(documentTotal - sumDeclared(rows)))
+  return Math.max(0, Math.round((documentTotal - sumDeclared(rows)) * 100) / 100)
 }
 
+/** @deprecated */
 export function validateMixedPayments(
   documentTotal: number,
   rows: PaymentRow[],
@@ -62,9 +85,6 @@ export function validateMixedPayments(
       continue
     }
     if (n == null || n < 0) return "Monto inválido en una forma de pago"
-    if (r.method !== "pending" && n === 0 && rows.length === 1) {
-      /* permitir 0 solo si es pending u otras filas */
-    }
     sum += n
   }
   if (sum - documentTotal > 0.009) {
@@ -73,14 +93,11 @@ export function validateMixedPayments(
   return null
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
+/** @deprecated */
 export function newPaymentRow(partial?: Partial<PaymentRow>): PaymentRow {
   return {
     key: `pay-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    method: partial?.method || "cash",
+    method: (partial?.method as PaymentMethod) || "cash",
     amount: partial?.amount ?? "",
     note: partial?.note ?? "",
   }

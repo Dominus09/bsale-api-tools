@@ -81,47 +81,64 @@ export default function EntregaFirmaPage() {
       `Líneas: ${fullN} completas · ${partialN} parciales · ${noneN} no entregadas`,
     )
     const summary = summarizeCollections(cols, totalAmt)
-    if (summary.cash > 0) {
-      compact.push(`Efectivo declarado: ${moneyCLP(summary.cash)}`)
-    }
-    if (summary.transferDeclared > 0) {
-      compact.push(
-        `Transferencias informadas: ${moneyCLP(summary.transferDeclared)}`,
-      )
-    }
-    if (summary.credit > 0) {
-      compact.push(`Crédito: ${moneyCLP(summary.credit)}`)
-    }
-    for (const [method, amt] of Array.from(summary.byMethod.entries())) {
-      if (
-        method === "cash" ||
-        method === "transfer_declared" ||
-        method === "credit" ||
-        method === "pending"
-      ) {
-        continue
+    const declarative = cols.length > 0 && cols.every((c) => c.declared_amount == null)
+    if (declarative) {
+      const methods = Array.from(summary.byMethod.keys())
+      if (methods.length) {
+        compact.push(
+          `Forma de pago: ${methods.map((m) => paymentMethodLabel(m)).join(" · ")}`,
+        )
+      } else {
+        compact.push("Sin forma de pago declarada")
       }
-      compact.push(`${paymentMethodLabel(method)}: ${moneyCLP(amt)}`)
+    } else {
+      if (summary.cash > 0) {
+        compact.push(`Efectivo declarado: ${moneyCLP(summary.cash)}`)
+      }
+      if (summary.transferDeclared > 0) {
+        compact.push(
+          `Transferencias informadas: ${moneyCLP(summary.transferDeclared)}`,
+        )
+      }
+      if (summary.credit > 0) {
+        compact.push(`Crédito: ${moneyCLP(summary.credit)}`)
+      }
+      for (const [method, amt] of Array.from(summary.byMethod.entries())) {
+        if (
+          method === "cash" ||
+          method === "transfer_declared" ||
+          method === "credit" ||
+          method === "pending"
+        ) {
+          continue
+        }
+        compact.push(`${paymentMethodLabel(method)}: ${moneyCLP(amt)}`)
+      }
+      if (summary.byMethod.size === 0) compact.push("Sin forma de pago declarada")
+      if (summary.pendingBalance > 0) {
+        compact.push(`Saldo pendiente (legado): ${moneyCLP(summary.pendingBalance)}`)
+      }
     }
-    if (summary.byMethod.size === 0) compact.push("Sin cobranza declarada")
-    compact.push(`Saldo pendiente: ${moneyCLP(summary.pendingBalance)}`)
 
     const orphans = allCols.filter((c) => c.document_result_id == null)
     let block: string | null = null
     if (orphans.length > 0) {
       block =
-        "Hay declaraciones antiguas sin documento. Vuelva a cobranza y guarde de nuevo."
+        "Hay declaraciones antiguas sin documento. Vuelva a forma de pago y guarde de nuevo."
     }
-    if (summary.declaredAll - totalAmt > 0.009) {
+    if (!declarative && summary.declaredAll - totalAmt > 0.009) {
       block =
         "La cobranza vigente no cuadra con el total. Corrija antes de firmar."
     }
+    if (docs.length > 0 && cols.length === 0) {
+      block = "Declare la forma de pago de cada documento antes de firmar."
+    }
 
     for (const c of cols) {
+      const amt =
+        typeof c.declared_amount === "number" ? ` · ${moneyCLP(c.declared_amount)}` : ""
       full.push(
-        `${paymentMethodLabel(String(c.method))}: ${moneyCLP(
-          typeof c.declared_amount === "number" ? c.declared_amount : 0,
-        )}${c.note ? ` · ${c.note}` : ""}`,
+        `${paymentMethodLabel(String(c.method))}${amt}${c.note ? ` · ${c.note}` : ""}`,
       )
     }
 

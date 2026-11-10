@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=390, initial-scale=1" />
+  <title>Quillotana Operativa 2.0 — fixture visual</title>
+  <style>
+    :root {
+      --bg: #0b0d12; --surface: #17191f; --surface-2: #20232b; --border: #30343d;
+      --text: #f7f8fa; --muted: #a8b0be; --accent: #c4293c; --ok: #22c55e; --whatsapp: #25d366;
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #111; color: var(--text); font-family: "Segoe UI", system-ui, sans-serif; }
+    .phones { display: flex; gap: 16px; padding: 20px; overflow-x: auto; }
+    .phone {
+      width: 390px; min-height: 844px; background:
+        radial-gradient(90% 55% at 100% -5%, rgba(196,41,60,.28), transparent 55%),
+        var(--bg);
+      border-radius: 28px; border: 1px solid #333; padding: 16px; flex: 0 0 auto;
+    }
+    .phone.w430 { width: 430px; min-height: 932px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin: 10px 0; }
+    .btn { display: block; width: 100%; text-align: center; padding: 14px; border-radius: 14px; border: 0; font-weight: 700; margin-top: 10px; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-wa { background: var(--whatsapp); color: #062; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); }
+    .sem-green { color: #86efac; background: rgba(34,197,94,.14); }
+    .sem-yellow { color: #fcd34d; background: rgba(245,158,11,.14); }
+    .sem-red { color: #ffb4bc; background: rgba(196,41,60,.16); }
+    .muted { color: var(--muted); font-size: 13px; }
+    .box { color: var(--accent); font-weight: 800; font-size: 13px; }
+    .marker { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); display: inline-flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; }
+    h1 { font-size: 22px; margin: 8px 0; }
+    h2 { font-size: 16px; margin: 0 0 8px; }
+    input { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); margin: 6px 0; }
+    .label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="phones" id="row390">
+    <section class="phone" data-screen="login">
+      <div class="label">Login</div>
+      <h1 style="text-align:center;margin-top:80px">Grupo Quillotana</h1>
+      <p class="muted" style="text-align:center">Operativa 2.0</p>
+      <div class="card">
+        <input placeholder="Email" />
+        <input placeholder="Contraseña" type="password" />
+        <button class="btn btn-primary">Ingresar →</button>
+      </div>
+    </section>
+    <section class="phone" data-screen="despacho">
+      <div class="label">Despacho del día</div>
+      <h2>Quillotana Operativa</h2>
+      <div class="card">
+        <strong>PLAN-DEMO-01</strong>
+        <div class="muted">Ruta demo · 3 clientes · 3 docs</div>
+        <div style="font-size:28px;font-weight:800;margin-top:8px">$574.656</div>
+        <button class="btn btn-primary">Abrir despacho →</button>
+      </div>
+    </section>
+    <section class="phone" data-screen="mapa">
+      <div class="label">Mapa</div>
+      <div class="card" style="height:420px;background:#12141a;position:relative">
+        <span class="marker" style="position:absolute;left:40%;top:30%">1</span>
+        <span class="marker" style="position:absolute;left:55%;top:48%">2</span>
+        <span class="marker" style="position:absolute;left:35%;top:62%">3</span>
+        <div class="muted" style="position:absolute;bottom:12px;left:12px">Sin ruta vial inventada</div>
+      </div>
+      <div class="card">
+        <strong>Cliente Demo</strong>
+        <div><span class="pill sem-yellow">Entrega parcial</span></div>
+        <button class="btn btn-primary">Navegar</button>
+      </div>
+    </section>
+    <section class="phone" data-screen="clientes">
+      <div class="label">Clientes</div>
+      <div class="card">
+        <span class="marker">1</span> <strong>Cliente Demo</strong>
+        <div class="muted">1 doc · $190.000</div>
+        <div class="muted">Obs: recibe por patio</div>
+        <span class="pill sem-green">Entrega completa</span>
+      </div>
+      <div class="card">
+        <span class="marker">2</span> <strong>Local cerrado</strong>
+        <span class="pill sem-red">Local cerrado</span>
+      </div>
+    </section>
+    <section class="phone" data-screen="productos">
+      <div class="label">Productos</div>
+      <div class="card">
+        <strong>Leche 1 L</strong>
+        <div class="box">60 un = 5 cajas</div>
+        <input value="60" />
+      </div>
+      <button class="btn btn-primary">Entregar todo</button>
+    </section>
+    <section class="phone" data-screen="pago">
+      <div class="label">Forma de pago</div>
+      <h2>¿Cómo pagó el cliente?</h2>
+      <div class="card">
+        <button class="btn btn-primary">Efectivo · ✓</button>
+        <button class="btn" style="background:var(--surface-2);color:var(--text);border:1px solid var(--border)">Transferencia informada</button>
+        <button class="btn" style="background:var(--surface-2);color:var(--text);border:1px solid var(--border)">Efectivo + transferencia</button>
+        <button class="btn" style="background:var(--surface-2);color:var(--text);border:1px solid var(--border)">Pago pendiente</button>
+      </div>
+    </section>
+    <section class="phone" data-screen="resultado">
+      <div class="label">Resultado</div>
+      <div style="text-align:center;margin-top:40px">
+        <div style="width:64px;height:64px;border-radius:999px;margin:0 auto;background:rgba(34,197,94,.16);border:2px solid rgba(34,197,94,.45);display:flex;align-items:center;justify-content:center;font-size:28px">✓</div>
+        <h1>Entrega registrada</h1>
+        <span class="pill sem-green">Entrega completa</span>
+      </div>
+      <button class="btn btn-wa" style="margin-top:24px">Enviar reporte por WhatsApp</button>
+    </section>
+  </div>
+  <div class="phones" id="row430" style="display:none"></div>
+  <script>
+    const row = document.getElementById('row390');
+    const clone = row.cloneNode(true);
+    clone.id = 'row430';
+    clone.style.display = 'flex';
+    clone.querySelectorAll('.phone').forEach(p => p.classList.add('w430'));
+    document.body.appendChild(clone);
+  </script>
+</body>
+</html>

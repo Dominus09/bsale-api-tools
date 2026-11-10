@@ -3,18 +3,14 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
-import { ApiError, declareVisitCollectionMixed } from "@/lib/api"
+import { ApiError, declareVisitPaymentMethod } from "@/lib/api"
 import { DeliveryStepChrome } from "@/components/delivery-step-chrome"
 import {
-  newPaymentRow,
   PAYMENT_METHODS,
-  parseAmount,
-  pendingBalance,
-  sumDeclared,
-  validateMixedPayments,
-  type PaymentRow,
+  paymentMethodLabel,
+  validatePaymentMethod,
+  type PaymentMethod,
 } from "@/lib/delivery-collection"
-import { formatClpDisplay } from "@/lib/clp-input"
 import { buildEntregaHref, docKeyFromDocument, moneyCLP } from "@/lib/delivery-flow"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
@@ -23,9 +19,10 @@ type DocPayState = {
   related_document_id: number
   document_result_id: number | null
   label: string
-  total: number
-  rows: PaymentRow[]
+  total: number | null
+  method: PaymentMethod | ""
   saved: boolean
+  saving: boolean
 }
 
 export default function EntregaCobranzaPage() {
@@ -34,7 +31,6 @@ export default function EntregaCobranzaPage() {
   const session = useVisitSession(planId, customerKey)
   const docsHref = buildEntregaHref(planId, customerKey, "documentos")
   const [docs, setDocs] = useState<DocPayState[]>([])
-  const [busyKey, setBusyKey] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
 
@@ -58,98 +54,95 @@ export default function EntregaCobranzaPage() {
           const cols = collections.filter(
             (c) => docResId != null && Number(c.document_result_id) === docResId,
           )
+          const serverMethod = cols[0]?.method
+            ? (String(cols[0].method) as PaymentMethod)
+            : ""
           const serverSaved = cols.length > 0
-          // Conservar borrador local si el chofer aún no confirmó este documento.
+          if (existing && existing.saving) return existing
           if (existing && !existing.saved && !serverSaved) {
             return {
               ...existing,
               document_result_id: docResId ?? existing.document_result_id,
               label: `${d.document_type || "Doc"} ${d.document_number ?? "—"}`,
-              total: typeof d.document_total === "number" ? d.document_total : 0,
+              total: typeof d.document_total === "number" ? d.document_total : null,
             }
           }
-          const rows: PaymentRow[] =
-            cols.length > 0
-              ? cols.map((c, i) =>
-                  newPaymentRow({
-                    key: `saved-${c.id ?? i}`,
-                    method: String(c.method || "cash") as PaymentRow["method"],
-                    amount:
-                      c.declared_amount != null
-                        ? formatClpDisplay(Number(c.declared_amount))
-                        : "",
-                    note: String(c.note || ""),
-                  }),
-                )
-              : existing?.rows?.length
-                ? existing.rows
-                : [newPaymentRow({ method: "cash" })]
           return {
             related_document_id: relatedId,
             document_result_id: docResId,
             label: `${d.document_type || "Doc"} ${d.document_number ?? "—"}`,
-            total: typeof d.document_total === "number" ? d.document_total : 0,
-            rows,
+            total: typeof d.document_total === "number" ? d.document_total : null,
+            method: serverSaved
+              ? serverMethod
+              : existing?.method || "",
             saved: serverSaved || Boolean(existing?.saved),
+            saving: false,
           }
         })
     })
   }, [session.documents, visitDocs, collections])
 
   const allSaved = useMemo(
-    () => docs.length > 0 && docs.every((d) => d.saved),
+    () => docs.length > 0 && docs.every((d) => d.saved && d.method),
     [docs],
   )
 
-  async function saveDoc(doc: DocPayState) {
+  async function saveDoc(doc: DocPayState, method: PaymentMethod) {
     if (!session.activeVisit) return
     if (!doc.document_result_id) {
-      setErr("Guarde primero las cantidades del documento (paso 1)")
+      setErr("Registre primero las cantidades del documento")
       return
     }
-    const validation = validateMixedPayments(doc.total, doc.rows)
-    if (validation) {
-      setErr(validation)
+    const invalid = validatePaymentMethod(method)
+    if (invalid) {
+      setErr(invalid)
       return
     }
-    setBusyKey(String(doc.related_document_id))
     setErr(null)
     setInfo(null)
+    setDocs((all) =>
+      all.map((d) =>
+        d.related_document_id === doc.related_document_id
+          ? { ...d, method, saving: true }
+          : d,
+      ),
+    )
     try {
-      await declareVisitCollectionMixed(planId, session.activeVisit.id, {
+      await declareVisitPaymentMethod(planId, session.activeVisit.id, {
         document_result_id: doc.document_result_id,
+        method,
         document_amount: doc.total,
-        payments: doc.rows.map((r) => ({
-          method: r.method,
-          declared_amount: parseAmount(r.amount) ?? 0,
-          note: r.note.trim() || null,
-        })),
+        note: null,
       })
       setDocs((all) =>
         all.map((d) =>
           d.related_document_id === doc.related_document_id
-            ? { ...d, saved: true }
+            ? { ...d, method, saved: true, saving: false }
             : d,
         ),
       )
-      setInfo(`Cobranza de ${doc.label} guardada.`)
-      // Soft refresh del detalle: evita pantallazo/loading de toda la sesión.
+      setInfo(`${doc.label}: ${paymentMethodLabel(method)}`)
       void session.softReloadVisitDetail()
     } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "Error al guardar cobranza")
-    } finally {
-      setBusyKey(null)
+      setDocs((all) =>
+        all.map((d) =>
+          d.related_document_id === doc.related_document_id
+            ? { ...d, saving: false, saved: false }
+            : d,
+        ),
+      )
+      setErr(e instanceof ApiError ? e.message : "Error al guardar forma de pago")
     }
   }
 
-  if (session.loading) return <div className="empty">Cargando cobranza…</div>
+  if (session.loading) return <div className="empty">Cargando…</div>
   if (session.error) return <div className="banner banner-error">{session.error}</div>
   if (!session.canOperateActive) {
     return (
       <div className="stack-gap">
         <div className="banner banner-info">
           {session.adminReviewPending
-            ? "Existe una visita anterior pendiente de revisión administrativa. Consulte el resultado desde la ficha."
+            ? "Existe una visita anterior pendiente de revisión administrativa."
             : "Visita no activa."}
         </div>
         <Link href={buildEntregaHref(planId, customerKey, "ficha")} className="btn btn-primary">
@@ -163,7 +156,7 @@ export default function EntregaCobranzaPage() {
     <DeliveryStepChrome
       clientName={session.clientName}
       step={2}
-      title="Paso 2 · Cobranza"
+      title="Paso 2 · Forma de pago"
       backHref={docsHref}
       footer={
         <button
@@ -174,214 +167,66 @@ export default function EntregaCobranzaPage() {
             router.push(buildEntregaHref(planId, customerKey, "firma"))
           }
         >
-          Continuar a firma
+          Continuar a conformidad
         </button>
       }
     >
       <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
-        Declaración del chofer con pagos mixtos. No es recibo ni verificación Bsale.
-        La transferencia informada no se marca como verificada.
+        ¿Cómo pagó el cliente? Sin montos. No es recibo ni verificación bancaria.
       </p>
 
       <div className="stack-gap">
-        {docs.map((doc) => {
-          const declared = sumDeclared(doc.rows)
-          const pending = pendingBalance(doc.total, doc.rows)
-          return (
-            <div key={doc.related_document_id} className="card">
-              <div className="client-card-head">
-                <h3 style={{ margin: 0, fontSize: "1rem" }}>{doc.label}</h3>
-                <span className={`pill${doc.saved ? " pill-ok" : ""}`}>
-                  {doc.saved ? "Guardado" : "Pendiente"}
-                </span>
-              </div>
+        {docs.map((doc) => (
+          <div key={doc.related_document_id} className="card">
+            <div className="client-card-head">
+              <h3 style={{ margin: 0, fontSize: "1rem" }}>{doc.label}</h3>
+              <span className={`pill${doc.saved ? " pill-ok" : ""}`}>
+                {doc.saving ? "Guardando…" : doc.saved ? "Guardado" : "Pendiente"}
+              </span>
+            </div>
+            {doc.total != null ? (
               <div className="meta-row">
-                <span className="muted">Total documento</span>
+                <span className="muted">Total documento (referencia)</span>
                 <span>{moneyCLP(doc.total)}</span>
               </div>
-              <div className="meta-row">
-                <span className="muted">Total declarado</span>
-                <span className={declared - doc.total > 0.009 ? "amt-danger" : ""}>
-                  {moneyCLP(declared)}
-                </span>
-              </div>
-              <div className="meta-row">
-                <span className="muted">Saldo pendiente</span>
-                <span className={pending > 0 ? "amt-pending" : ""}>
-                  {moneyCLP(pending)}
-                </span>
-              </div>
+            ) : null}
 
-              <strong style={{ display: "block", margin: "10px 0 6px", fontSize: "0.9rem" }}>
-                Formas de pago declaradas
-              </strong>
-              <div className="stack-gap">
-                {doc.rows.map((row) => (
-                  <div
-                    key={row.key}
-                    className={`card pay-row pay-${row.method}`}
-                    style={{ padding: 10 }}
+            <fieldset
+              style={{
+                border: "none",
+                margin: "10px 0 0",
+                padding: 0,
+                display: "grid",
+                gap: 8,
+              }}
+            >
+              <legend className="muted" style={{ fontSize: "0.78rem", marginBottom: 4 }}>
+                Forma de pago
+              </legend>
+              {PAYMENT_METHODS.map((m) => {
+                const selected = doc.method === m.value
+                return (
+                  <button
+                    key={m.value}
+                    type="button"
+                    className={`btn${selected ? " btn-primary" : " btn-secondary"}`}
+                    style={{ textAlign: "left", justifyContent: "flex-start" }}
+                    disabled={doc.saving || !doc.document_result_id}
+                    onClick={() => void saveDoc(doc, m.value)}
                   >
-                    <label className="field">
-                      Forma de pago
-                      <select
-                        value={row.method}
-                        onChange={(e) =>
-                          setDocs((all) =>
-                            all.map((d) =>
-                              d.related_document_id === doc.related_document_id
-                                ? {
-                                    ...d,
-                                    saved: false,
-                                    rows: d.rows.map((r) =>
-                                      r.key === row.key
-                                        ? {
-                                            ...r,
-                                            method: e.target
-                                              .value as PaymentRow["method"],
-                                          }
-                                        : r,
-                                    ),
-                                  }
-                                : d,
-                            ),
-                          )
-                        }
-                      >
-                        {PAYMENT_METHODS.map((m) => (
-                          <option key={m.value} value={m.value}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      Monto (CLP)
-                      <input
-                        inputMode="numeric"
-                        pattern="[0-9.]*"
-                        enterKeyHint="done"
-                        value={row.amount}
-                        onChange={(e) => {
-                          const raw = e.target.value
-                          setDocs((all) =>
-                            all.map((d) =>
-                              d.related_document_id === doc.related_document_id
-                                ? {
-                                    ...d,
-                                    saved: false,
-                                    rows: d.rows.map((r) =>
-                                      r.key === row.key
-                                        ? { ...r, amount: raw }
-                                        : r,
-                                    ),
-                                  }
-                                : d,
-                            ),
-                          )
-                        }}
-                        onBlur={() => {
-                          const n = parseAmount(row.amount)
-                          if (n == null) return
-                          const pretty = formatClpDisplay(n)
-                          setDocs((all) =>
-                            all.map((d) =>
-                              d.related_document_id === doc.related_document_id
-                                ? {
-                                    ...d,
-                                    rows: d.rows.map((r) =>
-                                      r.key === row.key
-                                        ? { ...r, amount: pretty }
-                                        : r,
-                                    ),
-                                  }
-                                : d,
-                            ),
-                          )
-                        }}
-                      />
-                    </label>
-                    <label className="field">
-                      Observación
-                      <input
-                        value={row.note}
-                        onChange={(e) =>
-                          setDocs((all) =>
-                            all.map((d) =>
-                              d.related_document_id === doc.related_document_id
-                                ? {
-                                    ...d,
-                                    saved: false,
-                                    rows: d.rows.map((r) =>
-                                      r.key === row.key
-                                        ? { ...r, note: e.target.value }
-                                        : r,
-                                    ),
-                                  }
-                                : d,
-                            ),
-                          )
-                        }
-                      />
-                    </label>
-                    {doc.rows.length > 1 ? (
-                      <button
-                        type="button"
-                        className="btn btn-ghost"
-                        onClick={() =>
-                          setDocs((all) =>
-                            all.map((d) =>
-                              d.related_document_id === doc.related_document_id
-                                ? {
-                                    ...d,
-                                    saved: false,
-                                    rows: d.rows.filter((r) => r.key !== row.key),
-                                  }
-                                : d,
-                            ),
-                          )
-                        }
-                      >
-                        Eliminar fila
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ marginTop: 8 }}
-                onClick={() =>
-                  setDocs((all) =>
-                    all.map((d) =>
-                      d.related_document_id === doc.related_document_id
-                        ? {
-                            ...d,
-                            saved: false,
-                            rows: [...d.rows, newPaymentRow()],
-                          }
-                        : d,
-                    ),
-                  )
-                }
-              >
-                + Agregar forma de pago
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                style={{ marginTop: 8 }}
-                disabled={busyKey === String(doc.related_document_id)}
-                onClick={() => void saveDoc(doc)}
-              >
-                {busyKey === String(doc.related_document_id)
-                  ? "Guardando…"
-                  : "Guardar declaración"}
-              </button>
-            </div>
-          )
-        })}
+                    {m.label}
+                    {selected && doc.saved ? " · ✓" : ""}
+                  </button>
+                )
+              })}
+            </fieldset>
+            {!doc.document_result_id ? (
+              <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.78rem" }}>
+                Guarde cantidades del documento antes de declarar el pago.
+              </p>
+            ) : null}
+          </div>
+        ))}
       </div>
 
       {err ? <div className="banner banner-error">{err}</div> : null}

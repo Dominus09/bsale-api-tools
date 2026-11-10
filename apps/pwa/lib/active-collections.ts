@@ -52,20 +52,23 @@ export function summarizeCollections(
   let cash = 0
   let transferDeclared = 0
   let credit = 0
+  const declarative = collections.every((c) => c.declared_amount == null)
   for (const c of collections) {
     const method = String(c.method || "")
     const declared = typeof c.declared_amount === "number" ? c.declared_amount : 0
-    byMethod.set(method, (byMethod.get(method) || 0) + declared)
+    // En modo declarativo contamos 1 por método (sin inventar montos).
+    byMethod.set(method, (byMethod.get(method) || 0) + (declarative ? 1 : declared))
     if (method === "not_applicable") continue
-    declaredAll += declared
-    if (method === "pending") pendingExplicit += declared
-    if (method === "cash") cash += declared
-    if (method === "transfer_declared") transferDeclared += declared
-    if (method === "credit") credit += declared
+    if (!declarative) {
+      declaredAll += declared
+      if (method === "pending") pendingExplicit += declared
+      if (method === "cash") cash += declared
+      if (method === "transfer_declared") transferDeclared += declared
+      if (method === "credit") credit += declared
+    }
   }
-  const implicit = Math.max(0, documentTotal - declaredAll)
-  // Una sola vez: pending explícito + remanente solo si no cubre el total.
-  const pendingBalance = pendingExplicit + implicit
+  const implicit = declarative ? 0 : Math.max(0, documentTotal - declaredAll)
+  const pendingBalance = declarative ? 0 : pendingExplicit + implicit
   return {
     byMethod,
     declaredAll,
@@ -74,7 +77,7 @@ export function summarizeCollections(
     transferDeclared,
     credit,
     pendingBalance,
-    receivedLike: cash, // solo efectivo se trata como "por rendir"; no credit ni transfer
+    receivedLike: cash,
   }
 }
 

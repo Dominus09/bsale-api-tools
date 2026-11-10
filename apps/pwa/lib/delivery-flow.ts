@@ -16,8 +16,8 @@ export const STEP_DEFS: ReadonlyArray<{
   label: string
   path: string
 }> = [
-  { step: 1, key: "documentos", label: "Documentos", path: "documentos" },
-  { step: 2, key: "cobranza", label: "Cobranza", path: "cobranza" },
+  { step: 1, key: "documentos", label: "Productos", path: "documentos" },
+  { step: 2, key: "cobranza", label: "Pago", path: "cobranza" },
   { step: 3, key: "firma", label: "Firma", path: "firma" },
 ]
 

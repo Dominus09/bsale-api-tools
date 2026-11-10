@@ -3,11 +3,12 @@
 export const PAYMENT_METHOD_LABEL: Record<string, string> = {
   cash: "Efectivo",
   transfer_declared: "Transferencia informada",
+  cash_and_transfer: "Efectivo + transferencia",
   transfer_verified: "Transferencia verificada",
   credit: "Crédito",
   partial: "Cobranza parcial",
-  pending: "Saldo pendiente",
-  not_applicable: "No corresponde",
+  pending: "Pago pendiente",
+  not_applicable: "Sin cobro / No aplica",
 }
 
 export const DOC_STATUS_LABEL: Record<string, string> = {

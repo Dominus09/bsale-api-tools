@@ -157,7 +157,7 @@ export default function EntregaDocumentosPage() {
             onClick={() => {
               if (!allSaved) {
                 setGateErr(
-                  `Faltan ${missingTotal} línea(s) por registrar antes de cobranza`,
+                  `Faltan ${missingTotal} línea(s) por registrar antes del pago`,
                 )
                 return
               }
@@ -165,7 +165,7 @@ export default function EntregaDocumentosPage() {
               router.push(buildEntregaHref(planId, customerKey, "cobranza"))
             }}
           >
-            Continuar a cobranza
+            Continuar a forma de pago
           </button>
         </div>
       }
@@ -173,7 +173,7 @@ export default function EntregaDocumentosPage() {
       {!allSaved ? (
         <p className="muted" style={{ margin: 0, fontSize: "0.82rem" }}>
           Registre todas las líneas de cada documento (confirmación en servidor)
-          para habilitar cobranza. Precargar cantidades no cuenta como registro.
+          para habilitar forma de pago. Precargar cantidades no cuenta como registro.
         </p>
       ) : null}
 

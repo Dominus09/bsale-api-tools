@@ -528,6 +528,27 @@ export async function declareVisitCollectionMixed(
   )
 }
 
+/** Operativa 2.0: forma de pago sin montos. */
+export async function declareVisitPaymentMethod(
+  planId: number,
+  visitId: number,
+  body: {
+    document_result_id: number
+    method: string
+    document_amount?: number | null
+    note?: string | null
+  },
+): Promise<Record<string, unknown>> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/forma-pago`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
 export type WhatsappReportResponse = {
   report_text: string
   snapshot_id?: number
