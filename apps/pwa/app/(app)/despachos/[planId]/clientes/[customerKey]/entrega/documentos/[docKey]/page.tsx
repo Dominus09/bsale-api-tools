@@ -104,6 +104,8 @@ export default function EntregaDocumentoDetallePage() {
   const [visitVersion, setVisitVersion] = useState<number>(
     session.activeVisit?.version || 1,
   )
+  const linesRef = useRef(lines)
+  linesRef.current = lines
 
   useEffect(() => {
     if (session.activeVisit?.version != null) {
@@ -356,6 +358,24 @@ export default function EntregaDocumentoDetallePage() {
               Una línea solo cuenta como registrada cuando el servidor confirma el
               guardado. La cantidad precargada no implica entrega.
             </p>
+            {progress.pending > 0 ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ marginTop: 8 }}
+                onClick={() => {
+                  setFilter("pending")
+                  setQuery("")
+                  requestAnimationFrame(() => {
+                    listRef.current
+                      ?.querySelector(".line-card")
+                      ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                  })
+                }}
+              >
+                Siguiente pendiente
+              </button>
+            ) : null}
           </div>
 
           <div className="stack-gap" ref={listRef}>
@@ -372,6 +392,11 @@ export default function EntregaDocumentoDetallePage() {
                 const outcome = lineOutcome(ln)
                 const diff = Math.max(0, ln.planned - ln.delivered)
                 const busy = busyId === ln.source_detail_id
+                function patchLine(patch: Partial<LineDraft>) {
+                  setLines((all) =>
+                    all.map((x) => (x.key === ln.key ? { ...x, ...patch } : x)),
+                  )
+                }
                 return (
                   <div
                     key={ln.key}
@@ -398,8 +423,46 @@ export default function EntregaDocumentoDetallePage() {
                       {` · detail ${ln.source_detail_id}`}
                     </div>
                     <div className="meta-row">
-                      <span className="muted">Documentado</span>
+                      <span className="muted">Planificado</span>
                       <span>{ln.planned}</span>
+                    </div>
+                    <div className="btn-row" style={{ marginBottom: 8 }}>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-compact"
+                        disabled={busy}
+                        onClick={() =>
+                          patchLine({ delivered: ln.planned, reason: "physical_shortage", note: "" })
+                        }
+                      >
+                        Entregar todo
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-compact"
+                        disabled={busy}
+                        onClick={() =>
+                          patchLine({
+                            delivered: Math.max(0, Math.min(ln.planned, Math.floor(ln.planned / 2))),
+                            reason: ln.reason || "physical_shortage",
+                          })
+                        }
+                      >
+                        Parcial
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-compact"
+                        disabled={busy}
+                        onClick={() =>
+                          patchLine({
+                            delivered: 0,
+                            reason: ln.reason || "physical_shortage",
+                          })
+                        }
+                      >
+                        No entregado
+                      </button>
                     </div>
                     <label className="field">
                       Entregado
@@ -409,16 +472,7 @@ export default function EntregaDocumentoDetallePage() {
                         disabled={busy}
                         onChange={(e) => {
                           const v = Number(e.target.value)
-                          setLines((all) =>
-                            all.map((x) =>
-                              x.key === ln.key
-                                ? {
-                                    ...x,
-                                    delivered: Number.isFinite(v) ? v : 0,
-                                  }
-                                : x,
-                            ),
-                          )
+                          patchLine({ delivered: Number.isFinite(v) ? v : 0 })
                         }}
                       />
                     </label>
@@ -433,15 +487,7 @@ export default function EntregaDocumentoDetallePage() {
                           <select
                             value={ln.reason || "physical_shortage"}
                             disabled={busy}
-                            onChange={(e) =>
-                              setLines((all) =>
-                                all.map((x) =>
-                                  x.key === ln.key
-                                    ? { ...x, reason: e.target.value }
-                                    : x,
-                                ),
-                              )
-                            }
+                            onChange={(e) => patchLine({ reason: e.target.value })}
                           >
                             {REASONS.map((r) => (
                               <option key={r.value} value={r.value}>
@@ -455,15 +501,7 @@ export default function EntregaDocumentoDetallePage() {
                           <input
                             value={ln.note || ""}
                             disabled={busy}
-                            onChange={(e) =>
-                              setLines((all) =>
-                                all.map((x) =>
-                                  x.key === ln.key
-                                    ? { ...x, note: e.target.value }
-                                    : x,
-                                ),
-                              )
-                            }
+                            onChange={(e) => patchLine({ note: e.target.value })}
                           />
                         </label>
                         {ln.persisted ? (
@@ -478,9 +516,13 @@ export default function EntregaDocumentoDetallePage() {
                       className="btn btn-secondary"
                       style={{ marginTop: 8 }}
                       disabled={busy}
-                      onClick={() =>
-                        void persistLine(ln, { stayOnRegistered: ln.persisted })
-                      }
+                      onClick={() => {
+                        const current =
+                          linesRef.current.find((x) => x.key === ln.key) || ln
+                        void persistLine(current, {
+                          stayOnRegistered: current.persisted,
+                        })
+                      }}
                     >
                       {busy
                         ? "Guardando…"

@@ -736,3 +736,11 @@ input {
   border-color: rgba(227, 93, 106, 0.4);
   color: #ffb4bc;
 }
+
+.plan-shell-focus .plan-top {
+  display: none;
+}
+
+.entrega-focus {
+  min-height: 70dvh;
+}

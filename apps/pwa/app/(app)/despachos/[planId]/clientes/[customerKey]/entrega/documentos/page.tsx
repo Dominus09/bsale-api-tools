@@ -204,7 +204,7 @@ export default function EntregaDocumentosPage() {
                     {prog.pending}
                   </div>
                   <Link href={href} className="btn btn-secondary" style={{ marginTop: 10 }}>
-                    {prog.complete ? "Revisar / editar entrega" : "Registrar entrega"}
+                    {prog.complete ? "Abrir documento" : "Abrir documento"}
                   </Link>
                 </>
               ) : (
