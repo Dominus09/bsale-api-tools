@@ -4,7 +4,14 @@ import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { DeliveryMap } from "@/components/delivery-map"
-import { ApiError, getMyMapa, type DriverMapMarker } from "@/lib/api"
+import { RouteProgressCard } from "@/components/route-progress-card"
+import {
+  ApiError,
+  getMyDespachoProgress,
+  getMyMapa,
+  type DriverMapMarker,
+  type RouteProgress,
+} from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDistanceM } from "@/lib/geo"
 import { asAmount } from "@/lib/money-display"
@@ -20,6 +27,7 @@ export default function MapaPage() {
   const params = useParams()
   const planId = Number(params.planId)
   const [markers, setMarkers] = useState<DriverMapMarker[]>([])
+  const [progress, setProgress] = useState<RouteProgress | null>(null)
   const [emptyMsg, setEmptyMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -30,6 +38,22 @@ export default function MapaPage() {
   const [sortMode, setSortMode] = useState<SortMode>("route")
   const watchRef = useRef<number | null>(null)
   const originalOrderRef = useRef<string[]>([])
+
+  const loadProgress = useCallback(
+    async (origin?: UserLoc | null) => {
+      if (!Number.isFinite(planId) || planId < 1) return
+      try {
+        const data = await getMyDespachoProgress(
+          planId,
+          origin ? { lat: origin.lat, lng: origin.lng } : null,
+        )
+        setProgress(data.progress || null)
+      } catch {
+        /* progreso opcional en mapa */
+      }
+    },
+    [planId],
+  )
 
   const loadMap = useCallback(
     async (origin?: UserLoc | null) => {
@@ -51,6 +75,7 @@ export default function MapaPage() {
         }
         setEmptyMsg(data.empty_state?.message_es || null)
         setError(null)
+        void loadProgress(origin)
       } catch (err) {
         if (!navigator.onLine) {
           setError("Sin conexión. Reintenta cuando vuelva la red.")
@@ -63,7 +88,7 @@ export default function MapaPage() {
         setLoading(false)
       }
     },
-    [planId],
+    [planId, loadProgress],
   )
 
   const stopWatch = useCallback(() => {
@@ -131,6 +156,11 @@ export default function MapaPage() {
     void loadMap(userLoc)
   }, [userLoc, loadMap])
 
+  useEffect(() => {
+    if (!userLoc) return
+    void loadProgress(userLoc)
+  }, [userLoc, loadProgress])
+
   const displayMarkers = useMemo(() => {
     const list = [...markers]
     if (sortMode === "near") {
@@ -162,6 +192,23 @@ export default function MapaPage() {
   const amount = asAmount(selected?.amount_total)
   const distLabel = formatDistanceM(selected?.distance_m)
 
+  const next = progress?.next_customer
+  const nextHref = next?.customer_key
+    ? `/despachos/${planId}/clientes/${encodeURIComponent(next.customer_key)}`
+    : null
+
+  function selectNextPending() {
+    if (next?.customer_key) {
+      setSelectedKey(next.customer_key)
+      return
+    }
+    const pending = displayMarkers.find((m) => {
+      const st = m.attention_status || m.visit_status || "pending"
+      return st !== "completed" && st !== "partial" && st !== "not_delivered"
+    })
+    if (pending) setSelectedKey(pending.customer_key)
+  }
+
   return (
     <div className="stack-gap">
       <div className="despacho-hero-head">
@@ -171,6 +218,7 @@ export default function MapaPage() {
           </h2>
           <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
             {displayMarkers.length} cliente{displayMarkers.length === 1 ? "" : "s"} con GPS
+            {sortMode === "near" ? " · distancia geográfica" : " · orden de ruta"}
           </p>
         </div>
         <button
@@ -198,6 +246,13 @@ export default function MapaPage() {
       <div className="filter-chips" role="group" aria-label="Orden del mapa">
         <button
           type="button"
+          className={`filter-chip${sortMode === "route" ? " active" : ""}`}
+          onClick={() => setSortMode("route")}
+        >
+          Orden de ruta
+        </button>
+        <button
+          type="button"
           className={`filter-chip${sortMode === "near" ? " active" : ""}`}
           onClick={() => {
             setSortMode("near")
@@ -205,14 +260,15 @@ export default function MapaPage() {
             else startWatch()
           }}
         >
-          Ordenar: Más cercano
+          Más cercanos
         </button>
         <button
           type="button"
-          className={`filter-chip${sortMode === "route" ? " active" : ""}`}
-          onClick={() => setSortMode("route")}
+          className="filter-chip"
+          onClick={() => selectNextPending()}
+          disabled={!next && displayMarkers.length === 0}
         >
-          Orden de ruta
+          Ver siguiente pendiente
         </button>
       </div>
 
@@ -236,6 +292,9 @@ export default function MapaPage() {
 
       {markers.length > 0 ? (
         <div className="map-stage">
+          {progress ? (
+            <RouteProgressCard progress={progress} variant="overlay" />
+          ) : null}
           <DeliveryMap
             markers={displayMarkers}
             userLocation={userLoc}
@@ -287,7 +346,12 @@ export default function MapaPage() {
                     </>
                   )
                 })()}
-                {distLabel ? <span className="pill">{distLabel}</span> : null}
+                {distLabel ? (
+                  <span className="pill">
+                    {distLabel}
+                    <span className="muted"> · geográfica</span>
+                  </span>
+                ) : null}
                 <span className="pill">
                   {selected.document_count} doc{selected.document_count === 1 ? "" : "s"}
                 </span>
@@ -316,6 +380,28 @@ export default function MapaPage() {
                     Navegar
                   </a>
                 ) : null}
+              </div>
+            </div>
+          ) : next && nextHref ? (
+            <div className="map-sheet" role="status">
+              <div className="map-sheet-handle" aria-hidden />
+              <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
+                Siguiente pendiente · {next.suggestion_reason_es || "Siguiente en ruta"}
+              </p>
+              <h3 className="map-sheet-title" style={{ marginTop: 4 }}>
+                {next.client_name || "Cliente"}
+              </h3>
+              <div className="btn-row" style={{ marginTop: 10 }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setSelectedKey(next.customer_key)}
+                >
+                  Ver en mapa
+                </button>
+                <Link href={nextHref} className="btn btn-primary" style={{ textAlign: "center" }}>
+                  Ir a ficha
+                </Link>
               </div>
             </div>
           ) : null}

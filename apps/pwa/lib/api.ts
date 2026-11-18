@@ -238,14 +238,69 @@ export async function listMyDespachos(): Promise<{
   return apiFetch("/distribuidora/pwa/driver/despachos")
 }
 
+export type RouteProgressNext = {
+  customer_key: string
+  client_id?: number | null
+  client_name?: string | null
+  address?: string | null
+  city?: string | null
+  route_order?: number | null
+  has_coordinates?: boolean
+  latitude?: number | null
+  longitude?: number | null
+  distance_m?: number | null
+  attention_status?: string | null
+  semaphore_color?: string | null
+  document_count?: number
+  amount_total?: number | null
+  suggestion_reason?: "nearest" | "route_order" | string
+  suggestion_reason_es?: string
+  distance_basis?: string | null
+}
+
+export type RouteProgress = {
+  total_clients: number
+  managed_clients: number
+  remaining_clients: number
+  percent: number
+  by_result: {
+    completed: number
+    partial: number
+    not_delivered: number
+    pending: number
+    in_progress: number
+    pending_review: number
+  }
+  next_customer?: RouteProgressNext | null
+  inconsistencies?: string[]
+  formula_es?: string
+}
+
 export async function getMyDespacho(planId: number): Promise<{
   plan: DriverDespacho
+  progress?: RouteProgress | null
   driver_user_id: number
   read_only: boolean
   nav?: { mapa?: boolean; clientes?: boolean; ficha?: boolean; note_es?: string }
   nav_placeholders?: { mapa?: boolean; clientes?: boolean; note_es?: string }
 }> {
   return apiFetch(`/distribuidora/pwa/driver/despachos/${planId}`)
+}
+
+export async function getMyDespachoProgress(
+  planId: number,
+  origin?: { lat: number; lng: number } | null,
+): Promise<{
+  dispatch_plan_id: number
+  progress: RouteProgress
+  summary?: Record<string, unknown>
+  picking_ready?: boolean
+}> {
+  const qs =
+    origin && Number.isFinite(origin.lat) && Number.isFinite(origin.lng)
+      ? `?origin_lat=${encodeURIComponent(String(origin.lat))}&origin_lng=${encodeURIComponent(String(origin.lng))}`
+      : ""
+  return apiFetch(`/distribuidora/pwa/driver/despachos/${planId}/progreso${qs}`)
 }
 
 export async function listMyClientes(
@@ -442,6 +497,37 @@ export async function finalizeDeliveryVisit(
 }> {
   return apiFetch(
     `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/finalize`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export async function confirmVisitDocumentDelivery(
+  planId: number,
+  visitId: number,
+  body: {
+    related_document_id: number
+    mode: "full" | "partial" | "none" | string
+    oc_document_id?: number | null
+    document_number?: number | null
+    document_type?: string | null
+    document_total?: number | null
+    notes?: string | null
+    expected_version?: number | null
+    difference_lines?: Array<{
+      source_detail_id: number
+      delivered_units?: number | null
+      undelivered_reason?: string | null
+      undelivered_note?: string | null
+    }>
+    rest_delivered_confirmed?: boolean
+  },
+): Promise<Record<string, unknown>> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/documentos/confirmar`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

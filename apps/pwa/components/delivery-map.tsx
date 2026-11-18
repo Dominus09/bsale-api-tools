@@ -269,13 +269,7 @@ export function DeliveryMap({
       const el = mk.getElement()
       if (!el) return
       const key = markers[i]?.customer_key
-      if (key && key === selectedKey) {
-        el.style.transform = "scale(1.15)"
-        el.style.boxShadow = "0 0 0 3px rgba(196,41,60,0.45), 0 2px 8px rgba(0,0,0,0.45)"
-      } else {
-        el.style.transform = ""
-        el.style.boxShadow = ""
-      }
+      el.classList.toggle("is-selected", Boolean(key && key === selectedKey))
     })
   }, [selectedKey, markers])
 

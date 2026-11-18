@@ -2,7 +2,14 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
-import { ApiError, listMyDespachos, type DriverDespacho } from "@/lib/api"
+import { RouteProgressCard } from "@/components/route-progress-card"
+import {
+  ApiError,
+  getMyDespachoProgress,
+  listMyDespachos,
+  type DriverDespacho,
+  type RouteProgress,
+} from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDate, statusLabel } from "@/lib/format"
 import { asAmount } from "@/lib/money-display"
@@ -11,7 +18,10 @@ import { partitionPlansByDate, santiagoTodayYmd } from "@/lib/plan-buckets"
 function PlanCard(props: {
   plan: DriverDespacho
   hero?: boolean
+  compact?: boolean
   cta?: string
+  progress?: RouteProgress | null
+  expandMeta?: boolean
 }) {
   const p = props.plan
   const amount = asAmount(p.amount_total)
@@ -19,6 +29,60 @@ function PlanCard(props: {
     typeof p.document_count === "number" ? p.document_count : null
   const clients =
     typeof p.client_count === "number" ? p.client_count : null
+  const remaining = props.progress?.remaining_clients
+  const hasPendingOps =
+    props.progress != null &&
+    (props.progress.remaining_clients > 0 ||
+      (props.progress.by_result?.in_progress || 0) > 0)
+  const cta =
+    props.cta ||
+    (props.compact
+      ? hasPendingOps
+        ? "Continuar recorrido"
+        : "Ver detalle"
+      : "Abrir despacho")
+
+  if (props.compact) {
+    return (
+      <div className="card history-card-compact">
+        <div className="despacho-hero-head">
+          <div>
+            <h2 style={{ margin: 0, fontSize: "1rem" }}>
+              {p.planning_code || `Plan #${p.id}`}
+            </h2>
+            <p className="muted" style={{ margin: "2px 0 0", fontSize: "0.78rem" }}>
+              {formatDate(p.planning_date)} · {p.route_name || "Sin ruta"}
+            </p>
+          </div>
+          <span className={`pill${p.status === "picking_generated" ? " pill-ok" : ""}`}>
+            {statusLabel(p.status)}
+          </span>
+        </div>
+        <div className="client-card-meta" style={{ marginTop: 8 }}>
+          <span>
+            {clients ?? "—"} cliente{(clients || 0) === 1 ? "" : "s"}
+          </span>
+          <span>{docs ?? "—"} doc{(docs || 0) === 1 ? "" : "s"}</span>
+          <span>{amount != null ? moneyCLP(amount) : "Monto —"}</span>
+        </div>
+        {props.progress ? (
+          <RouteProgressCard progress={props.progress} variant="compact" />
+        ) : null}
+        {remaining != null && remaining > 0 ? (
+          <p className="muted" style={{ margin: "6px 0 0", fontSize: "0.78rem" }}>
+            Faltan {remaining} cliente{remaining === 1 ? "" : "s"} por gestionar
+          </p>
+        ) : null}
+        <Link
+          href={`/despachos/${p.id}`}
+          className={`btn ${hasPendingOps ? "btn-primary" : "btn-secondary"}`}
+          style={{ textAlign: "center", marginTop: 10 }}
+        >
+          {cta}
+        </Link>
+      </div>
+    )
+  }
 
   return (
     <div className={`card${props.hero ? " despacho-hero" : ""}`}>
@@ -63,6 +127,10 @@ function PlanCard(props: {
         </div>
       </div>
 
+      {props.progress ? (
+        <RouteProgressCard progress={props.progress} variant="compact" />
+      ) : null}
+
       <div className="despacho-amount">
         <span className="despacho-amount-label">Monto picking</span>
         <div className="despacho-amount-value">
@@ -75,7 +143,7 @@ function PlanCard(props: {
         className={`btn ${props.hero ? "btn-primary btn-with-arrow" : "btn-secondary"}`}
         style={{ textAlign: "center", marginTop: 14 }}
       >
-        {props.cta || "Abrir despacho"}
+        {cta}
         {props.hero ? (
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
             <path d="M5 12h14" />
@@ -89,6 +157,7 @@ function PlanCard(props: {
 
 export default function DespachosPage() {
   const [items, setItems] = useState<DriverDespacho[] | null>(null)
+  const [progressById, setProgressById] = useState<Record<number, RouteProgress>>({})
   const [error, setError] = useState<string | null>(null)
   const todayLabel = useMemo(() => {
     const ymd = santiagoTodayYmd()
@@ -101,7 +170,27 @@ export default function DespachosPage() {
     async function load() {
       try {
         const data = await listMyDespachos()
-        if (!cancelled) setItems(data.items || [])
+        if (cancelled) return
+        const list = data.items || []
+        setItems(list)
+        const buckets = partitionPlansByDate(list)
+        const targets = [
+          ...buckets.today,
+          ...buckets.history.slice(0, 12),
+          ...buckets.unknown.slice(0, 4),
+        ]
+        const map: Record<number, RouteProgress> = {}
+        await Promise.all(
+          targets.map(async (p) => {
+            try {
+              const res = await getMyDespachoProgress(p.id)
+              if (res.progress) map[p.id] = res.progress
+            } catch {
+              /* ignore */
+            }
+          }),
+        )
+        if (!cancelled) setProgressById(map)
       } catch (err) {
         if (cancelled) return
         setError(err instanceof ApiError ? err.message : "No se pudieron cargar los despachos")
@@ -118,6 +207,22 @@ export default function DespachosPage() {
     () => partitionPlansByDate(items || []),
     [items],
   )
+
+  const pendingPast = useMemo(() => {
+    return [...buckets.history, ...buckets.unknown].filter((p) => {
+      const pr = progressById[p.id]
+      if (!pr) return true
+      return pr.remaining_clients > 0 || (pr.by_result?.in_progress || 0) > 0
+    })
+  }, [buckets.history, buckets.unknown, progressById])
+
+  const closedHistory = useMemo(() => {
+    return [...buckets.history, ...buckets.unknown].filter((p) => {
+      const pr = progressById[p.id]
+      if (!pr) return false
+      return pr.remaining_clients <= 0 && (pr.by_result?.in_progress || 0) <= 0
+    })
+  }, [buckets.history, buckets.unknown, progressById])
 
   if (items === null && !error) {
     return <div className="empty">Cargando despachos…</div>
@@ -150,22 +255,44 @@ export default function DespachosPage() {
           <div className="card">
             <p style={{ margin: 0 }}>No tienes un despacho asignado para hoy.</p>
             <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.85rem" }}>
-              Consulta próximos o historial más abajo.
+              {pendingPast.length > 0
+                ? `Hay ${pendingPast.length} despacho(s) de días anteriores con gestiones pendientes.`
+                : "Consulta próximos o historial más abajo."}
             </p>
           </div>
         ) : (
           <div className="stack-gap">
             {buckets.today.map((p) => (
-              <PlanCard key={p.id} plan={p} hero cta="Abrir despacho" />
+              <PlanCard
+                key={p.id}
+                plan={p}
+                hero
+                cta="Abrir despacho"
+                progress={progressById[p.id] || null}
+              />
             ))}
           </div>
         )}
       </section>
 
-      {buckets.unknown.length > 0 ? (
-        <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
-          Hay {buckets.unknown.length} plan(es) sin fecha operativa legible.
-        </div>
+      {pendingPast.length > 0 ? (
+        <section>
+          <h2 className="section-title">Despachos pendientes</h2>
+          <p className="muted" style={{ margin: "0 0 10px", fontSize: "0.78rem" }}>
+            Planes de días anteriores con clientes aún por gestionar. La fecha del
+            picking no se altera.
+          </p>
+          <div className="stack-gap">
+            {pendingPast.map((p) => (
+              <PlanCard
+                key={p.id}
+                plan={p}
+                compact
+                progress={progressById[p.id] || null}
+              />
+            ))}
+          </div>
+        </section>
       ) : null}
 
       <details className="details-block">
@@ -179,24 +306,32 @@ export default function DespachosPage() {
               Sin despachos futuros asignados.
             </p>
           ) : (
-            buckets.upcoming.map((p) => <PlanCard key={p.id} plan={p} />)
+            buckets.upcoming.map((p) => (
+              <PlanCard key={p.id} plan={p} compact cta="Ver detalle" />
+            ))
           )}
         </div>
       </details>
 
       <details className="details-block">
         <summary>
-          Historial de despachos
-          <span className="muted">{buckets.history.length + buckets.unknown.length}</span>
+          Historial
+          <span className="muted">{closedHistory.length}</span>
         </summary>
         <div className="details-body">
-          {[...buckets.history, ...buckets.unknown].length === 0 ? (
+          {closedHistory.length === 0 ? (
             <p className="muted" style={{ margin: 0 }}>
-              Sin historial visible.
+              Sin historial gestionado aún.
             </p>
           ) : (
-            [...buckets.history, ...buckets.unknown].map((p) => (
-              <PlanCard key={p.id} plan={p} />
+            closedHistory.map((p) => (
+              <PlanCard
+                key={p.id}
+                plan={p}
+                compact
+                cta="Ver detalle"
+                progress={progressById[p.id] || null}
+              />
             ))
           )}
         </div>

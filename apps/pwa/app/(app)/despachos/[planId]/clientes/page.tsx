@@ -3,18 +3,39 @@
 import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
-import { ApiError, listMyClientes, type DriverClientCard } from "@/lib/api"
+import { RouteProgressCard } from "@/components/route-progress-card"
+import {
+  ApiError,
+  getMyDespachoProgress,
+  listMyClientes,
+  type DriverClientCard,
+  type RouteProgress,
+} from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDistanceM, haversineMeters } from "@/lib/geo"
 import { asAmount } from "@/lib/money-display"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 
-type Filter = "all" | "pending" | "delivered"
+type Filter = "all" | "pending" | "in_progress" | "managed" | "incidents"
 type SortMode = "route" | "near" | "name"
 
-function isDelivered(c: DriverClientCard) {
-  const st = c.attention_status || c.visit_status || "pending"
+function attentionOf(c: DriverClientCard) {
+  return c.attention_status || c.visit_status || "pending"
+}
+
+function isManaged(c: DriverClientCard) {
+  const st = attentionOf(c)
   return st === "completed" || st === "partial" || st === "not_delivered"
+}
+
+function isIncident(c: DriverClientCard) {
+  const st = attentionOf(c)
+  return (
+    st === "not_delivered" ||
+    st === "partial" ||
+    c.closure_review_status === "pending_review" ||
+    Boolean(c.admin_review_pending)
+  )
 }
 
 function stopLabel(c: DriverClientCard, index: number) {
@@ -26,6 +47,7 @@ export default function ClientesPage() {
   const params = useParams()
   const planId = Number(params.planId)
   const [items, setItems] = useState<DriverClientCard[]>([])
+  const [progress, setProgress] = useState<RouteProgress | null>(null)
   const [q, setQ] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -57,9 +79,13 @@ export default function ClientesPage() {
     const handle = window.setTimeout(async () => {
       setLoading(true)
       try {
-        const data = await listMyClientes(planId, q)
+        const [data, prog] = await Promise.all([
+          listMyClientes(planId, q),
+          getMyDespachoProgress(planId).catch(() => null),
+        ])
         if (cancelled) return
         setItems(data.items || [])
+        if (prog?.progress) setProgress(prog.progress)
         setError(null)
       } catch (err) {
         if (cancelled) return
@@ -95,28 +121,38 @@ export default function ClientesPage() {
     return () => navigator.geolocation.clearWatch(id)
   }, [sortMode])
 
+  useEffect(() => {
+    if (!origin || !Number.isFinite(planId)) return
+    let cancelled = false
+    void getMyDespachoProgress(planId, origin)
+      .then((res) => {
+        if (!cancelled && res.progress) setProgress(res.progress)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [origin, planId])
+
   const counts = useMemo(() => {
-    const pending = items.filter((c) => !isDelivered(c)).length
-    const delivered = items.filter((c) => isDelivered(c)).length
-    return { all: items.length, pending, delivered }
+    // Contadores globales del listado (no del filtro activo).
+    const pending = items.filter((c) => !isManaged(c) && attentionOf(c) !== "in_progress").length
+    const inProgress = items.filter((c) => attentionOf(c) === "in_progress").length
+    const managed = items.filter((c) => isManaged(c)).length
+    const incidents = items.filter((c) => isIncident(c)).length
+    return { all: items.length, pending, in_progress: inProgress, managed, incidents }
   }, [items])
 
   const visible = useMemo(() => {
     let list = items.filter((c) => {
-      if (filter === "pending") return !isDelivered(c)
-      if (filter === "delivered") return isDelivered(c)
+      if (filter === "pending") return !isManaged(c) && attentionOf(c) !== "in_progress"
+      if (filter === "in_progress") return attentionOf(c) === "in_progress"
+      if (filter === "managed") return isManaged(c)
+      if (filter === "incidents") return isIncident(c)
       return true
     })
 
-    const withDist = list.map((c, index) => {
-      let distance_m: number | null = null
-      if (origin && c.has_coordinates) {
-        // Lat/lng no vienen en list cards; distancia solo si se amplía API.
-        // Placeholder: sin coords en list, distance queda null salvo que ampliemos.
-        distance_m = null
-      }
-      return { c, index, distance_m }
-    })
+    const withDist = list.map((c, index) => ({ c, index, distance_m: null as number | null }))
 
     if (sortMode === "name") {
       withDist.sort((a, b) =>
@@ -127,12 +163,7 @@ export default function ClientesPage() {
         const aHas = a.c.has_coordinates
         const bHas = b.c.has_coordinates
         if (aHas !== bHas) return aHas ? -1 : 1
-        const da = a.distance_m
-        const db = b.distance_m
-        if (da == null && db == null) return 0
-        if (da == null) return 1
-        if (db == null) return -1
-        return da - db
+        return 0
       })
     } else {
       withDist.sort((a, b) => {
@@ -146,9 +177,8 @@ export default function ClientesPage() {
     }
 
     return withDist
-  }, [items, filter, sortMode, origin])
+  }, [items, filter, sortMode])
 
-  // Ampliar distancia: pedir mapa liviano solo cuando ordenamos por cercanía.
   const [nearDist, setNearDist] = useState<Record<string, number | null>>({})
   useEffect(() => {
     if (sortMode !== "near" || !origin || !Number.isFinite(planId)) {
@@ -198,15 +228,31 @@ export default function ClientesPage() {
     return copy
   }, [visible, sortMode, nearDist])
 
+  const remainingGlobal =
+    progress?.remaining_clients ??
+    items.filter((c) => !isManaged(c)).length
+
+  const nextHref = progress?.next_customer?.customer_key
+    ? `/despachos/${planId}/clientes/${encodeURIComponent(progress.next_customer.customer_key)}`
+    : null
+
   return (
     <div className="stack-gap">
       <div>
         <h2 className="section-title">Clientes</h2>
         <p className="muted" style={{ margin: 0, fontSize: "0.82rem" }}>
-          {counts.all} en despacho
-          {sortMode === "near" ? " · orden por cercanía" : sortMode === "name" ? " · A–Z" : " · orden de ruta"}
+          Faltan {remainingGlobal} cliente{remainingGlobal === 1 ? "" : "s"}
+          {sortMode === "near"
+            ? " · orden por cercanía geográfica"
+            : sortMode === "name"
+              ? " · A–Z"
+              : " · orden de ruta"}
         </p>
       </div>
+
+      {progress ? (
+        <RouteProgressCard progress={progress} variant="compact" nextHref={nextHref} />
+      ) : null}
 
       {offline ? <div className="banner banner-error">Sin conexión a internet.</div> : null}
 
@@ -239,10 +285,24 @@ export default function ClientesPage() {
         </button>
         <button
           type="button"
-          className={`filter-chip${filter === "delivered" ? " active" : ""}`}
-          onClick={() => setFilter("delivered")}
+          className={`filter-chip${filter === "in_progress" ? " active" : ""}`}
+          onClick={() => setFilter("in_progress")}
         >
-          Entregados ({counts.delivered})
+          En atención ({counts.in_progress})
+        </button>
+        <button
+          type="button"
+          className={`filter-chip${filter === "managed" ? " active" : ""}`}
+          onClick={() => setFilter("managed")}
+        >
+          Gestionados ({counts.managed})
+        </button>
+        <button
+          type="button"
+          className={`filter-chip${filter === "incidents" ? " active" : ""}`}
+          onClick={() => setFilter("incidents")}
+        >
+          Incidencias ({counts.incidents})
         </button>
       </div>
 
@@ -282,6 +342,20 @@ export default function ClientesPage() {
           const obs = (c.observations || "").trim()
           const amount = asAmount(c.amount_total)
           const dist = formatDistanceM(nearDist[c.customer_key])
+          const st = attentionOf(c)
+          const sem = resolveSemaphore({
+            status: st,
+            resultReason: c.result_reason,
+            semaphoreColor: c.semaphore_color,
+            attentionLabel: c.attention_label_es,
+          })
+          const label =
+            st === "pending" || (!c.visit_status && !c.attention_status)
+              ? "Pendiente"
+              : st === "in_progress"
+                ? "En atención"
+                : sem.labelEs
+          const val = validationLabelEs(c.closure_review_status)
           return (
             <Link
               key={c.customer_key}
@@ -300,7 +374,11 @@ export default function ClientesPage() {
 
               <p className="muted" style={{ margin: "6px 0 0", fontSize: "0.86rem" }}>
                 {[c.city, c.address].filter(Boolean).join(" · ") || "Sin dirección"}
-                {dist ? ` · ${dist}` : !c.has_coordinates && sortMode === "near" ? " · sin coordenadas" : ""}
+                {dist
+                  ? ` · ${dist}`
+                  : !c.has_coordinates && sortMode === "near"
+                    ? " · sin coordenadas"
+                    : ""}
               </p>
 
               <div className="client-card-meta">
@@ -310,29 +388,18 @@ export default function ClientesPage() {
                 <span>{amount != null ? moneyCLP(amount) : "Monto —"}</span>
               </div>
 
-              {(() => {
-                const sem = resolveSemaphore({
-                  status: c.attention_status,
-                  resultReason: c.result_reason,
-                  semaphoreColor: c.semaphore_color,
-                  attentionLabel: c.attention_label_es,
-                })
-                const val = validationLabelEs(c.closure_review_status)
-                return (
-                  <div className="group-row" style={{ marginTop: 6 }}>
-                    <span className={`sem-pill ${sem.cssClass}`}>{sem.labelEs}</span>
-                    {val ? (
-                      <span
-                        className={`pill${
-                          c.closure_review_status === "pending_review" ? " pill-warn" : ""
-                        }`}
-                      >
-                        {val}
-                      </span>
-                    ) : null}
-                  </div>
-                )
-              })()}
+              <div className="group-row" style={{ marginTop: 6 }}>
+                <span className={`sem-pill ${sem.cssClass}`}>{label}</span>
+                {val ? (
+                  <span
+                    className={`pill${
+                      c.closure_review_status === "pending_review" ? " pill-warn" : ""
+                    }`}
+                  >
+                    {val}
+                  </span>
+                ) : null}
+              </div>
 
               <div className={obs ? "obs-block" : "obs-block obs-empty"}>
                 {obs ? `Obs: ${obs}` : "Sin observaciones"}
