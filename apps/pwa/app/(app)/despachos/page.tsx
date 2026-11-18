@@ -21,7 +21,6 @@ function PlanCard(props: {
   compact?: boolean
   cta?: string
   progress?: RouteProgress | null
-  expandMeta?: boolean
 }) {
   const p = props.plan
   const amount = asAmount(p.amount_total)
@@ -44,114 +43,122 @@ function PlanCard(props: {
 
   if (props.compact) {
     return (
-      <div className="card history-card-compact">
-        <div className="despacho-hero-head">
-          <div>
-            <h2 style={{ margin: 0, fontSize: "1rem" }}>
-              {p.planning_code || `Plan #${p.id}`}
-            </h2>
-            <p className="muted" style={{ margin: "2px 0 0", fontSize: "0.78rem" }}>
-              {formatDate(p.planning_date)} · {p.route_name || "Sin ruta"}
-            </p>
+      <article className="card plan-card-flow history-card-compact">
+        <div className="plan-card-body">
+          <div className="despacho-hero-head">
+            <div>
+              <h2 style={{ margin: 0, fontSize: "1rem" }}>
+                {p.planning_code || `Plan #${p.id}`}
+              </h2>
+              <p className="muted" style={{ margin: "2px 0 0", fontSize: "0.78rem" }}>
+                {formatDate(p.planning_date)} · {p.route_name || "Sin ruta"}
+              </p>
+            </div>
+            <span className={`pill${p.status === "picking_generated" ? " pill-ok" : ""}`}>
+              {statusLabel(p.status)}
+            </span>
           </div>
-          <span className={`pill${p.status === "picking_generated" ? " pill-ok" : ""}`}>
-            {statusLabel(p.status)}
-          </span>
+          <div className="client-card-meta plan-card-meta">
+            <span>
+              {clients ?? "—"} cliente{(clients || 0) === 1 ? "" : "s"}
+            </span>
+            <span>{docs ?? "—"} doc{(docs || 0) === 1 ? "" : "s"}</span>
+            <span className="plan-card-amount">
+              {amount != null ? moneyCLP(amount) : "Monto —"}
+            </span>
+          </div>
+          {props.progress ? (
+            <RouteProgressCard progress={props.progress} variant="compact" />
+          ) : null}
+          {remaining != null && remaining > 0 && !props.progress ? (
+            <p className="muted plan-card-remaining">
+              Faltan {remaining} cliente{remaining === 1 ? "" : "s"} por gestionar
+            </p>
+          ) : null}
         </div>
-        <div className="client-card-meta" style={{ marginTop: 8 }}>
-          <span>
-            {clients ?? "—"} cliente{(clients || 0) === 1 ? "" : "s"}
-          </span>
-          <span>{docs ?? "—"} doc{(docs || 0) === 1 ? "" : "s"}</span>
-          <span>{amount != null ? moneyCLP(amount) : "Monto —"}</span>
+        <div className="plan-card-footer">
+          <Link
+            href={`/despachos/${p.id}`}
+            className={`btn ${hasPendingOps ? "btn-primary" : "btn-secondary"}`}
+          >
+            {cta}
+          </Link>
         </div>
-        {props.progress ? (
-          <RouteProgressCard progress={props.progress} variant="compact" />
-        ) : null}
-        {remaining != null && remaining > 0 ? (
-          <p className="muted" style={{ margin: "6px 0 0", fontSize: "0.78rem" }}>
-            Faltan {remaining} cliente{remaining === 1 ? "" : "s"} por gestionar
-          </p>
-        ) : null}
-        <Link
-          href={`/despachos/${p.id}`}
-          className={`btn ${hasPendingOps ? "btn-primary" : "btn-secondary"}`}
-          style={{ textAlign: "center", marginTop: 10 }}
-        >
-          {cta}
-        </Link>
-      </div>
+      </article>
     )
   }
 
   return (
-    <div className={`card${props.hero ? " despacho-hero" : ""}`}>
-      <div className="despacho-hero-head">
-        <h2 style={{ margin: 0, fontSize: props.hero ? "1.15rem" : "1.02rem" }}>
-          {p.planning_code || `Plan #${p.id}`}
-        </h2>
-        <span className={`pill${p.status === "picking_generated" ? " pill-ok" : ""}`}>
-          {statusLabel(p.status)}
-        </span>
-      </div>
-      {!props.hero ? (
-        <div className="muted" style={{ marginTop: 4, fontSize: "0.8rem" }}>
-          {formatDate(p.planning_date)}
+    <article className={`card plan-card-flow${props.hero ? " despacho-hero" : ""}`}>
+      <div className="plan-card-body">
+        <div className="despacho-hero-head">
+          <h2 style={{ margin: 0, fontSize: props.hero ? "1.15rem" : "1.02rem" }}>
+            {p.planning_code || `Plan #${p.id}`}
+          </h2>
+          <span className={`pill${p.status === "picking_generated" ? " pill-ok" : ""}`}>
+            {statusLabel(p.status)}
+          </span>
         </div>
-      ) : null}
-
-      <div className="despacho-hero-grid">
-        <div>
-          <span className="meta-label">Ruta</span>
-          <span className="meta-value">{p.route_name || "—"}</span>
-        </div>
-        <div>
-          <span className="meta-label">Vehículo</span>
-          <span className="meta-value">{p.truck_name || "—"}</span>
-        </div>
-        <div>
-          <span className="meta-label">Patente</span>
-          <span className="meta-value">{p.truck_plate || "—"}</span>
-        </div>
-        <div>
-          <span className="meta-label">Clientes</span>
-          <span className="meta-value">{clients ?? "—"}</span>
-        </div>
-        <div>
-          <span className="meta-label">Documentos</span>
-          <span className="meta-value">{docs ?? "—"}</span>
-        </div>
-        <div>
-          <span className="meta-label">Fecha</span>
-          <span className="meta-value">{formatDate(p.planning_date)}</span>
-        </div>
-      </div>
-
-      {props.progress ? (
-        <RouteProgressCard progress={props.progress} variant="compact" />
-      ) : null}
-
-      <div className="despacho-amount">
-        <span className="despacho-amount-label">Monto picking</span>
-        <div className="despacho-amount-value">
-          {amount != null ? moneyCLP(amount) : "Monto no disponible"}
-        </div>
-      </div>
-
-      <Link
-        href={`/despachos/${p.id}`}
-        className={`btn ${props.hero ? "btn-primary btn-with-arrow" : "btn-secondary"}`}
-        style={{ textAlign: "center", marginTop: 14 }}
-      >
-        {cta}
-        {props.hero ? (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-            <path d="M5 12h14" />
-            <path d="m13 6 6 6-6 6" />
-          </svg>
+        {!props.hero ? (
+          <div className="muted" style={{ marginTop: 4, fontSize: "0.8rem" }}>
+            {formatDate(p.planning_date)}
+          </div>
         ) : null}
-      </Link>
-    </div>
+
+        <div className="despacho-hero-grid">
+          <div>
+            <span className="meta-label">Ruta</span>
+            <span className="meta-value">{p.route_name || "—"}</span>
+          </div>
+          <div>
+            <span className="meta-label">Vehículo</span>
+            <span className="meta-value">{p.truck_name || "—"}</span>
+          </div>
+          <div>
+            <span className="meta-label">Patente</span>
+            <span className="meta-value">{p.truck_plate || "—"}</span>
+          </div>
+          <div>
+            <span className="meta-label">Clientes</span>
+            <span className="meta-value">{clients ?? "—"}</span>
+          </div>
+          <div>
+            <span className="meta-label">Documentos</span>
+            <span className="meta-value">{docs ?? "—"}</span>
+          </div>
+          <div>
+            <span className="meta-label">Fecha</span>
+            <span className="meta-value">{formatDate(p.planning_date)}</span>
+          </div>
+        </div>
+
+        {props.progress ? (
+          <RouteProgressCard progress={props.progress} variant="compact" />
+        ) : null}
+
+        <div className="despacho-amount">
+          <span className="despacho-amount-label">Monto picking</span>
+          <div className="despacho-amount-value">
+            {amount != null ? moneyCLP(amount) : "Monto no disponible"}
+          </div>
+        </div>
+      </div>
+
+      <div className="plan-card-footer">
+        <Link
+          href={`/despachos/${p.id}`}
+          className={`btn ${props.hero ? "btn-primary btn-with-arrow" : "btn-secondary"}`}
+        >
+          {cta}
+          {props.hero ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+              <path d="M5 12h14" />
+              <path d="m13 6 6 6-6 6" />
+            </svg>
+          ) : null}
+        </Link>
+      </div>
+    </article>
   )
 }
 
@@ -174,7 +181,6 @@ export default function DespachosPage() {
         const list = data.items || []
         setItems(list)
         const buckets = partitionPlansByDate(list)
-        // Solo hoy en la carga inicial (evita N+1 de progreso).
         const map: Record<number, RouteProgress> = {}
         await Promise.all(
           buckets.today.map(async (p) => {
@@ -188,7 +194,6 @@ export default function DespachosPage() {
         )
         if (!cancelled) setProgressById(map)
 
-        // Historial: progreso diferido, máximo 6 planes, secuencial.
         const past = [...buckets.history, ...buckets.unknown].slice(0, 6)
         for (const p of past) {
           if (cancelled) break
@@ -220,7 +225,6 @@ export default function DespachosPage() {
   )
 
   const pendingPast = useMemo(() => {
-    // Sin progreso aún: mostrar históricos (no asumir completados por fecha).
     return [...buckets.history, ...buckets.unknown].filter((p) => {
       const pr = progressById[p.id]
       if (!pr) return true

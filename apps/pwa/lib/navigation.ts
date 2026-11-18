@@ -1,5 +1,22 @@
 /** Construcción de enlaces de navegación (destino = coords del cliente). */
 
+/**
+ * Búsqueda por dirección (sin coordenadas). Ubicación estimada / no verificada.
+ * No inventa lat/lng ni afirma GPS verificado.
+ */
+export function buildAddressSearchUrl(opts: {
+  address?: string | null
+  city?: string | null
+  clientName?: string | null
+}): string | null {
+  const parts = [opts.address, opts.city, opts.clientName]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+  if (!parts.length) return null
+  const q = encodeURIComponent(parts.join(", "))
+  return `https://www.google.com/maps/search/?api=1&query=${q}`
+}
+
 export type NavigationLinks = {
   available: boolean
   destination_latitude: number

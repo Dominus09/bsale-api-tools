@@ -1583,17 +1583,93 @@ input {
 }
 
 .history-card-compact {
-  padding: 12px 12px 10px;
+  padding: 0;
 }
 
 .history-card-compact .despacho-amount {
   margin-top: 8px;
 }
 
+/* Tarjetas de despacho: flujo vertical sin solapar CTA */
+.plan-card-flow {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: visible;
+  height: auto;
+  min-height: 0;
+  position: relative;
+}
+
+.plan-card-body {
+  padding: 14px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-card-footer {
+  position: static;
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--border);
+  background: transparent;
+}
+
+.plan-card-footer .btn {
+  position: static;
+  display: flex;
+  width: 100%;
+  margin: 0;
+  flex-shrink: 0;
+  z-index: auto;
+}
+
+.plan-card-meta {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.plan-card-amount {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.plan-card-remaining {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.history-card-compact .plan-card-body {
+  padding: 12px 12px 8px;
+}
+
+.history-card-compact .plan-card-footer {
+  padding: 10px 12px 12px;
+}
+
 .doc-result-actions {
   display: grid;
   gap: 8px;
   margin-top: 10px;
+}
+
+.no-gps-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.no-gps-card {
+  padding: 12px;
+}
+
+.no-gps-card .client-stop {
+  margin-right: 8px;
 }
 
 @media (prefers-reduced-motion: reduce) {

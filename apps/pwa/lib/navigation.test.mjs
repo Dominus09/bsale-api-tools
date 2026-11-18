@@ -1,11 +1,25 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
+  buildAddressSearchUrl,
   buildGoogleMapsNavigation,
   isMelinkaDestination,
   likelyIslandDestination,
   likelyUnverifiedRoadDestination,
 } from "./navigation.ts"
+
+test("búsqueda por dirección sin inventar coordenadas", () => {
+  const url = buildAddressSearchUrl({
+    address: "Calle Falsa 123",
+    city: "Ancud",
+    clientName: "Minimarket Demo",
+  })
+  assert.ok(url)
+  assert.match(url, /maps\/search/)
+  assert.match(url, /Calle/)
+  assert.equal(url.includes("lat"), false)
+  assert.equal(buildAddressSearchUrl({}), null)
+})
 
 test("Lily Melinka: destino exacto y aviso acotado por nombre", () => {
   const nav = buildGoogleMapsNavigation({

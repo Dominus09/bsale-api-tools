@@ -9,12 +9,14 @@ import {
   ApiError,
   getMyDespachoProgress,
   getMyMapa,
+  type DriverMapClientNoGps,
   type DriverMapMarker,
   type RouteProgress,
 } from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDistanceM } from "@/lib/geo"
 import { asAmount } from "@/lib/money-display"
+import { buildAddressSearchUrl } from "@/lib/navigation"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 
 type UserLoc = { lat: number; lng: number; accuracy: number | null }
@@ -23,12 +25,23 @@ const GEO_PREF_KEY = "pwa.mapa.liveGps"
 
 type SortMode = "near" | "route"
 
+function isManagedStatus(status: string | null | undefined) {
+  const st = status || "pending"
+  return st === "completed" || st === "partial" || st === "not_delivered"
+}
+
 export default function MapaPage() {
   const params = useParams()
   const planId = Number(params.planId)
   const [markers, setMarkers] = useState<DriverMapMarker[]>([])
+  const [withoutGps, setWithoutGps] = useState<DriverMapClientNoGps[]>([])
+  const [summary, setSummary] = useState<{
+    clients: number
+    with_coordinates: number
+    without_coordinates: number
+  } | null>(null)
   const [progress, setProgress] = useState<RouteProgress | null>(null)
-  const [emptyMsg, setEmptyMsg] = useState<string | null>(null)
+  const [mapEmptyMsg, setMapEmptyMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [userLoc, setUserLoc] = useState<UserLoc | null>(null)
@@ -40,12 +53,14 @@ export default function MapaPage() {
   const originalOrderRef = useRef<string[]>([])
 
   const loadProgress = useCallback(
-    async (origin?: UserLoc | null) => {
+    async (origin?: UserLoc | null, mode: SortMode = "route") => {
       if (!Number.isFinite(planId) || planId < 1) return
       try {
+        // Solo pasar origen en modo cercanía; en orden de ruta incluir sin GPS.
+        const useOrigin = mode === "near" && origin
         const data = await getMyDespachoProgress(
           planId,
-          origin ? { lat: origin.lat, lng: origin.lng } : null,
+          useOrigin ? { lat: origin.lat, lng: origin.lng } : null,
         )
         setProgress(data.progress || null)
       } catch {
@@ -56,7 +71,7 @@ export default function MapaPage() {
   )
 
   const loadMap = useCallback(
-    async (origin?: UserLoc | null) => {
+    async (origin?: UserLoc | null, mode: SortMode = sortMode) => {
       if (!Number.isFinite(planId) || planId < 1) {
         setError("Despacho inválido")
         setLoading(false)
@@ -66,16 +81,24 @@ export default function MapaPage() {
       try {
         const data = await getMyMapa(
           planId,
-          origin ? { lat: origin.lat, lng: origin.lng } : undefined,
+          mode === "near" && origin
+            ? { lat: origin.lat, lng: origin.lng }
+            : undefined,
         )
         const items = data.markers || []
         setMarkers(items)
+        setWithoutGps(data.without_gps || [])
+        setSummary(data.summary || null)
         if (originalOrderRef.current.length === 0) {
           originalOrderRef.current = items.map((m) => m.customer_key)
         }
-        setEmptyMsg(data.empty_state?.message_es || null)
+        setMapEmptyMsg(
+          data.map_empty_state?.message_es ||
+            data.empty_state?.message_es ||
+            null,
+        )
         setError(null)
-        void loadProgress(origin)
+        void loadProgress(origin, mode)
       } catch (err) {
         if (!navigator.onLine) {
           setError("Sin conexión. Reintenta cuando vuelva la red.")
@@ -88,7 +111,7 @@ export default function MapaPage() {
         setLoading(false)
       }
     },
-    [planId, loadProgress],
+    [planId, sortMode, loadProgress],
   )
 
   const stopWatch = useCallback(() => {
@@ -138,7 +161,7 @@ export default function MapaPage() {
   }, [stopWatch])
 
   useEffect(() => {
-    void loadMap(null)
+    void loadMap(null, "route")
     let pref = false
     try {
       pref = sessionStorage.getItem(GEO_PREF_KEY) === "1"
@@ -153,13 +176,14 @@ export default function MapaPage() {
   useEffect(() => {
     if (!userLoc || orderedOnce.current) return
     orderedOnce.current = true
-    void loadMap(userLoc)
-  }, [userLoc, loadMap])
+    if (sortMode === "near") void loadMap(userLoc, "near")
+    else void loadProgress(userLoc, "route")
+  }, [userLoc, loadMap, loadProgress, sortMode])
 
   useEffect(() => {
     if (!userLoc) return
-    void loadProgress(userLoc)
-  }, [userLoc, loadProgress])
+    void loadProgress(userLoc, sortMode)
+  }, [userLoc, loadProgress, sortMode])
 
   const displayMarkers = useMemo(() => {
     const list = [...markers]
@@ -196,17 +220,37 @@ export default function MapaPage() {
   const nextHref = next?.customer_key
     ? `/despachos/${planId}/clientes/${encodeURIComponent(next.customer_key)}`
     : null
+  const nextOnMap = Boolean(
+    next?.customer_key &&
+      displayMarkers.some((m) => m.customer_key === next.customer_key),
+  )
+
+  const withGpsN = summary?.with_coordinates ?? markers.length
+  const withoutGpsN = summary?.without_coordinates ?? withoutGps.length
+  const totalN = summary?.clients ?? withGpsN + withoutGpsN
 
   function selectNextPending() {
     if (next?.customer_key) {
-      setSelectedKey(next.customer_key)
+      if (nextOnMap) {
+        setSelectedKey(next.customer_key)
+        return
+      }
+      const el = document.getElementById("clientes-sin-gps")
+      el?.scrollIntoView({ behavior: "smooth", block: "start" })
       return
     }
-    const pending = displayMarkers.find((m) => {
-      const st = m.attention_status || m.visit_status || "pending"
-      return st !== "completed" && st !== "partial" && st !== "not_delivered"
-    })
-    if (pending) setSelectedKey(pending.customer_key)
+    const pending = displayMarkers.find(
+      (m) => !isManagedStatus(m.attention_status || m.visit_status),
+    )
+    if (pending) {
+      setSelectedKey(pending.customer_key)
+      return
+    }
+    if (withoutGps.some((c) => !isManagedStatus(c.attention_status || c.visit_status))) {
+      document
+        .getElementById("clientes-sin-gps")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" })
+    }
   }
 
   return (
@@ -217,8 +261,9 @@ export default function MapaPage() {
             Mapa del despacho
           </h2>
           <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
-            {displayMarkers.length} cliente{displayMarkers.length === 1 ? "" : "s"} con GPS
-            {sortMode === "near" ? " · distancia geográfica" : " · orden de ruta"}
+            {withGpsN} con GPS · {withoutGpsN} sin ubicación
+            {totalN ? ` · ${totalN} en recorrido` : ""}
+            {sortMode === "near" ? " · cercanía geográfica" : " · orden de ruta"}
           </p>
         </div>
         <button
@@ -247,7 +292,10 @@ export default function MapaPage() {
         <button
           type="button"
           className={`filter-chip${sortMode === "route" ? " active" : ""}`}
-          onClick={() => setSortMode("route")}
+          onClick={() => {
+            setSortMode("route")
+            void loadMap(userLoc, "route")
+          }}
         >
           Orden de ruta
         </button>
@@ -256,7 +304,7 @@ export default function MapaPage() {
           className={`filter-chip${sortMode === "near" ? " active" : ""}`}
           onClick={() => {
             setSortMode("near")
-            if (userLoc) void loadMap(userLoc)
+            if (userLoc) void loadMap(userLoc, "near")
             else startWatch()
           }}
         >
@@ -266,28 +314,24 @@ export default function MapaPage() {
           type="button"
           className="filter-chip"
           onClick={() => selectNextPending()}
-          disabled={!next && displayMarkers.length === 0}
+          disabled={!next && displayMarkers.length === 0 && withoutGps.length === 0}
         >
           Ver siguiente pendiente
         </button>
       </div>
 
+      {sortMode === "near" && withoutGpsN > 0 ? (
+        <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
+          Cercanía solo ordena clientes con GPS. {withoutGpsN} sin ubicación
+          permanecen en la sección inferior (orden de ruta).
+        </div>
+      ) : null}
+
       {geoNote ? <div className="banner banner-info">{geoNote}</div> : null}
       {error ? <div className="banner banner-error">{error}</div> : null}
 
-      {loading && markers.length === 0 ? <div className="empty">Cargando mapa…</div> : null}
-
-      {!loading && !error && markers.length === 0 ? (
-        <div className="card">
-          <p style={{ marginTop: 0 }}>{emptyMsg || "Sin clientes georreferenciados."}</p>
-          <Link
-            href={`/despachos/${planId}/clientes`}
-            className="btn btn-primary"
-            style={{ textAlign: "center" }}
-          >
-            Ir a lista de clientes
-          </Link>
-        </div>
+      {loading && markers.length === 0 && withoutGps.length === 0 ? (
+        <div className="empty">Cargando mapa…</div>
       ) : null}
 
       {markers.length > 0 ? (
@@ -387,18 +431,21 @@ export default function MapaPage() {
               <div className="map-sheet-handle" aria-hidden />
               <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
                 Siguiente pendiente · {next.suggestion_reason_es || "Siguiente en ruta"}
+                {next.has_coordinates === false ? " · sin GPS" : ""}
               </p>
               <h3 className="map-sheet-title" style={{ marginTop: 4 }}>
                 {next.client_name || "Cliente"}
               </h3>
               <div className="btn-row" style={{ marginTop: 10 }}>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setSelectedKey(next.customer_key)}
-                >
-                  Ver en mapa
-                </button>
+                {nextOnMap ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setSelectedKey(next.customer_key)}
+                  >
+                    Ver en mapa
+                  </button>
+                ) : null}
                 <Link href={nextHref} className="btn btn-primary" style={{ textAlign: "center" }}>
                   Ir a ficha
                 </Link>
@@ -406,6 +453,113 @@ export default function MapaPage() {
             </div>
           ) : null}
         </div>
+      ) : !loading && !error ? (
+        <div className="card">
+          <p style={{ marginTop: 0 }}>
+            {mapEmptyMsg || "Sin clientes georreferenciados en el mapa."}
+          </p>
+          {withoutGps.length === 0 ? (
+            <Link
+              href={`/despachos/${planId}/clientes`}
+              className="btn btn-primary"
+              style={{ textAlign: "center" }}
+            >
+              Ir a lista de clientes
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
+
+      {withoutGps.length > 0 ? (
+        <section
+          id="clientes-sin-gps"
+          className="no-gps-section"
+          aria-label="Clientes sin georreferencia"
+        >
+          <div className="despacho-hero-head">
+            <div>
+              <h3 className="section-title" style={{ marginBottom: 2 }}>
+                Clientes sin georreferencia
+              </h3>
+              <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
+                Siguen en el recorrido. No se inventan coordenadas ni distancias.
+              </p>
+            </div>
+            <span className="pill">{withoutGps.length}</span>
+          </div>
+          <div className="stack-gap">
+            {withoutGps.map((c) => {
+              const sem = resolveSemaphore({
+                status: c.attention_status,
+                resultReason: c.result_reason,
+                semaphoreColor: c.semaphore_color,
+                attentionLabel: c.attention_label_es,
+              })
+              const val = validationLabelEs(c.closure_review_status)
+              const ficha = `/despachos/${planId}/clientes/${encodeURIComponent(c.customer_key)}`
+              const addrUrl = buildAddressSearchUrl({
+                address: c.address,
+                city: c.city,
+                clientName: c.client_name,
+              })
+              const amt = asAmount(c.amount_total)
+              const obs = (c.observations || "").trim()
+              return (
+                <div key={c.customer_key} className="card no-gps-card">
+                  <div className="despacho-hero-head">
+                    <h3 className="map-sheet-title" style={{ fontSize: "1rem" }}>
+                      {typeof c.route_order === "number" ? (
+                        <span className="client-stop">{Math.trunc(c.route_order)}</span>
+                      ) : null}
+                      {c.client_name || "Cliente"}
+                    </h3>
+                    <span className="pill">Sin GPS</span>
+                  </div>
+                  <p className="muted" style={{ margin: "4px 0 0", fontSize: "0.85rem" }}>
+                    {[c.address, c.city].filter(Boolean).join(", ") || "Sin dirección"}
+                  </p>
+                  <div className="map-sheet-meta">
+                    <span className={`sem-pill ${sem.cssClass}`}>{sem.labelEs}</span>
+                    {val ? (
+                      <span
+                        className={`pill${
+                          c.closure_review_status === "pending_review" ? " pill-warn" : ""
+                        }`}
+                      >
+                        {val}
+                      </span>
+                    ) : null}
+                    <span className="pill">
+                      {c.document_count} doc{c.document_count === 1 ? "" : "s"}
+                    </span>
+                    <span className="pill">{amt != null ? moneyCLP(amt) : "Monto —"}</span>
+                  </div>
+                  {obs ? <div className="obs-block">Obs: {obs}</div> : null}
+                  <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.72rem" }}>
+                    {c.location_note_es ||
+                      "Ubicación no verificada. Buscar dirección es estimado."}
+                  </p>
+                  <div className="btn-row" style={{ marginTop: 10 }}>
+                    <Link href={ficha} className="btn btn-secondary" style={{ textAlign: "center" }}>
+                      Ver ficha
+                    </Link>
+                    {addrUrl ? (
+                      <a
+                        href={addrUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn btn-primary"
+                        style={{ textAlign: "center" }}
+                      >
+                        Ver dirección
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
       ) : null}
     </div>
   )

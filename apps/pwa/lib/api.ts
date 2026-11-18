@@ -208,6 +208,7 @@ export type DriverMapMarker = {
   city?: string | null
   observations?: string | null
   route_order?: number | null
+  has_coordinates?: boolean
   latitude: number
   longitude: number
   coordinates_source?: string | null
@@ -228,6 +229,31 @@ export type DriverMapMarker = {
     google_maps_url?: string
     geo_uri?: string
   }
+  location_note_es?: string | null
+}
+
+/** Cliente del plan sin coordenadas (no es marcador de mapa). */
+export type DriverMapClientNoGps = {
+  customer_key: string
+  client_id?: number | null
+  client_name?: string | null
+  address?: string | null
+  city?: string | null
+  observations?: string | null
+  route_order?: number | null
+  has_coordinates?: boolean
+  document_count: number
+  units_total?: number
+  amount_total?: number | null
+  visit_id?: number | null
+  visit_status?: string | null
+  result_reason?: string | null
+  attention_status?: string | null
+  attention_label_es?: string | null
+  semaphore_color?: string | null
+  semaphore_code?: string | null
+  closure_review_status?: string | null
+  location_note_es?: string | null
 }
 
 export async function listMyDespachos(): Promise<{
@@ -894,6 +920,7 @@ export async function getMyMapa(
   origin?: { lat: number; lng: number },
 ): Promise<{
   markers: DriverMapMarker[]
+  without_gps?: DriverMapClientNoGps[]
   count: number
   summary: {
     clients: number
@@ -901,6 +928,7 @@ export async function getMyMapa(
     without_coordinates: number
   }
   empty_state?: { code?: string; message_es?: string } | null
+  map_empty_state?: { code?: string; message_es?: string } | null
   device_location?: {
     requested?: boolean
     latitude?: number | null

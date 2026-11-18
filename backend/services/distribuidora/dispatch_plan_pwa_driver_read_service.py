@@ -1366,6 +1366,56 @@ def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
             pass
 
 
+def _map_client_card(
+    c: dict[str, Any],
+    att: dict[str, Any],
+    *,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    distance_m: float | None = None,
+    navigation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Tarjeta de mapa (con o sin coordenadas). Sin inventar lat/lng."""
+    return {
+        "customer_key": c["customer_key"],
+        "client_id": c.get("client_id"),
+        "client_name": c.get("client_name"),
+        "address": c.get("address") or "",
+        "city": c.get("city") or "",
+        "observations": c.get("observations") or "",
+        "route_order": c.get("route_order"),
+        "has_coordinates": bool(c.get("has_coordinates")),
+        "latitude": latitude,
+        "longitude": longitude,
+        "coordinates_source": c.get("coordinates_source"),
+        "document_count": c.get("document_count") or 0,
+        "units_total": c.get("units_total") or 0,
+        "amount_total": c.get("amount_total"),
+        "visit_id": att.get("visit_id"),
+        "visit_status": att.get("visit_status"),
+        "result_reason": att.get("result_reason"),
+        "attention_status": att.get("attention_status") or "pending",
+        "attention_label_es": att.get("attention_label_es") or "Pendiente",
+        "semaphore_color": att.get("semaphore_color") or "neutral",
+        "semaphore_code": att.get("semaphore_code") or "pending",
+        "closure_review_status": att.get("closure_review_status"),
+        "admin_review_pending": bool(att.get("admin_review_pending")),
+        "open_visit_id": att.get("open_visit_id"),
+        "operational_visit_id": att.get("operational_visit_id"),
+        "load_groups": [
+            {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
+            for g in (c.get("load_groups") or [])
+        ],
+        "distance_m": distance_m,
+        "navigation": navigation,
+        "location_note_es": (
+            None
+            if c.get("has_coordinates")
+            else "Sin georreferencia verificable. No se inventan coordenadas."
+        ),
+    }
+
+
 def get_map_for_driver(
     plan_id: int,
     *,
@@ -1375,14 +1425,8 @@ def get_map_for_driver(
     bundle = _build_client_index(int(plan_id))
     attention = _visit_attention_by_customer(int(plan_id))
     markers = []
+    without_gps = []
     for c in bundle["clients"]:
-        if not c.get("has_coordinates"):
-            continue
-        lat = float(c["latitude"])
-        lng = float(c["longitude"])
-        dist = None
-        if origin_lat is not None and origin_lng is not None:
-            dist = round(_haversine_m(origin_lat, origin_lng, lat, lng), 1)
         att = attention.get(str(c["customer_key"])) or {
             "visit_id": None,
             "visit_status": None,
@@ -1390,44 +1434,28 @@ def get_map_for_driver(
             "attention_label_es": "Pendiente",
             "admin_review_pending": False,
         }
+        if not c.get("has_coordinates"):
+            without_gps.append(_map_client_card(c, att))
+            continue
+        lat = float(c["latitude"])
+        lng = float(c["longitude"])
+        dist = None
+        if origin_lat is not None and origin_lng is not None:
+            dist = round(_haversine_m(origin_lat, origin_lng, lat, lng), 1)
         markers.append(
-            {
-                "customer_key": c["customer_key"],
-                "client_id": c.get("client_id"),
-                "client_name": c.get("client_name"),
-                "address": c.get("address") or "",
-                "city": c.get("city") or "",
-                "observations": c.get("observations") or "",
-                "route_order": c.get("route_order"),
-                "latitude": lat,
-                "longitude": lng,
-                "coordinates_source": c.get("coordinates_source"),
-                "document_count": c.get("document_count") or 0,
-                "units_total": c.get("units_total") or 0,
-                "amount_total": c.get("amount_total"),
-                "visit_id": att.get("visit_id"),
-                "visit_status": att.get("visit_status"),
-                "result_reason": att.get("result_reason"),
-                "attention_status": att.get("attention_status") or "pending",
-                "attention_label_es": att.get("attention_label_es") or "Pendiente",
-                "semaphore_color": att.get("semaphore_color") or "neutral",
-                "semaphore_code": att.get("semaphore_code") or "pending",
-                "closure_review_status": att.get("closure_review_status"),
-                "admin_review_pending": bool(att.get("admin_review_pending")),
-                "open_visit_id": att.get("open_visit_id"),
-                "operational_visit_id": att.get("operational_visit_id"),
-                "load_groups": [
-                    {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
-                    for g in (c.get("load_groups") or [])
-                ],
-                "distance_m": dist,
-                "navigation": build_client_navigation(
+            _map_client_card(
+                c,
+                att,
+                latitude=lat,
+                longitude=lng,
+                distance_m=dist,
+                navigation=build_client_navigation(
                     lat,
                     lng,
                     city=c.get("city"),
                     client_name=c.get("client_name"),
                 ),
-            }
+            )
         )
     if origin_lat is not None and origin_lng is not None:
         markers.sort(key=lambda m: (m.get("distance_m") is None, m.get("distance_m") or 0))
@@ -1439,16 +1467,25 @@ def get_map_for_driver(
                 str(m.get("client_name") or ""),
             )
         )
+    without_gps.sort(
+        key=lambda m: (
+            m.get("route_order") is None,
+            int(m.get("route_order") or 10_000),
+            str(m.get("client_name") or ""),
+        )
+    )
 
+    total_clients = int(bundle["summary"].get("clients") or 0)
     return serialize_value(
         {
             "dispatch_plan_id": int(plan_id),
             "markers": markers,
+            "without_gps": without_gps,
             "count": len(markers),
             "summary": {
-                "clients": bundle["summary"]["clients"],
+                "clients": total_clients,
                 "with_coordinates": len(markers),
-                "without_coordinates": bundle["summary"]["without_coordinates"],
+                "without_coordinates": len(without_gps),
             },
             "device_location": {
                 "requested": origin_lat is not None and origin_lng is not None,
@@ -1461,12 +1498,23 @@ def get_map_for_driver(
                 ),
             },
             "empty_state": None
+            if markers or without_gps
+            else {
+                "code": "no_clients",
+                "message_es": "No hay clientes en este despacho.",
+            },
+            "map_empty_state": None
             if markers
             else {
                 "code": "no_georeferenced_clients",
                 "message_es": (
-                    "No hay clientes con coordenadas verificables en este despacho. "
-                    "Continúa por la lista de clientes."
+                    "No hay clientes con coordenadas verificables en el mapa. "
+                    "Los clientes sin GPS siguen en el recorrido (lista abajo)."
+                    if without_gps
+                    else (
+                        "No hay clientes con coordenadas verificables en este despacho. "
+                        "Continúa por la lista de clientes."
+                    )
                 ),
             },
             "future_contracts": FUTURE_CONTRACTS,

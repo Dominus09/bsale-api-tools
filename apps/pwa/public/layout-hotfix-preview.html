@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hotfix layout — tarjetas despacho</title>
+  <style>
+    :root {
+      --accent: #c4293c;
+      --accent-strong: #a42032;
+      --surface: #17191f;
+      --surface-2: #1e222b;
+      --border: #2c313c;
+      --text: #f3f4f6;
+      --muted: #9aa3b2;
+      --radius: 16px;
+      --tap: 48px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: #0e1117;
+      color: var(--text);
+      padding: 16px;
+    }
+    .frame {
+      margin: 0 auto 24px;
+      border: 1px dashed #444;
+      padding: 12px;
+      background: #12151c;
+    }
+    .frame h1 { font-size: 0.85rem; color: var(--muted); margin: 0 0 10px; }
+    .w375 { width: 375px; max-width: 100%; }
+    .w390 { width: 390px; max-width: 100%; }
+    .w430 { width: 430px; max-width: 100%; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 12px;
+    }
+    .plan-card-flow { display: flex; flex-direction: column; padding: 0; overflow: visible; height: auto; position: relative; }
+    .plan-card-body { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+    .plan-card-footer {
+      position: static; flex-shrink: 0; padding: 10px 12px 12px;
+      border-top: 1px solid var(--border);
+    }
+    .plan-card-footer .btn {
+      position: static; display: flex; width: 100%; margin: 0; flex-shrink: 0;
+      min-height: var(--tap); border-radius: 12px; border: none; align-items: center;
+      justify-content: center; font-weight: 650; background: var(--accent); color: #fff;
+      text-decoration: none; white-space: normal; line-height: 1.25; overflow-wrap: anywhere;
+    }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 0.9rem; }
+    .bar { height: 8px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+    .bar > i { display: block; height: 100%; width: 75%; background: var(--accent); }
+    .muted { color: var(--muted); font-size: 0.78rem; }
+    h2 { margin: 0; font-size: 1rem; }
+  </style>
+</head>
+<body>
+  <p class="muted">Evidencia layout: CTA en footer de flujo (sin absolute). Anchos 375 / 390 / 430.</p>
+  <div class="frame w375" id="w375">
+    <h1>375px · PLAN-00083</h1>
+    <article class="card plan-card-flow">
+      <div class="plan-card-body">
+        <h2>PLAN-00083</h2>
+        <div class="meta"><span>8 clientes</span><span>11 docs</span><span>$8.252.371</span></div>
+        <div class="muted">6 de 8 gestionados · 75%</div>
+        <div class="bar"><i></i></div>
+        <p class="muted">Faltan 2 clientes</p>
+        <p class="muted">Siguiente · Cliente con nombre comercial muy largo para probar wrap dinámico</p>
+      </div>
+      <div class="plan-card-footer">
+        <a class="btn" href="#">Continuar recorrido</a>
+      </div>
+    </article>
+  </div>
+  <div class="frame w390" id="w390">
+    <h1>390px · PLAN-00079</h1>
+    <article class="card plan-card-flow">
+      <div class="plan-card-body">
+        <h2>PLAN-00079</h2>
+        <div class="meta"><span>12 clientes</span><span>15 docs</span><span>Monto picking de referencia largo $12.345.678</span></div>
+        <div class="muted">0 de 12 gestionados · 0%</div>
+        <div class="bar"><i style="width:0"></i></div>
+        <p class="muted">Faltan 12 clientes por gestionar en este despacho pendiente</p>
+      </div>
+      <div class="plan-card-footer">
+        <a class="btn" href="#">Continuar recorrido</a>
+      </div>
+    </article>
+  </div>
+  <div class="frame w430" id="w430">
+    <h1>430px · historial</h1>
+    <article class="card plan-card-flow">
+      <div class="plan-card-body">
+        <h2>PLAN-00070</h2>
+        <div class="meta"><span>5 clientes</span><span>5 docs</span><span>$1.200.000</span></div>
+        <div class="muted">5 de 5 gestionados · 100%</div>
+        <div class="bar"><i style="width:100%"></i></div>
+      </div>
+      <div class="plan-card-footer">
+        <a class="btn" href="#" style="background:var(--surface-2);border:1px solid var(--border)">Ver detalle</a>
+      </div>
+    </article>
+  </div>
+</body>
+</html>
