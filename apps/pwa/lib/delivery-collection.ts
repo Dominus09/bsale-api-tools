@@ -4,6 +4,7 @@ export type PaymentMethod =
   | "cash"
   | "transfer_declared"
   | "cash_and_transfer"
+  | "check_declared"
   | "pending"
   | "not_applicable"
 
@@ -11,6 +12,7 @@ export const PAYMENT_METHODS: ReadonlyArray<{ value: PaymentMethod; label: strin
   { value: "cash", label: "Efectivo" },
   { value: "transfer_declared", label: "Transferencia informada" },
   { value: "cash_and_transfer", label: "Efectivo + transferencia" },
+  { value: "check_declared", label: "Cheque recibido" },
   { value: "pending", label: "Pago pendiente" },
   { value: "not_applicable", label: "Sin cobro / No aplica" },
 ]

@@ -28,6 +28,7 @@ PAYMENT_METHOD_ES = {
     "pending": "Pago pendiente",
     "not_applicable": "Sin cobro",
     "cash_and_transfer": "Efectivo + transf.",
+    "check_declared": "Cheque recibido",
 }
 
 REASON_ES = dict(REASON_LABEL_ES)

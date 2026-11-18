@@ -4,6 +4,7 @@ export const PAYMENT_METHOD_LABEL: Record<string, string> = {
   cash: "Efectivo",
   transfer_declared: "Transferencia informada",
   cash_and_transfer: "Efectivo + transferencia",
+  check_declared: "Cheque recibido",
   transfer_verified: "Transferencia verificada",
   credit: "Crédito",
   partial: "Cobranza parcial",

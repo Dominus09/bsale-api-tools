@@ -33,6 +33,7 @@ export default function EntregaCobranzaPage() {
   const [docs, setDocs] = useState<DocPayState[]>([])
   const [err, setErr] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
+  const [applyBusy, setApplyBusy] = useState(false)
 
   const visitDocs = session.visitDetail?.documents || []
   const collections = session.visitDetail?.collections || []
@@ -86,11 +87,13 @@ export default function EntregaCobranzaPage() {
     () => docs.length > 0 && docs.every((d) => d.saved && d.method),
     [docs],
   )
+  const pendingCount = docs.filter((d) => !d.saved || !d.method).length
+  const firstMethod = docs.find((d) => d.method)?.method || ""
 
   async function saveDoc(doc: DocPayState, method: PaymentMethod) {
     if (!session.activeVisit) return
     if (!doc.document_result_id) {
-      setErr("Registre primero las cantidades del documento")
+      setErr("Confirme primero el resultado del documento")
       return
     }
     const invalid = validatePaymentMethod(method)
@@ -135,6 +138,45 @@ export default function EntregaCobranzaPage() {
     }
   }
 
+  async function applyToAll() {
+    if (!session.activeVisit || !firstMethod) return
+    if (
+      !window.confirm(
+        `¿Aplicar «${paymentMethodLabel(firstMethod)}» a todos los documentos?`,
+      )
+    ) {
+      return
+    }
+    setApplyBusy(true)
+    setErr(null)
+    setInfo(null)
+    try {
+      for (const doc of docs) {
+        if (!doc.document_result_id) continue
+        if (doc.saved && doc.method === firstMethod) continue
+        await declareVisitPaymentMethod(planId, session.activeVisit.id, {
+          document_result_id: doc.document_result_id,
+          method: firstMethod,
+          document_amount: doc.total,
+          note: null,
+        })
+        setDocs((all) =>
+          all.map((d) =>
+            d.related_document_id === doc.related_document_id
+              ? { ...d, method: firstMethod, saved: true, saving: false }
+              : d,
+          ),
+        )
+      }
+      setInfo(`Forma de pago aplicada a ${docs.length} documento(s)`)
+      void session.softReloadVisitDetail()
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Error al aplicar a todos")
+    } finally {
+      setApplyBusy(false)
+    }
+  }
+
   if (session.loading) return <div className="empty">Cargando…</div>
   if (session.error) return <div className="banner banner-error">{session.error}</div>
   if (!session.canOperateActive) {
@@ -172,57 +214,67 @@ export default function EntregaCobranzaPage() {
       }
     >
       <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
-        ¿Cómo pagó el cliente? Sin montos. No es recibo ni verificación bancaria.
+        ¿Cómo pagó el cliente? Sin montos. Cheque es solo declaración del chofer
+        (no validación ni crédito).
       </p>
+
+      {pendingCount > 0 ? (
+        <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
+          {pendingCount} documento{pendingCount === 1 ? "" : "s"} sin forma de pago
+        </div>
+      ) : null}
+
+      {docs.length > 1 && firstMethod ? (
+        <button
+          type="button"
+          className="btn btn-secondary"
+          disabled={applyBusy}
+          onClick={() => void applyToAll()}
+        >
+          {applyBusy ? "Aplicando…" : "Aplicar esta forma de pago a todos"}
+        </button>
+      ) : null}
 
       <div className="stack-gap">
         {docs.map((doc) => (
-          <div key={doc.related_document_id} className="card">
+          <div key={doc.related_document_id} className="card" style={{ padding: "12px" }}>
             <div className="client-card-head">
-              <h3 style={{ margin: 0, fontSize: "1rem" }}>{doc.label}</h3>
+              <h3 style={{ margin: 0, fontSize: "0.95rem" }}>{doc.label}</h3>
               <span className={`pill${doc.saved ? " pill-ok" : ""}`}>
-                {doc.saving ? "Guardando…" : doc.saved ? "Guardado" : "Pendiente"}
+                {doc.saving
+                  ? "Guardando…"
+                  : doc.saved
+                    ? paymentMethodLabel(doc.method)
+                    : "Pendiente"}
               </span>
             </div>
             {doc.total != null ? (
               <div className="meta-row">
-                <span className="muted">Total documento (referencia)</span>
+                <span className="muted">Total (referencia)</span>
                 <span>{moneyCLP(doc.total)}</span>
               </div>
             ) : null}
 
-            <fieldset
-              style={{
-                border: "none",
-                margin: "10px 0 0",
-                padding: 0,
-                display: "grid",
-                gap: 8,
-              }}
-            >
-              <legend className="muted" style={{ fontSize: "0.78rem", marginBottom: 4 }}>
-                Forma de pago
-              </legend>
+            <div className="pay-method-grid" role="group" aria-label={`Pago ${doc.label}`}>
               {PAYMENT_METHODS.map((m) => {
                 const selected = doc.method === m.value
                 return (
                   <button
                     key={m.value}
                     type="button"
-                    className={`btn${selected ? " btn-primary" : " btn-secondary"}`}
-                    style={{ textAlign: "left", justifyContent: "flex-start" }}
-                    disabled={doc.saving || !doc.document_result_id}
+                    className={`pay-method-chip${selected ? " is-selected" : ""}`}
+                    disabled={doc.saving || !doc.document_result_id || applyBusy}
                     onClick={() => void saveDoc(doc, m.value)}
                   >
                     {m.label}
-                    {selected && doc.saved ? " · ✓" : ""}
+                    {selected && doc.saved ? " ✓" : ""}
                   </button>
                 )
               })}
-            </fieldset>
+            </div>
             {!doc.document_result_id ? (
               <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.78rem" }}>
-                Guarde cantidades del documento antes de declarar el pago.
+                Confirme el resultado del documento antes de declarar el pago.
               </p>
             ) : null}
           </div>

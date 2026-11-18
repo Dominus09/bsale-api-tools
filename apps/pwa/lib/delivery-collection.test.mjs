@@ -13,14 +13,17 @@ describe("delivery-collection declarative", () => {
   it("valida métodos operativos sin montos", () => {
     assert.equal(validatePaymentMethod("cash"), null)
     assert.equal(validatePaymentMethod("cash_and_transfer"), null)
+    assert.equal(validatePaymentMethod("check_declared"), null)
     assert.equal(validatePaymentMethod("pending"), null)
     assert.match(validatePaymentMethod("transfer_verified") || "", /Seleccione/)
+    assert.match(validatePaymentMethod("credit") || "", /Seleccione/)
     assert.match(validatePaymentMethod("") || "", /Seleccione/)
   })
 
   it("etiquetas legibles", () => {
     assert.equal(paymentMethodLabel("cash"), "Efectivo")
     assert.equal(paymentMethodLabel("cash_and_transfer"), "Efectivo + transferencia")
+    assert.equal(paymentMethodLabel("check_declared"), "Cheque recibido")
     assert.equal(paymentMethodLabel("not_applicable"), "Sin cobro / No aplica")
   })
 
