@@ -11,6 +11,7 @@ describe("offline-store helpers", () => {
     assert.equal(offlineUserPrefix(42), "u:42:")
     assert.equal(offlineUserPrefix("abc"), "u:abc:")
     assert.notEqual(offlineUserPrefix(1), offlineUserPrefix(2))
+    assert.ok(!offlineUserPrefix(1).startsWith(offlineUserPrefix(2)))
   })
 
   it("formatea syncedAt en es-CL o fallback", () => {

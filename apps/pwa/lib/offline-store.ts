@@ -33,6 +33,16 @@ export type OfflineClientDetail = {
   syncedAt: string
 }
 
+/** Estado de descarga completa por despacho (evita declarar offline parcial). */
+export type OfflinePlanReady = {
+  planId: number
+  clientsCount: number
+  detailsCount: number
+  syncedAt: string
+  /** true solo si hay lista de clientes y al menos 1 ficha, o 0 clientes legítimos. */
+  complete: boolean
+}
+
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === "undefined") {
@@ -162,6 +172,49 @@ export async function getOfflineClientDetail(
 ): Promise<OfflineClientDetail | null> {
   const safeKey = encodeURIComponent(customerKey)
   return idbGet(`${offlineUserPrefix(userId)}plan:${planId}:client:${safeKey}`)
+}
+
+export async function saveOfflinePlanReady(
+  userId: string | number,
+  ready: OfflinePlanReady,
+): Promise<void> {
+  await idbSet(`${offlineUserPrefix(userId)}plan:${ready.planId}:ready`, ready)
+}
+
+export async function getOfflinePlanReady(
+  userId: string | number,
+  planId: number,
+): Promise<OfflinePlanReady | null> {
+  return idbGet(`${offlineUserPrefix(userId)}plan:${planId}:ready`)
+}
+
+export async function listOfflineReadyPlans(
+  userId: string | number,
+): Promise<OfflinePlanReady[]> {
+  try {
+    const db = await openDb()
+    const prefix = `${offlineUserPrefix(userId)}plan:`
+    const out: OfflinePlanReady[] = []
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, "readonly")
+      const req = tx.objectStore(STORE).openCursor()
+      req.onsuccess = () => {
+        const cursor = req.result
+        if (!cursor) return
+        const key = String(cursor.key)
+        if (key.startsWith(prefix) && key.endsWith(":ready")) {
+          const val = cursor.value as OfflinePlanReady
+          if (val?.complete) out.push(val)
+        }
+        cursor.continue()
+      }
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+    return out
+  } catch {
+    return []
+  }
 }
 
 /** Borra solo el namespace del usuario (cambio de cuenta / logout). */

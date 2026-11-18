@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react"
 import { getSessionUserId } from "@/lib/auth"
-import { formatSyncedAt, getOfflineMeta, getOfflinePlans } from "@/lib/offline-store"
+import {
+  formatSyncedAt,
+  listOfflineReadyPlans,
+} from "@/lib/offline-store"
 
 export function OfflineSyncBanner() {
   const [online, setOnline] = useState(true)
   const [syncedAt, setSyncedAt] = useState<string | null>(null)
-  const [hasPlans, setHasPlans] = useState(false)
+  const [readyCount, setReadyCount] = useState(0)
 
   useEffect(() => {
     function sync() {
@@ -27,13 +30,15 @@ export function OfflineSyncBanner() {
     async function load() {
       const uid = getSessionUserId()
       if (!uid) return
-      const [meta, plans] = await Promise.all([
-        getOfflineMeta(uid),
-        getOfflinePlans(uid),
-      ])
+      const ready = await listOfflineReadyPlans(uid)
       if (cancelled) return
-      setSyncedAt(meta?.syncedAt || plans?.syncedAt || null)
-      setHasPlans(Boolean(plans?.items?.length))
+      setReadyCount(ready.length)
+      const latest = ready
+        .map((r) => r.syncedAt)
+        .filter(Boolean)
+        .sort()
+        .at(-1)
+      setSyncedAt(latest || null)
     }
     void load()
     return () => {
@@ -41,10 +46,12 @@ export function OfflineSyncBanner() {
     }
   }, [online])
 
-  if (online && hasPlans && syncedAt) {
+  if (online && readyCount > 0 && syncedAt) {
     return (
       <div className="banner banner-info" role="status" style={{ fontSize: "0.82rem" }}>
-        Datos disponibles sin conexión · Última actualización: {formatSyncedAt(syncedAt)}
+        Datos disponibles sin conexión ({readyCount} despacho
+        {readyCount === 1 ? "" : "s"}) · Última actualización:{" "}
+        {formatSyncedAt(syncedAt)}
       </div>
     )
   }
@@ -52,9 +59,9 @@ export function OfflineSyncBanner() {
   if (!online) {
     return (
       <div className="banner banner-warn" role="status">
-        {hasPlans
-          ? `Sin conexión · mostrando datos sincronizados · ${formatSyncedAt(syncedAt)}`
-          : "Sin conexión · no hay despacho descargado en este dispositivo"}
+        {readyCount > 0
+          ? `Sin conexión · consulta solo lectura · ${formatSyncedAt(syncedAt)}`
+          : "Sin conexión · no hay despacho completo descargado (abre Clientes con internet)"}
       </div>
     )
   }

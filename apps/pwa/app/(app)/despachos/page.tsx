@@ -18,6 +18,7 @@ import {
   formatSyncedAt,
   getOfflinePlans,
   isLikelyOfflineError,
+  listOfflineReadyPlans,
   saveOfflineMeta,
   saveOfflinePlans,
 } from "@/lib/offline-store"
@@ -175,6 +176,7 @@ export default function DespachosPage() {
   const [progressById, setProgressById] = useState<Record<number, RouteProgress>>({})
   const [error, setError] = useState<string | null>(null)
   const [offlineSource, setOfflineSource] = useState<string | null>(null)
+  const [offlineReadyCount, setOfflineReadyCount] = useState(0)
   const todayLabel = useMemo(() => {
     const ymd = santiagoTodayYmd()
     const [y, m, d] = ymd.split("-")
@@ -190,6 +192,7 @@ export default function DespachosPage() {
         const list = data.items || []
         setItems(list)
         setOfflineSource(null)
+        setOfflineReadyCount(0)
         setError(null)
         const uid = getSessionUserId() || String(data.driver_user_id || "")
         if (uid) {
@@ -238,9 +241,11 @@ export default function DespachosPage() {
         if (isLikelyOfflineError(err)) {
           const uid = getSessionUserId()
           const cached = uid ? await getOfflinePlans(uid) : null
+          const ready = uid ? await listOfflineReadyPlans(uid) : []
           if (cached?.items?.length) {
             setItems(cached.items as DriverDespacho[])
             setOfflineSource(cached.syncedAt)
+            setOfflineReadyCount(ready.length)
             setError(null)
             return
           }
@@ -306,8 +311,9 @@ export default function DespachosPage() {
     <div className="stack-gap">
       {offlineSource ? (
         <div className="banner banner-warn" role="status">
-          Datos disponibles sin conexión · Última actualización:{" "}
-          {formatSyncedAt(offlineSource)} · solo lectura
+          {offlineReadyCount > 0
+            ? `Datos disponibles sin conexión (${offlineReadyCount} completo${offlineReadyCount === 1 ? "" : "s"}) · Última actualización: ${formatSyncedAt(offlineSource)} · solo lectura`
+            : `Lista de despachos en caché · ${formatSyncedAt(offlineSource)}. Para clientes/productos abre cada despacho → Clientes con internet.`}
         </div>
       ) : null}
       <section>

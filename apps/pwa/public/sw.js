@@ -4,16 +4,20 @@
  * - Navegación: network-first → HTML cacheado → offline.html → Response sintético.
  * - Assets estáticos: cache-first con fallback de red; nunca null.
  */
-const VERSION = "lq-pwa-v4-offline-shell";
+const VERSION = "lq-pwa-v5-offline-shell";
 const STATIC_CACHE = `${VERSION}-static`;
 const PAGE_CACHE = `${VERSION}-pages`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const OFFLINE_HTML = "/offline.html";
 const OFFLINE_ROUTE = "/offline";
+/** Shell de app para arranque frío offline (consulta IndexedDB vía React). */
+const APP_SHELL = "/despachos";
 
 const PRECACHE = [
   OFFLINE_HTML,
   OFFLINE_ROUTE,
+  APP_SHELL,
+  "/",
   "/manifest.webmanifest",
   "/icons/pwa/icon-192.png",
   "/icons/pwa/icon-512.png",
@@ -69,7 +73,8 @@ async function matchFirst(urls) {
 }
 
 async function safeOfflineNavigation() {
-  const hit = await matchFirst([OFFLINE_HTML, OFFLINE_ROUTE]);
+  // Preferir shell de app (IndexedDB) antes que la página informativa.
+  const hit = await matchFirst([APP_SHELL, "/", OFFLINE_HTML, OFFLINE_ROUTE]);
   return hit || syntheticOfflineHtml();
 }
 
@@ -177,7 +182,14 @@ async function handleNavigate(request) {
   } catch {
     const cached = await caches.match(request);
     if (cached) return cached;
-    const pageHit = await matchFirst([request.url, OFFLINE_HTML, OFFLINE_ROUTE]);
+    // Arranque frío / ruta no cacheada: servir shell /despachos para montar React+IDB.
+    const pageHit = await matchFirst([
+      request.url,
+      APP_SHELL,
+      "/",
+      OFFLINE_HTML,
+      OFFLINE_ROUTE,
+    ]);
     return pageHit || syntheticOfflineHtml();
   }
 }

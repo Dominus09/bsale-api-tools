@@ -19,9 +19,11 @@ import { asAmount } from "@/lib/money-display"
 import {
   formatSyncedAt,
   getOfflineClients,
+  getOfflinePlanReady,
   isLikelyOfflineError,
   saveOfflineClientDetail,
   saveOfflineClients,
+  saveOfflinePlanReady,
 } from "@/lib/offline-store"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 
@@ -110,6 +112,7 @@ export default function ClientesPage() {
           })
           // Prefetch fichas (docs/productos) para consulta offline de solo lectura.
           void (async () => {
+            let detailsCount = 0
             for (const c of list.slice(0, 80)) {
               if (cancelled) break
               try {
@@ -118,10 +121,21 @@ export default function ClientesPage() {
                   payload: detail,
                   syncedAt,
                 })
+                detailsCount += 1
               } catch {
                 /* best effort */
               }
             }
+            const expected = Math.min(list.length, 80)
+            const complete =
+              list.length === 0 || (expected > 0 && detailsCount >= expected)
+            await saveOfflinePlanReady(uid, {
+              planId,
+              clientsCount: list.length,
+              detailsCount,
+              syncedAt,
+              complete,
+            })
           })()
         }
       } catch (err) {
@@ -134,15 +148,20 @@ export default function ClientesPage() {
           }
           const uid = getSessionUserId()
           const cached = uid ? await getOfflineClients(uid, planId) : null
+          const ready = uid ? await getOfflinePlanReady(uid, planId) : null
           if (cached?.items?.length) {
             setItems(cached.items as DriverClientCard[])
             setOfflineSource(cached.syncedAt)
-            setError(null)
+            setError(
+              ready && !ready.complete
+                ? "Descarga incompleta: algunas fichas/productos pueden faltar. Reabre Clientes con internet."
+                : null,
+            )
             return
           }
           setItems([])
           setError(
-            "Este despacho no tiene clientes descargados. Ábrelo con internet para sincronizar.",
+            "Este despacho no está disponible offline. Ábrelo con internet (lista de clientes) para sincronizar.",
           )
           return
         }
