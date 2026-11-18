@@ -823,15 +823,18 @@ COLLECTION_METHODS = frozenset(
         "pending",
         "not_applicable",
         "cash_and_transfer",  # requiere migración 059
+        "check_declared",  # requiere migración 060 (cheque declarado)
     }
 )
 
 # Métodos que el chofer puede declarar en Operativa 2.0 (sin montos).
+# check_declared = declaración de cheque recibido (NO validación ni crédito).
 DRIVER_PAYMENT_METHODS = frozenset(
     {
         "cash",
         "transfer_declared",
         "cash_and_transfer",
+        "check_declared",
         "pending",
         "not_applicable",
     }
@@ -1167,6 +1170,167 @@ def save_document_lines(
     )
 
 
+def confirm_document_delivery(
+    *,
+    user: dict[str, Any],
+    plan_id: int,
+    visit_id: int,
+    related_document_id: int,
+    mode: str,
+    oc_document_id: int | None = None,
+    document_number: int | None = None,
+    document_type: str | None = None,
+    document_total: float | None = None,
+    notes: str | None = None,
+    expected_version: int | None = None,
+    difference_lines: list[dict[str, Any]] | None = None,
+    rest_delivered_confirmed: bool = False,
+) -> dict[str, Any]:
+    """Modo simple: confirmar resultado de un documento con snapshot real.
+
+    - full: todas las líneas con delivered = planned (confirmación explícita).
+    - none: todas las líneas en 0 con motivo (rechazo/no entregado).
+    - partial: solo diferencias informadas; el resto requiere
+      rest_delivered_confirmed=True para marcar planned como entregado.
+      No inventa cantidades desconocidas.
+    """
+    mode_n = (mode or "").strip().lower()
+    if mode_n not in {"full", "partial", "none"}:
+        raise HTTPException(status_code=400, detail="mode inválido (full|partial|none)")
+
+    detail_rows = read_svc._document_detail_lines(int(related_document_id))  # noqa: SLF001
+    if not detail_rows:
+        raise HTTPException(
+            status_code=422,
+            detail="Documento sin líneas confiables; no se puede confirmar entrega",
+        )
+
+    diff_by_id: dict[int, dict[str, Any]] = {}
+    for raw in difference_lines or []:
+        try:
+            sid = int(raw.get("source_detail_id"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="source_detail_id inválido") from exc
+        diff_by_id[sid] = raw
+
+    if mode_n == "partial" and not diff_by_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Entrega parcial requiere al menos un producto con diferencia",
+        )
+    if mode_n == "partial" and not rest_delivered_confirmed:
+        # Si no confirma el resto, exige cubrir TODAS las líneas con diferencia.
+        missing_cover = [
+            int(r["source_detail_id"])
+            for r in detail_rows
+            if int(r["source_detail_id"]) not in diff_by_id
+        ]
+        if missing_cover:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Confirme que el resto se entregó completo "
+                    "o indique diferencia en todos los productos"
+                ),
+            )
+
+    lines: list[dict[str, Any]] = []
+    for row in detail_rows:
+        sid = int(row["source_detail_id"])
+        planned = float(row.get("unidades") or 0)
+        if planned < 0:
+            planned = 0.0
+        product_name = (
+            row.get("producto")
+            or row.get("product_name")
+            or row.get("producto_variante")
+            or "Producto"
+        )
+        base = {
+            "source_detail_id": sid,
+            "line_number": row.get("line_number"),
+            "variant_id": row.get("variant_id"),
+            "sku_code": row.get("codigo_barras") or row.get("variante"),
+            "product_name": product_name,
+            "planned_units": planned,
+        }
+        if mode_n == "full":
+            lines.append({**base, "delivered_units": planned})
+            continue
+        if mode_n == "none":
+            reason = (notes and "other") or "customer_rejection"
+            if diff_by_id.get(sid):
+                reason = (diff_by_id[sid].get("undelivered_reason") or reason)
+            note = None
+            if diff_by_id.get(sid):
+                note = diff_by_id[sid].get("undelivered_note")
+            if not note and reason == "other":
+                note = (notes or "").strip() or "No entregado"
+            lines.append(
+                {
+                    **base,
+                    "delivered_units": 0,
+                    "undelivered_reason": reason,
+                    "undelivered_note": note,
+                }
+            )
+            continue
+        # partial
+        if sid in diff_by_id:
+            raw = diff_by_id[sid]
+            if raw.get("delivered_units") is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Cantidad entregada requerida para producto "
+                        f"{product_name} (no se inventa)"
+                    ),
+                )
+            try:
+                delivered = float(raw.get("delivered_units"))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="delivered_units inválido"
+                ) from exc
+            lines.append(
+                {
+                    **base,
+                    "delivered_units": delivered,
+                    "undelivered_reason": raw.get("undelivered_reason"),
+                    "undelivered_note": raw.get("undelivered_note"),
+                }
+            )
+        else:
+            # Resto confirmado explícitamente como entregado completo.
+            lines.append({**base, "delivered_units": planned})
+
+    result_status = (
+        "full" if mode_n == "full" else "none" if mode_n == "none" else "partial"
+    )
+    out = save_document_lines(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        related_document_id=int(related_document_id),
+        oc_document_id=oc_document_id,
+        document_number=document_number,
+        document_type=document_type,
+        document_total=document_total,
+        result_status=result_status,
+        notes=notes,
+        lines=lines,
+        expected_version=expected_version,
+    )
+    if isinstance(out, dict):
+        out["confirm_mode"] = mode_n
+        out["simple_mode"] = True
+        out["note_es"] = (
+            "Confirmación de documento (modo simple) con cantidades del snapshot. "
+            "Sin modificar Bsale ni picking."
+        )
+    return out
+
+
 def declare_payment_method(
     *,
     user: dict[str, Any],
@@ -1181,6 +1345,8 @@ def declare_payment_method(
 
     Persiste una fila por documento con declared_amount/pending_balance en NULL.
     Requiere migración 059 si method=cash_and_transfer.
+    Requiere migración 060 si method=check_declared (cheque recibido).
+    check_declared NO implica validación, compensación ni crédito.
     """
     method_n = (method or "").strip()
     if method_n not in DRIVER_PAYMENT_METHODS:
@@ -1258,8 +1424,18 @@ def declare_payment_method(
             conn.rollback()
         except Exception:
             pass
-        # Hint si falta 059
+        # Hint si falta 059/060
         msg = str(exc)
+        if "check_declared" in msg or (
+            "method_check" in msg.lower() and method_n == "check_declared"
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Método cheque requiere migración 060 "
+                    "(pendiente de aprobación)"
+                ),
+            ) from exc
         if "cash_and_transfer" in msg or "method_check" in msg.lower():
             raise HTTPException(
                 status_code=503,

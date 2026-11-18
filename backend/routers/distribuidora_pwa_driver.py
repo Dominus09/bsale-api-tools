@@ -66,13 +66,17 @@ def get_my_despacho(
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
     """Ficha read-only. Plan ajeno / oficina revocada → 404/403."""
+    from backend.services.distribuidora import delivery_route_progress as progress_svc
+
     uid = read_svc.enforce_driver_plan_read_access(user, int(plan_id))
     row = driver_svc.get_plan_summary_for_driver(uid, int(plan_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Despacho no encontrado")
+    progress = progress_svc.get_plan_progress_for_driver(int(plan_id))
     return serialize_value(
         {
             "plan": row,
+            "progress": progress.get("progress"),
             "driver_user_id": uid,
             "read_only": True,
             "nav": {
@@ -87,6 +91,26 @@ def get_my_despacho(
             "p4": visit_svc.schema_status(),
             "future_contracts": read_svc.FUTURE_CONTRACTS,
         }
+    )
+
+
+@router.get("/despachos/{plan_id}/progreso")
+def get_my_despacho_progress(
+    plan_id: int,
+    origin_lat: float | None = Query(None),
+    origin_lng: float | None = Query(None),
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    """Avance del recorrido (clientes únicos) + siguiente pendiente sugerido."""
+    from backend.services.distribuidora import delivery_route_progress as progress_svc
+
+    read_svc.enforce_driver_plan_read_access(user, int(plan_id))
+    return serialize_value(
+        progress_svc.get_plan_progress_for_driver(
+            int(plan_id),
+            origin_lat=origin_lat,
+            origin_lng=origin_lng,
+        )
     )
 
 
@@ -275,6 +299,28 @@ class SaveDocumentLinesBody(BaseModel):
     expected_version: int | None = Field(None, ge=1)
 
 
+class ConfirmDocumentDifferenceLine(BaseModel):
+    source_detail_id: int = Field(..., ge=1)
+    delivered_units: float | None = Field(None, ge=0)
+    undelivered_reason: str | None = Field(None, max_length=64)
+    undelivered_note: str | None = Field(None, max_length=500)
+
+
+class ConfirmDocumentDeliveryBody(BaseModel):
+    """Modo simple: confirmar resultado por documento sin formulario línea a línea."""
+
+    related_document_id: int = Field(..., ge=1)
+    mode: str = Field(..., max_length=16)  # full | partial | none
+    oc_document_id: int | None = Field(None, ge=1)
+    document_number: int | None = None
+    document_type: str | None = Field(None, max_length=64)
+    document_total: float | None = None
+    notes: str | None = Field(None, max_length=1000)
+    expected_version: int | None = Field(None, ge=1)
+    difference_lines: list[ConfirmDocumentDifferenceLine] = Field(default_factory=list)
+    rest_delivered_confirmed: bool = False
+
+
 class DeclareCollectionBody(BaseModel):
     document_result_id: int | None = Field(None, ge=1)
     method: str = Field(..., max_length=32)
@@ -338,6 +384,31 @@ def save_visit_document_lines(
         notes=body.notes,
         lines=[ln.model_dump() for ln in body.lines],
         expected_version=body.expected_version,
+    )
+
+
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/documentos/confirmar")
+def confirm_visit_document_delivery(
+    plan_id: int,
+    visit_id: int,
+    body: ConfirmDocumentDeliveryBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    """Confirmación masiva (modo simple). Usa cantidades reales del snapshot."""
+    return visit_svc.confirm_document_delivery(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        related_document_id=int(body.related_document_id),
+        mode=body.mode,
+        oc_document_id=body.oc_document_id,
+        document_number=body.document_number,
+        document_type=body.document_type,
+        document_total=body.document_total,
+        notes=body.notes,
+        expected_version=body.expected_version,
+        difference_lines=[ln.model_dump() for ln in body.difference_lines],
+        rest_delivered_confirmed=bool(body.rest_delivered_confirmed),
     )
 
 

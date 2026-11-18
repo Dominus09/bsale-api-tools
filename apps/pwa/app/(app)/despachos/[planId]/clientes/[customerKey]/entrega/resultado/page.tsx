@@ -6,12 +6,15 @@ import { useSearchParams } from "next/navigation"
 import {
   ApiError,
   generateVisitWhatsappReport,
+  getMyDespachoProgress,
   getVisitDetail,
   type DeliveryVisit,
+  type RouteProgress,
   type WhatsappReportResponse,
 } from "@/lib/api"
+import { RouteProgressCard } from "@/components/route-progress-card"
 import { WhatsappSharePanel } from "@/components/whatsapp-share-panel"
-import { buildEntregaHref, moneyCLP, visitStatusLabel } from "@/lib/delivery-flow"
+import { buildEntregaHref, moneyCLP } from "@/lib/delivery-flow"
 import { isClosedVisitStatus } from "@/lib/finalize-visit-nav"
 import { buildResultadoSummary } from "@/lib/resultado-summary"
 import { resolveVisitRecovery } from "@/lib/visit-recovery"
@@ -28,6 +31,7 @@ function ResultadoInner() {
   const session = useVisitSession(planId, customerKey)
   const [detail, setDetail] = useState<VisitDetailPayload | null>(null)
   const [report, setReport] = useState<WhatsappReportResponse | null>(null)
+  const [progress, setProgress] = useState<RouteProgress | null>(null)
   const [busy, setBusy] = useState(false)
   const [loadingVisit, setLoadingVisit] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -71,6 +75,12 @@ function ResultadoInner() {
             /* reporte opcional */
           }
         }
+        try {
+          const prog = await getMyDespachoProgress(planId)
+          if (!cancelled) setProgress(prog.progress || null)
+        } catch {
+          /* progreso opcional */
+        }
       } catch (e) {
         if (cancelled) return
         setErr(
@@ -112,6 +122,13 @@ function ResultadoInner() {
   })
   const statusTone =
     sem.color === "green" ? "ok" : sem.color === "yellow" ? "warn" : sem.color === "red" ? "bad" : "neutral"
+
+  const next = progress?.next_customer
+  const nextHref = next?.customer_key
+    ? `/despachos/${planId}/clientes/${encodeURIComponent(next.customer_key)}`
+    : null
+  const remaining = progress?.remaining_clients ?? null
+  const routeDone = progress != null && remaining === 0 && progress.total_clients > 0
 
   if (loadingVisit || session.loading) {
     return <div className="empty">Cargando resultado…</div>
@@ -183,6 +200,22 @@ function ResultadoInner() {
         </div>
       ) : null}
 
+      {closed && progress ? (
+        routeDone ? (
+          <div className="card">
+            <h3 style={{ margin: "0 0 8px", fontSize: "1.05rem" }}>
+              Recorrido gestionado
+            </h3>
+            <RouteProgressCard progress={progress} />
+            <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.8rem" }}>
+              No se cierra el picking ni se ejecuta cuadratura automáticamente.
+            </p>
+          </div>
+        ) : (
+          <RouteProgressCard progress={progress} nextHref={nextHref} />
+        )
+      ) : null}
+
       {closed ? (
         <WhatsappSharePanel
           reportText={report?.report_text || null}
@@ -211,6 +244,13 @@ function ResultadoInner() {
           Esta visita aún no está cerrada. Use el circuito activo o la ficha.
         </div>
       )}
+
+      {closed && nextHref && !routeDone ? (
+        <Link href={nextHref} className="btn btn-primary" style={{ textAlign: "center" }}>
+          Siguiente cliente
+          {next?.suggestion_reason_es ? ` · ${next.suggestion_reason_es}` : ""}
+        </Link>
+      ) : null}
 
       {recovery.adminReviewPending ? (
         <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>

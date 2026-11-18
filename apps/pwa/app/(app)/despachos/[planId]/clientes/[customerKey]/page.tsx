@@ -4,8 +4,14 @@ import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
 import { ApiError, getMyCliente } from "@/lib/api"
+import { breakdownBoxUnits } from "@/lib/box-units"
 import { formatRutDisplay } from "@/lib/format-rut"
 import { moneyCLP } from "@/lib/delivery-flow"
+import {
+  commercialProductLabel,
+  productBarcodeLabel,
+  productCategoryLabel,
+} from "@/lib/delivery-labels"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 import { DeliveryLocalToolsHost } from "@/components/delivery-local-tools-host"
 import { DeliveryVisitStart } from "@/components/delivery-visit-start"
@@ -22,6 +28,7 @@ export default function ClienteFichaPage() {
   const [error, setError] = useState<string | null>(null)
   const [reloadToken, setReloadToken] = useState(0)
   const [lightbox, setLightbox] = useState<string | null>(null)
+  const [showPedido, setShowPedido] = useState(false)
 
   useEffect(() => {
     if (!Number.isFinite(planId) || planId < 1 || !customerKey) {
@@ -102,7 +109,9 @@ export default function ClienteFichaPage() {
     ? `${sem.labelEs} · revisión admin`
     : visit?.status === "in_progress" && !adminReview
       ? "En atención"
-      : sem.labelEs
+      : !visit && !closed
+        ? "Pendiente"
+        : sem.labelEs
   const valLabel = validationLabelEs(closed?.closure_review_status)
   const obs = (c.observations || "").trim()
   const backClients = `/despachos/${planId}/clientes`
@@ -215,6 +224,63 @@ export default function ClienteFichaPage() {
       {nav?.warning_es ? (
         <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
           {nav.warning_es}
+        </div>
+      ) : null}
+
+      <div className="btn-row">
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => setShowPedido((v) => !v)}
+        >
+          {showPedido ? "Ocultar pedido" : "Ver pedido"}
+        </button>
+      </div>
+
+      {showPedido ? (
+        <div className="stack-gap">
+          <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
+            Guía de entrega (solo consulta). No inicia visita ni registra
+            cantidades.
+          </p>
+          {(data.documents || []).map((doc, di) => (
+            <div key={`pedido-${doc.related_document_id ?? di}`} className="card">
+              <h3 style={{ margin: 0, fontSize: "0.95rem" }}>
+                {doc.document_type || "Doc"} {doc.document_number ?? "—"}
+              </h3>
+              <p className="muted" style={{ margin: "4px 0 8px", fontSize: "0.8rem" }}>
+                {moneyCLP(doc.document_total)} · {(doc.products || []).length} producto(s)
+              </p>
+              <div className="stack-gap">
+                {(doc.products || []).map((p, pi) => {
+                  const units = typeof p.unidades === "number" ? p.unidades : 0
+                  const box = breakdownBoxUnits(units, p.units_per_box ?? null, {
+                    sinUnidadCaja: p.sin_unidad_caja,
+                    equivalenceStatus: p.equivalence_status,
+                  })
+                  return (
+                    <div
+                      key={`pp-${p.source_detail_id ?? pi}`}
+                      className="card guide-product-card"
+                    >
+                      <div className="muted" style={{ fontSize: "0.72rem" }}>
+                        {productCategoryLabel(p) || "Producto"}
+                        {productBarcodeLabel(p) ? ` · ${productBarcodeLabel(p)}` : ""}
+                      </div>
+                      <div className="product-name">{commercialProductLabel(p)}</div>
+                      <div className="guide-product-qty">
+                        <span className="pill pill-ok">{units} u</span>
+                        {box.pillLabel ? <span className="pill">{box.pillLabel}</span> : null}
+                        {p.units_per_box ? (
+                          <span className="pill">x{p.units_per_box}/caja</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
         </div>
       ) : null}
 
