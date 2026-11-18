@@ -233,50 +233,24 @@ def assert_finalize_ready(
                     ),
                 )
 
-        # Conformidad
-        if not conf:
+        # Chofer V1 (simplificado): cierre sin firma ni receptor.
+        # No inventar conformidad. Si existe firma histórica activa, se conserva
+        # en delivery_conformity pero no es requisito ni prueba de este cierre.
+        # Observaciones de entrega → delivery_visits.result_note (distinto de
+        # observaciones comerciales del cliente en ficha/picking).
+        delivery_obs = (result_note or "").strip()
+        if status == "partial" and not delivery_obs:
             raise HTTPException(
                 status_code=422,
-                detail="Falta conformidad del receptor (firma o negativa registrada)",
+                detail=(
+                    "La entrega parcial requiere observaciones de entrega "
+                    "(productos faltantes, diferencias o acuerdos con el cliente)"
+                ),
             )
-        if conf.get("refused"):
-            if not (conf.get("refuse_reason") or "").strip():
-                raise HTTPException(
-                    status_code=422, detail="Negativa de firma requiere motivo"
-                )
-            review = "pending_review"
-            notes.append("firma_rechazada")
-        else:
-            if not conf.get("signature_object_key"):
-                raise HTTPException(
-                    status_code=422,
-                    detail="Entrega completa/parcial requiere firma real almacenada",
-                )
-            if not (conf.get("receptor_name") or "").strip():
-                raise HTTPException(
-                    status_code=422, detail="Nombre del receptor requerido"
-                )
-            # La firma debe corresponder al resumen actual (anti-reuso / anti-cambio silencioso)
-            current_summary = build_conformity_summary(
-                visit=visit, docs=docs, lines=lines, collections=collections
-            )
-            current_sha = hashlib.sha256(
-                json.dumps(current_summary, sort_keys=True, default=str).encode("utf-8")
-            ).hexdigest()
-            signed_sha = (conf.get("accepted_summary_sha256") or "").strip()
-            if not signed_sha or signed_sha != current_sha:
-                raise HTTPException(
-                    status_code=422,
-                    detail=(
-                        "La conformidad firmada no coincide con cantidades/"
-                        "cobranza actuales; vuelva a firmar tras el cambio"
-                    ),
-                )
-            signed_ver = conf.get("visit_version_at_sign")
-            if signed_ver is not None and int(signed_ver) != int(visit.get("version") or 1):
-                # Permite si el sha coincide (versión puede haber subido por eventos no-línea)
-                # pero exige sha; si además el sha falla ya se bloqueó arriba.
-                notes.append("version_firma_distinta_sha_ok")
+        if conf:
+            notes.append("conformidad_historica_ignorada_en_cierre_v1")
+            if conf.get("refused"):
+                notes.append("firma_rechazada_historica")
 
     elif status == "not_delivered":
         reason = (result_reason or "").strip()
@@ -372,9 +346,24 @@ def assert_finalize_ready(
                     },
                 )
 
-        if reason == "other" and not (result_note or "").strip():
+        delivery_obs = (result_note or "").strip()
+        if reason == "other" and not delivery_obs:
             raise HTTPException(
-                status_code=422, detail="Observación obligatoria para 'other'"
+                status_code=422,
+                detail="Observaciones de entrega obligatorias para este motivo",
+            )
+        if reason in ("closed_store", "rejected_order") and not delivery_obs:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Observaciones de entrega obligatorias para local cerrado "
+                    "o rechazo"
+                ),
+            )
+        if reason in ("not_found", "absent_customer") and not delivery_obs:
+            raise HTTPException(
+                status_code=422,
+                detail="Observaciones de entrega obligatorias para esta incidencia",
             )
 
     return {

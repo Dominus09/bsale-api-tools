@@ -447,6 +447,8 @@ export type DeliveryVisit = {
   status: string
   result_reason?: string | null
   result_note?: string | null
+  /** Observaciones de entrega del chofer (persistidas en result_note). */
+  delivery_observations?: string | null
   started_at?: string | null
   started_at_local?: string | null
   ended_at?: string | null
@@ -504,6 +506,7 @@ export async function finalizeDeliveryVisit(
     status: string
     result_reason?: string | null
     result_note?: string | null
+    delivery_observations?: string | null
     latitude?: number | null
     longitude?: number | null
     accuracy_m?: number | null
@@ -521,12 +524,17 @@ export async function finalizeDeliveryVisit(
   mode?: string
   note_es?: string
 }> {
+  const payload = {
+    ...body,
+    result_note: body.delivery_observations ?? body.result_note ?? null,
+    delivery_observations: body.delivery_observations ?? body.result_note ?? null,
+  }
   return apiFetch(
     `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/finalize`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     },
   )
 }

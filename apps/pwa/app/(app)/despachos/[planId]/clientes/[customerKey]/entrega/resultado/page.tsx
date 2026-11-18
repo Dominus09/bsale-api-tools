@@ -99,16 +99,16 @@ function ResultadoInner() {
   }, [planId, visitId, session.clientName])
 
   const visit: DeliveryVisit | null = detail?.visit || null
-  const summary = useMemo(
-    () =>
-      buildResultadoSummary({
-        docs: detail?.documents || [],
-        lines: detail?.lines || [],
-        collections: detail?.collections || [],
-        conformity: detail?.conformity || null,
-      }),
-    [detail],
-  )
+  const summary = useMemo(() => {
+    const v = detail?.visit
+    return buildResultadoSummary({
+      docs: detail?.documents || [],
+      lines: detail?.lines || [],
+      collections: detail?.collections || [],
+      conformity: detail?.conformity || null,
+      deliveryObservations: v?.delivery_observations || v?.result_note || null,
+    })
+  }, [detail])
 
   const clientsHref = `/despachos/${planId}/clientes`
   const fichaHref = buildEntregaHref(planId, customerKey, "ficha")

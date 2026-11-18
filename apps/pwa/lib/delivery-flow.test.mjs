@@ -21,7 +21,7 @@ function buildEntregaHref(planId, customerKey, step, extra) {
   if (step === "ficha") return `/despachos/${planId}/clientes/${enc}`
   if (step == null) return base
   const sub = typeof step === "number"
-    ? ["documentos", "cobranza", "firma"][step - 1]
+    ? ["documentos", "cobranza", "cierre"][step - 1]
     : step
   let path = `${base}/${sub}`
   if (sub === "documentos" && extra?.docKey) {

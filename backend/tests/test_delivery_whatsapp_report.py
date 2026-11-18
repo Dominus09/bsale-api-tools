@@ -68,6 +68,8 @@ def test_templates_a_to_f_compact():
         assert "cloudflare" not in text.lower()
         if status in ("completed", "partial"):
             assert "$" not in text or "💵" in text  # sin montos CLP en forma de pago nueva
+            assert "Firma:" not in text
+            assert "Gestión registrada" in text or "Validación pendiente" in text or "Obs:" in text
 
 
 def test_pending_review_keeps_red_semaphore_header():

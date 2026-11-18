@@ -176,6 +176,9 @@ def _visit_public(row: dict[str, Any]) -> dict[str, Any]:
         "status": row["status"],
         "result_reason": row.get("result_reason"),
         "result_note": row.get("result_note"),
+        # Alias semántico Chofer V1: observaciones de entrega (no confundir con
+        # observaciones comerciales del cliente en ficha/picking).
+        "delivery_observations": row.get("result_note"),
         "started_at": started,
         "started_at_local": _local_santiago(started_dt) if started_dt else None,
         "ended_at": ended,

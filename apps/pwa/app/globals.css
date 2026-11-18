@@ -1697,6 +1697,14 @@ input {
   margin-top: 10px;
 }
 
+.delivery-obs-input {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.35;
+  font-size: 1rem;
+}
+
 .no-gps-section {
   display: flex;
   flex-direction: column;

@@ -256,21 +256,28 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
         ]
     else:
         pay_line, pend_line = _collection_compact(list(data.get("collections") or []))
-        sig = data.get("signature_status") or "pendiente"
+        obs_raw = (data.get("observations") or "").strip()
+        obs_line = None
+        if obs_raw:
+            clipped = obs_raw if len(obs_raw) <= 72 else (obs_raw[:69] + "…")
+            obs_line = f"📝 Obs: {clipped}"
+        # Chofer V1: no afirmar firma. Última línea = obs / validación / gestión.
         if pending_review:
-            # Sustituye la línea de firma/aviso: no cambia el semáforo del header.
-            pend_line = "⚠️ Validación pendiente"
+            tail = "⚠️ Validación pendiente"
+        elif demo:
+            tail = "🚛 Gestión registrada · Datos ficticios"
+        elif obs_line:
+            tail = obs_line
+            obs_line = None
+        else:
+            tail = "🚛 Gestión registrada"
         lines = [
             header,
             f"🏪 {client} · {docs_s}",
             f"📦 {full_n} completas · {partial_n} parciales · {none_n} no entregadas",
             pay_line,
-            pend_line,
-            (
-                f"✍️ Firma: {sig} · Datos ficticios"
-                if demo
-                else f"✍️ Firma: {sig}"
-            ),
+            pend_line if pend_line and not pending_review else (obs_line or pend_line),
+            tail,
         ]
 
     # Garantizar máximo 6 líneas visibles.

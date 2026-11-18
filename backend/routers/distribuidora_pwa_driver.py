@@ -206,6 +206,8 @@ class FinalizeVisitBody(BaseModel):
     status: str = Field(..., max_length=32)
     result_reason: str | None = Field(None, max_length=64)
     result_note: str | None = Field(None, max_length=1000)
+    """Alias explícito: observaciones de entrega del chofer (misma columna result_note)."""
+    delivery_observations: str | None = Field(None, max_length=1000)
     latitude: float | None = None
     longitude: float | None = None
     accuracy_m: float | None = None
@@ -256,6 +258,7 @@ def finalize_delivery_visit(
     body: FinalizeVisitBody,
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
+    delivery_obs = (body.delivery_observations or body.result_note or None)
     return visit_svc.finalize_visit(
         user=user,
         plan_id=int(plan_id),
@@ -263,7 +266,7 @@ def finalize_delivery_visit(
         expected_version=int(body.expected_version),
         status=body.status,
         result_reason=body.result_reason,
-        result_note=body.result_note,
+        result_note=delivery_obs,
         latitude=body.latitude,
         longitude=body.longitude,
         accuracy_m=body.accuracy_m,

@@ -5,10 +5,12 @@ export type DeliveryStep = 1 | 2 | 3
 export const STEP = {
   documentos: 1,
   cobranza: 2,
+  cierre: 3,
+  /** @deprecated alias Chofer V1: la ruta firma redirige a cierre */
   firma: 3,
 } as const
 
-export type StepKey = keyof typeof STEP
+export type StepKey = "documentos" | "cobranza" | "cierre" | "firma"
 
 export const STEP_DEFS: ReadonlyArray<{
   step: DeliveryStep
@@ -18,7 +20,7 @@ export const STEP_DEFS: ReadonlyArray<{
 }> = [
   { step: 1, key: "documentos", label: "Productos", path: "documentos" },
   { step: 2, key: "cobranza", label: "Pago", path: "cobranza" },
-  { step: 3, key: "firma", label: "Firma", path: "firma" },
+  { step: 3, key: "cierre", label: "Cierre", path: "cierre" },
 ]
 
 export function stepPath(step: DeliveryStep): string {
@@ -74,6 +76,7 @@ export function decodeCustomerKey(raw: string | string[] | undefined): string {
 type EntregaSubpath =
   | "documentos"
   | "cobranza"
+  | "cierre"
   | "firma"
   | "incidencia"
   | "resultado"
@@ -95,7 +98,8 @@ export function buildEntregaHref(
   if (step === "ficha") {
     path = `/despachos/${planId}/clientes/${encodeCustomerKey(customerKey)}`
   } else if (step != null) {
-    const sub = typeof step === "number" ? stepPath(step) : step
+    let sub = typeof step === "number" ? stepPath(step) : step
+    if (sub === "firma") sub = "cierre"
     path = `${base}/${sub}`
     if (sub === "documentos" && extra?.docKey) {
       path += `/${encodeURIComponent(extra.docKey)}`

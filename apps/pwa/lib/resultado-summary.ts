@@ -34,18 +34,21 @@ export function buildResultadoSummary(input: {
   lines?: ResultadoLine[] | null
   collections?: ResultadoCollection[] | null
   conformity?: ResultadoConformity | null
+  deliveryObservations?: string | null
 }): {
   docCount: number
   lineCount: number
   collectionCount: number
   hasConformity: boolean
-  conformityLabel: string
+  conformityLabel: string | null
+  deliveryObservations: string | null
   compactLines: string[]
 } {
   const docs = input.docs || []
   const lines = input.lines || []
   const cols = (input.collections || []).filter((c) => c.document_result_id != null)
   const conf = input.conformity
+  const obs = (input.deliveryObservations || "").trim() || null
   const compact: string[] = []
 
   for (const d of docs) {
@@ -69,19 +72,30 @@ export function buildResultadoSummary(input: {
   if (cols.length) {
     compact.push(`Cobranza: ${cols.length} declaración(es) vigente(s)`)
   }
+  if (obs) {
+    compact.push(`Observaciones de entrega: ${obs}`)
+  }
 
-  let conformityLabel = "Sin conformidad"
+  // Solo mostrar firma si existe evidencia histórica real (no exigirla en V1).
+  let conformityLabel: string | null = null
   let hasConformity = false
   if (conf && !conf.invalidated_at) {
-    hasConformity = true
-    if (conf.refused) conformityLabel = "Negativa registrada"
-    else if (conf.receptor_name) {
-      conformityLabel = `Firmada · ${String(conf.receptor_name)}`
-    } else conformityLabel = "Conformidad registrada"
-  } else if (conf?.invalidated_at) {
-    conformityLabel = "Conformidad invalidada"
+    const hasSig =
+      Boolean(conf.signature_object_key) ||
+      Boolean(conf.signature_url) ||
+      Boolean(conf.signed_at)
+    if (conf.refused) {
+      hasConformity = true
+      conformityLabel = "Negativa de firma histórica"
+      compact.push(`Firma histórica: ${conformityLabel}`)
+    } else if (hasSig || conf.receptor_name) {
+      hasConformity = true
+      conformityLabel = conf.receptor_name
+        ? `Firma histórica · ${String(conf.receptor_name)}`
+        : "Firma histórica registrada"
+      compact.push(conformityLabel)
+    }
   }
-  compact.push(`Conformidad: ${conformityLabel}`)
 
   return {
     docCount: docs.length,
@@ -89,6 +103,7 @@ export function buildResultadoSummary(input: {
     collectionCount: cols.length,
     hasConformity,
     conformityLabel,
+    deliveryObservations: obs,
     compactLines: compact,
   }
 }

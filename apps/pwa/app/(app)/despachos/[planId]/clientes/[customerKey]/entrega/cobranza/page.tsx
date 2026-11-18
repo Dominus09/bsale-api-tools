@@ -206,7 +206,7 @@ export default function EntregaCobranzaPage() {
           className="btn btn-primary"
           disabled={!allSaved}
           onClick={() =>
-            router.push(buildEntregaHref(planId, customerKey, "firma"))
+            router.push(buildEntregaHref(planId, customerKey, "cierre"))
           }
         >
           Continuar a conformidad

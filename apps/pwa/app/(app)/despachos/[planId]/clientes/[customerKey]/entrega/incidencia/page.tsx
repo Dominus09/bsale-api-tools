@@ -197,8 +197,8 @@ function IncidenciaInner() {
         setErr("Detalle de excepción GPS obligatorio (mín. 8 caracteres).")
         return
       }
-      if (reason === "other" && !note.trim()) {
-        setErr("Observación obligatoria para 'Otro'.")
+      if (note.trim().length < 3) {
+        setErr("Observaciones de entrega obligatorias para esta incidencia.")
         return
       }
       const fix = gps || (await captureGps())
@@ -206,7 +206,7 @@ function IncidenciaInner() {
         expected_version: Number(visit.version || 1),
         status: "not_delivered",
         result_reason: reason,
-        result_note: note || null,
+        delivery_observations: note.trim(),
         latitude: fix?.lat ?? null,
         longitude: fix?.lng ?? null,
         accuracy_m: fix?.accuracy ?? null,
@@ -288,20 +288,9 @@ function IncidenciaInner() {
           </select>
         </label>
 
-        {reason === "other" || note ? (
-          <label className="field">
-            Observación
-            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
-          </label>
-        ) : (
-          <button
-            type="button"
-            className="btn btn-ghost btn-compact"
-            onClick={() => setNote(" ")}
-          >
-            Agregar observación
-          </button>
-        )}
+        <p className="muted" style={{ margin: "10px 0 0", fontSize: "0.8rem" }}>
+          Las observaciones de entrega se completan al confirmar (obligatorias).
+        </p>
       </div>
 
       {step === "gps" || !gps ? (
@@ -390,11 +379,24 @@ function IncidenciaInner() {
 
       {step === "confirm" && evidenceOk ? (
         <div className="card stack-gap">
-          <strong>3. Confirmar incidencia</strong>
+          <strong>3. Observaciones y cierre</strong>
+          <label className="field" htmlFor="inc-obs">
+            Observaciones de entrega (obligatorias)
+          </label>
+          <textarea
+            id="inc-obs"
+            className="input delivery-obs-input"
+            rows={4}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Ej.: Local cerrado. Se intentó la entrega a las 15:20."
+            disabled={busy}
+            maxLength={1000}
+          />
           <button
             type="button"
             className="btn btn-danger"
-            disabled={busy}
+            disabled={busy || note.trim().length < 3}
             onClick={() => void onFinalize()}
           >
             {busy ? "Guardando…" : `Registrar · ${reasonLabel}`}

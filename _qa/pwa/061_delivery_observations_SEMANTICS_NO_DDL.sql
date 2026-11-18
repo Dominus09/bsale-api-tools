@@ -1,0 +1,24 @@
+-- =============================================================================
+-- 061 · Observaciones de entrega (Chofer V1) — SEMÁNTICA / SIN DDL
+-- Estado: DOCUMENTACIÓN (no ejecutar en producción; no hay migración pendiente)
+-- =============================================================================
+--
+-- Decisión:
+--   Reutilizar `distribuidora.delivery_visits.result_note` como
+--   "observaciones de entrega" registradas por el chofer al cerrar la visita.
+--
+-- Distinción obligatoria:
+--   - Observaciones del cliente (comerciales / picking / ficha) → NO tocar.
+--   - Observaciones de entrega (esta visita) → `result_note`
+--     expuesto también como `delivery_observations` en la API PWA.
+--
+-- No se agrega columna nueva porque:
+--   1) El campo visit-level ya existe y se audita vía eventos de finalize.
+--   2) No se mezclan con observaciones comerciales del cliente.
+--   3) Firmas históricas permanecen en `delivery_conformity` sin borrar.
+--
+-- Si en el futuro se requiere separar incidencias vs observaciones de entrega
+-- en columnas distintas, proponer migración aditiva con aprobación independiente.
+--
+-- SELECT 1; -- no-op seguro si alguien ejecuta el archivo por error
+SELECT 1;

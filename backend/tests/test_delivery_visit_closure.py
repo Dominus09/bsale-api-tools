@@ -96,7 +96,8 @@ def test_incident_requires_evidence(monkeypatch):
     assert ei.value.status_code == 422
 
 
-def test_signature_sha_mismatch_blocks_finalize(monkeypatch):
+def test_completed_without_signature_or_receptor(monkeypatch):
+    """Chofer V1: cierre completo sin firma ni receptor."""
     monkeypatch.setattr(
         closure.visit_repo,
         "list_document_results",
@@ -125,36 +126,24 @@ def test_signature_sha_mismatch_blocks_finalize(monkeypatch):
             {"id": 1, "document_result_id": 9, "method": "cash", "declared_amount": None}
         ],
     )
-    monkeypatch.setattr(
-        closure.visit_repo,
-        "get_conformity",
-        lambda *_a, **_k: {
-            "signature_object_key": "k",
-            "receptor_name": "Ana",
-            "refused": False,
-            "invalidated_at": None,
-            "accepted_summary_sha256": "deadbeef",
-            "visit_version_at_sign": 1,
-        },
+    monkeypatch.setattr(closure.visit_repo, "get_conformity", lambda *_a, **_k: None)
+    gate = closure.assert_finalize_ready(
+        FakeCur(),
+        visit={"id": 1, "version": 1, "customer_key": "id:1"},
+        status="completed",
+        result_reason=None,
+        result_note=None,
+        has_end_gps=True,
+        expected_related_ids=[1],
     )
-    with pytest.raises(HTTPException) as ei:
-        closure.assert_finalize_ready(
-            FakeCur(),
-            visit={"id": 1, "version": 1, "customer_key": "id:1"},
-            status="completed",
-            result_reason=None,
-            result_note=None,
-            has_end_gps=True,
-            expected_related_ids=[1],
-        )
-    assert "conformidad" in str(ei.value.detail).lower() or "firmar" in str(ei.value.detail).lower()
+    assert gate["closure_review_status"] == "verified"
 
 
-def test_refused_is_pending_review_not_verified(monkeypatch):
+def test_partial_requires_delivery_observations(monkeypatch):
     monkeypatch.setattr(
         closure.visit_repo,
         "list_document_results",
-        lambda *_a, **_k: [{"id": 9, "related_document_id": 1, "result_status": "full"}],
+        lambda *_a, **_k: [{"id": 9, "related_document_id": 1, "result_status": "partial"}],
     )
     monkeypatch.setattr(
         closure.visit_repo,
@@ -162,9 +151,10 @@ def test_refused_is_pending_review_not_verified(monkeypatch):
         lambda *_a, **_k: [
             {
                 "source_detail_id": 33,
-                "planned_units": 1,
+                "planned_units": 2,
                 "delivered_units": 1,
-                "undelivered_units": 0,
+                "undelivered_units": 1,
+                "undelivered_reason": "physical_shortage",
             }
         ],
     )
@@ -173,29 +163,32 @@ def test_refused_is_pending_review_not_verified(monkeypatch):
         closure.visit_repo,
         "list_active_collections",
         lambda *_a, **_k: [
-            {"id": 1, "document_result_id": 9, "method": "cash", "declared_amount": None}
+            {"id": 1, "document_result_id": 9, "method": "transfer_declared", "declared_amount": None}
         ],
     )
-    monkeypatch.setattr(
-        closure.visit_repo,
-        "get_conformity",
-        lambda *_a, **_k: {
-            "refused": True,
-            "refuse_reason": "No quiso firmar",
-            "invalidated_at": None,
-            "signature_object_key": None,
-        },
-    )
+    monkeypatch.setattr(closure.visit_repo, "get_conformity", lambda *_a, **_k: None)
+    with pytest.raises(HTTPException) as ei:
+        closure.assert_finalize_ready(
+            FakeCur(),
+            visit={"id": 1, "version": 1},
+            status="partial",
+            result_reason=None,
+            result_note=None,
+            has_end_gps=True,
+            expected_related_ids=[1],
+        )
+    assert "observaciones" in str(ei.value.detail).lower()
+
     gate = closure.assert_finalize_ready(
         FakeCur(),
         visit={"id": 1, "version": 1},
-        status="completed",
+        status="partial",
         result_reason=None,
-        result_note=None,
+        result_note="Quedaron 2 cajas pendientes",
         has_end_gps=True,
         expected_related_ids=[1],
     )
-    assert gate["closure_review_status"] == "pending_review"
+    assert gate["closure_review_status"] == "verified"
 
 
 def test_finalize_blocks_lines_without_source_detail(monkeypatch):
@@ -547,17 +540,18 @@ def test_collection_change_breaks_signed_sha(monkeypatch):
             "visit_version_at_sign": 1,
         },
     )
-    with pytest.raises(HTTPException) as ei:
-        closure.assert_finalize_ready(
-            FakeCur(),
-            visit=visit,
-            status="completed",
-            result_reason=None,
-            result_note=None,
-            has_end_gps=True,
-            expected_related_ids=[1],
-        )
-    assert "vuelva a firmar" in str(ei.value.detail).lower()
+    # Chofer V1: firma histórica desalineada no bloquea el cierre (firma desactivada).
+    gate = closure.assert_finalize_ready(
+        FakeCur(),
+        visit=visit,
+        status="completed",
+        result_reason=None,
+        result_note=None,
+        has_end_gps=True,
+        expected_related_ids=[1],
+    )
+    assert gate["closure_review_status"] == "verified"
+    assert any("conformidad_historica" in n for n in gate.get("notes") or [])
 
 
 def test_incident_exception_pending_review(monkeypatch):
@@ -674,7 +668,7 @@ def test_closed_store_within_300m_ok(monkeypatch):
         visit={"id": 1},
         status="not_delivered",
         result_reason="closed_store",
-        result_note=None,
+        result_note="Local cerrado. Intento 15:20.",
         has_end_gps=True,
         expected_related_ids=[],
         end_lat=-33.4500,
