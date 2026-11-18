@@ -41,8 +41,18 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       }
     }
     void run()
+
+    // Safari / PWA: bfcache puede restaurar pantallas privadas tras logout.
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted && !getToken()) {
+        router.replace("/login")
+      }
+    }
+    window.addEventListener("pageshow", onPageShow)
+
     return () => {
       cancelled = true
+      window.removeEventListener("pageshow", onPageShow)
     }
   }, [router])
 

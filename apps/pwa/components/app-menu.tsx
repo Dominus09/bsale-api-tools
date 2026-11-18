@@ -2,12 +2,26 @@
 
 import Link from "next/link"
 import { useEffect, useState } from "react"
-import { clearSession } from "@/lib/auth"
+import { getSessionEmail, logoutAndRedirect } from "@/lib/auth"
 import { useLocalTools } from "@/components/local-tools-context"
 
-function sessionEmail(): string {
-  if (typeof window === "undefined") return "—"
-  return localStorage.getItem("pwa_email") || "—"
+function IconLogout() {
+  return (
+    <svg
+      className="drawer-item-icon"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      aria-hidden
+    >
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="M16 17l5-5-5-5" />
+      <path d="M21 12H9" />
+    </svg>
+  )
 }
 
 export function AppMenu() {
@@ -16,7 +30,7 @@ export function AppMenu() {
   const { tools, requestAction } = useLocalTools()
 
   useEffect(() => {
-    setEmail(sessionEmail())
+    setEmail(getSessionEmail() || "—")
   }, [open])
 
   useEffect(() => {
@@ -29,8 +43,8 @@ export function AppMenu() {
   }, [open])
 
   function logout() {
-    clearSession()
-    window.location.href = "/login"
+    setOpen(false)
+    logoutAndRedirect("/login")
   }
 
   function runLocal(action: "gps" | "photo" | "navigate" | "history") {
@@ -70,76 +84,95 @@ export function AppMenu() {
               </button>
             </div>
 
-            {tools?.available && tools.backHref ? (
+            <div className="drawer-scroll">
+              <section className="drawer-section">
+                <h3>Cuenta</h3>
+                <p className="drawer-user">{email}</p>
+                <p className="drawer-profile">Perfil activo · Chofer</p>
+              </section>
+
               <section className="drawer-section">
                 <h3>Navegación</h3>
                 <div className="drawer-actions">
                   <Link
                     className="drawer-item"
-                    href={tools.backHref}
+                    href="/despachos"
                     onClick={() => setOpen(false)}
                   >
-                    ← Volver a despachos / clientes
+                    Mis despachos
                   </Link>
-                </div>
-              </section>
-            ) : null}
-
-            <section className="drawer-section">
-              <h3>Herramientas del local</h3>
-              {tools?.available ? (
-                <div className="drawer-actions">
-                  <button type="button" className="drawer-item" onClick={() => runLocal("gps")}>
-                    Registrar / corregir GPS
-                  </button>
-                  <button type="button" className="drawer-item" onClick={() => runLocal("photo")}>
-                    Tomar / cambiar fotografía
-                  </button>
-                  <button
-                    type="button"
-                    className="drawer-item"
-                    disabled={!tools.canNavigate}
-                    onClick={() => runLocal("navigate")}
-                  >
-                    Cómo llegar
-                  </button>
-                  <button type="button" className="drawer-item" onClick={() => runLocal("history")}>
-                    Historial de ubicación
-                  </button>
-                  {tools.locationLabel ? (
-                    <p className="muted drawer-note">{tools.locationLabel}</p>
+                  {tools?.available && tools.backHref ? (
+                    <Link
+                      className="drawer-item"
+                      href={tools.backHref}
+                      onClick={() => setOpen(false)}
+                    >
+                      ← Volver a despachos / clientes
+                    </Link>
                   ) : null}
                 </div>
-              ) : (
+                {/* Reserva multimódulo: "Cambiar módulo" (Chofer / Bodega) — no implementar aún. */}
+              </section>
+
+              <section className="drawer-section">
+                <h3>Herramientas del local</h3>
+                {tools?.available ? (
+                  <div className="drawer-actions">
+                    <button type="button" className="drawer-item" onClick={() => runLocal("gps")}>
+                      Registrar / corregir GPS
+                    </button>
+                    <button type="button" className="drawer-item" onClick={() => runLocal("photo")}>
+                      Tomar / cambiar fotografía
+                    </button>
+                    <button
+                      type="button"
+                      className="drawer-item"
+                      disabled={!tools.canNavigate}
+                      onClick={() => runLocal("navigate")}
+                    >
+                      Cómo llegar
+                    </button>
+                    <button type="button" className="drawer-item" onClick={() => runLocal("history")}>
+                      Historial de ubicación
+                    </button>
+                    {tools.locationLabel ? (
+                      <p className="muted drawer-note">{tools.locationLabel}</p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="muted drawer-note">
+                    Abra la ficha de un cliente para usar GPS, fachada y navegación.
+                  </p>
+                )}
+              </section>
+
+              <section className="drawer-section">
+                <h3>Pruebas</h3>
+                <div className="drawer-actions">
+                  <Link
+                    className="drawer-item"
+                    href="/pruebas/reportes-whatsapp"
+                    onClick={() => setOpen(false)}
+                  >
+                    Reportes WhatsApp (ficticios)
+                  </Link>
+                </div>
                 <p className="muted drawer-note">
-                  Abra la ficha de un cliente para usar GPS, fachada y navegación.
+                  Solo demostración. No escribe entregas reales ni usa enlaces de grupo.
                 </p>
-              )}
-            </section>
+              </section>
+            </div>
 
-            <section className="drawer-section">
-              <h3>Pruebas</h3>
-              <div className="drawer-actions">
-                <Link
-                  className="drawer-item"
-                  href="/pruebas/reportes-whatsapp"
-                  onClick={() => setOpen(false)}
-                >
-                  🧪 Reportes WhatsApp (ficticios)
-                </Link>
-              </div>
-              <p className="muted drawer-note">
-                Solo demostración. No escribe entregas reales ni usa enlaces de grupo.
-              </p>
-            </section>
-
-            <section className="drawer-section">
-              <h3>Mi cuenta</h3>
-              <p className="drawer-user">{email}</p>
-              <button type="button" className="drawer-item drawer-item-danger" onClick={logout}>
+            <div className="drawer-footer">
+              <button
+                type="button"
+                className="drawer-item drawer-item-danger drawer-item-logout"
+                onClick={logout}
+              >
+                <IconLogout />
                 Cerrar sesión
               </button>
-            </section>
+            </div>
           </aside>
         </div>
       ) : null}

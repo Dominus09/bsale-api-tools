@@ -536,8 +536,8 @@ input {
     calc(16px + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  overflow: auto;
+  gap: 12px;
+  overflow: hidden;
 }
 
 .drawer-head {
@@ -545,6 +545,24 @@ input {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.drawer-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 2px;
+}
+
+.drawer-footer {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
 .drawer-section h3 {
@@ -581,14 +599,36 @@ input {
 }
 
 .drawer-item-danger {
-  border-color: rgba(227, 93, 106, 0.4);
+  border-color: rgba(196, 41, 60, 0.55);
+  background: rgba(196, 41, 60, 0.14);
   color: #ffb4bc;
 }
 
+.drawer-item-logout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  color: #ffd0d5;
+  border-color: rgba(196, 41, 60, 0.7);
+  background: linear-gradient(180deg, rgba(196, 41, 60, 0.28), rgba(164, 32, 50, 0.22));
+}
+
+.drawer-item-icon {
+  flex: 0 0 auto;
+}
+
 .drawer-user {
-  margin: 0 0 8px;
-  font-size: 0.92rem;
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
   overflow-wrap: anywhere;
+}
+
+.drawer-profile {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
 }
 
 .drawer-note {

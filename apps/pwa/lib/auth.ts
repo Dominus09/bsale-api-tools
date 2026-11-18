@@ -17,16 +17,57 @@ export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY)
 }
 
+export function getSessionEmail(): string | null {
+  if (typeof window === "undefined") return null
+  return localStorage.getItem(EMAIL_KEY)
+}
+
 export function setSession(token: string, email: string, userId: number | string) {
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(EMAIL_KEY, email)
   localStorage.setItem(USER_ID_KEY, String(userId))
 }
 
+/**
+ * Limpia credenciales PWA en el dispositivo.
+ *
+ * Auth PWA = Bearer JWT en localStorage (no cookies HttpOnly).
+ * No existe endpoint PWA de logout/revocación inmediata: el JWT es
+ * stateless hasta expirar o invalidarse por token_version en admin.
+ * No se llama a bump_token_version aquí para no cerrar ERP u otras apps
+ * que compartan el mismo token staff.
+ */
 export function clearSession() {
+  if (typeof window === "undefined") return
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(EMAIL_KEY)
   localStorage.removeItem(USER_ID_KEY)
+  try {
+    sessionStorage.clear()
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+/**
+ * Cierre de sesión local + redirección a login.
+ * Usa replace para reducir historial con pantallas privadas (Safari / PWA).
+ */
+export function logoutAndRedirect(loginPath = "/login") {
+  clearSession()
+  if (typeof window === "undefined") return
+  void clearAppCachesBestEffort()
+  window.location.replace(loginPath)
+}
+
+async function clearAppCachesBestEffort() {
+  try {
+    if (!("caches" in window)) return
+    const keys = await caches.keys()
+    await Promise.all(keys.map((k) => caches.delete(k)))
+  } catch {
+    /* best effort */
+  }
 }
 
 /** Auth sin Content-Type: obligatorio para FormData (multipart + boundary del browser). */
