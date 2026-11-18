@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useEffect, useState } from "react"
+import { createPortal } from "react-dom"
 import { getSessionEmail, logoutAndRedirect } from "@/lib/auth"
 import { useLocalTools } from "@/components/local-tools-context"
 
@@ -27,7 +28,12 @@ function IconLogout() {
 export function AppMenu() {
   const [open, setOpen] = useState(false)
   const [email, setEmail] = useState("—")
+  const [mounted, setMounted] = useState(false)
   const { tools, requestAction } = useLocalTools()
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   useEffect(() => {
     setEmail(getSessionEmail() || "—")
@@ -38,8 +44,13 @@ export function AppMenu() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false)
     }
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
     window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
+    return () => {
+      document.body.style.overflow = prevOverflow
+      window.removeEventListener("keydown", onKey)
+    }
   }, [open])
 
   function logout() {
@@ -56,6 +67,131 @@ export function AppMenu() {
     requestAction(action)
   }
 
+  const drawer =
+    open && mounted
+      ? createPortal(
+          <div className="drawer-root" role="dialog" aria-modal="true" aria-label="Menú">
+            <button
+              type="button"
+              className="drawer-backdrop"
+              aria-label="Cerrar menú"
+              onClick={() => setOpen(false)}
+            />
+            <aside className="drawer-panel">
+              <div className="drawer-head">
+                <strong>Menú</strong>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-compact"
+                  onClick={() => setOpen(false)}
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              <div className="drawer-scroll">
+                <section className="drawer-section">
+                  <h3>Cuenta</h3>
+                  <p className="drawer-user">{email}</p>
+                  <p className="drawer-profile">Perfil activo · Chofer</p>
+                </section>
+
+                <section className="drawer-section">
+                  <h3>Navegación</h3>
+                  <div className="drawer-actions">
+                    <Link
+                      className="drawer-item"
+                      href="/despachos"
+                      onClick={() => setOpen(false)}
+                    >
+                      Mis despachos
+                    </Link>
+                    {tools?.available && tools.backHref ? (
+                      <Link
+                        className="drawer-item"
+                        href={tools.backHref}
+                        onClick={() => setOpen(false)}
+                      >
+                        ← Volver a despachos / clientes
+                      </Link>
+                    ) : null}
+                  </div>
+                  {/* Reserva multimódulo: "Cambiar módulo" (Chofer / Bodega) — no implementar aún. */}
+                </section>
+
+                <section className="drawer-section">
+                  <h3>Herramientas del local</h3>
+                  {tools?.available ? (
+                    <div className="drawer-actions">
+                      <button type="button" className="drawer-item" onClick={() => runLocal("gps")}>
+                        Registrar / corregir GPS
+                      </button>
+                      <button
+                        type="button"
+                        className="drawer-item"
+                        onClick={() => runLocal("photo")}
+                      >
+                        Tomar / cambiar fotografía
+                      </button>
+                      <button
+                        type="button"
+                        className="drawer-item"
+                        disabled={!tools.canNavigate}
+                        onClick={() => runLocal("navigate")}
+                      >
+                        Cómo llegar
+                      </button>
+                      <button
+                        type="button"
+                        className="drawer-item"
+                        onClick={() => runLocal("history")}
+                      >
+                        Historial de ubicación
+                      </button>
+                      {tools.locationLabel ? (
+                        <p className="muted drawer-note">{tools.locationLabel}</p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="muted drawer-note">
+                      Abra la ficha de un cliente para usar GPS, fachada y navegación.
+                    </p>
+                  )}
+                </section>
+
+                <section className="drawer-section">
+                  <h3>Pruebas</h3>
+                  <div className="drawer-actions">
+                    <Link
+                      className="drawer-item"
+                      href="/pruebas/reportes-whatsapp"
+                      onClick={() => setOpen(false)}
+                    >
+                      Reportes WhatsApp (ficticios)
+                    </Link>
+                  </div>
+                  <p className="muted drawer-note">
+                    Solo demostración. No escribe entregas reales ni usa enlaces de grupo.
+                  </p>
+                </section>
+              </div>
+
+              <div className="drawer-footer">
+                <button
+                  type="button"
+                  className="drawer-item drawer-item-danger drawer-item-logout"
+                  onClick={logout}
+                >
+                  <IconLogout />
+                  Cerrar sesión
+                </button>
+              </div>
+            </aside>
+          </div>,
+          document.body,
+        )
+      : null
+
   return (
     <>
       <button
@@ -67,115 +203,7 @@ export function AppMenu() {
       >
         <span className="icon-btn-bars" aria-hidden />
       </button>
-
-      {open ? (
-        <div className="drawer-root" role="dialog" aria-modal="true" aria-label="Menú">
-          <button
-            type="button"
-            className="drawer-backdrop"
-            aria-label="Cerrar menú"
-            onClick={() => setOpen(false)}
-          />
-          <aside className="drawer-panel">
-            <div className="drawer-head">
-              <strong>Menú</strong>
-              <button type="button" className="btn btn-ghost btn-compact" onClick={() => setOpen(false)}>
-                Cerrar
-              </button>
-            </div>
-
-            <div className="drawer-scroll">
-              <section className="drawer-section">
-                <h3>Cuenta</h3>
-                <p className="drawer-user">{email}</p>
-                <p className="drawer-profile">Perfil activo · Chofer</p>
-              </section>
-
-              <section className="drawer-section">
-                <h3>Navegación</h3>
-                <div className="drawer-actions">
-                  <Link
-                    className="drawer-item"
-                    href="/despachos"
-                    onClick={() => setOpen(false)}
-                  >
-                    Mis despachos
-                  </Link>
-                  {tools?.available && tools.backHref ? (
-                    <Link
-                      className="drawer-item"
-                      href={tools.backHref}
-                      onClick={() => setOpen(false)}
-                    >
-                      ← Volver a despachos / clientes
-                    </Link>
-                  ) : null}
-                </div>
-                {/* Reserva multimódulo: "Cambiar módulo" (Chofer / Bodega) — no implementar aún. */}
-              </section>
-
-              <section className="drawer-section">
-                <h3>Herramientas del local</h3>
-                {tools?.available ? (
-                  <div className="drawer-actions">
-                    <button type="button" className="drawer-item" onClick={() => runLocal("gps")}>
-                      Registrar / corregir GPS
-                    </button>
-                    <button type="button" className="drawer-item" onClick={() => runLocal("photo")}>
-                      Tomar / cambiar fotografía
-                    </button>
-                    <button
-                      type="button"
-                      className="drawer-item"
-                      disabled={!tools.canNavigate}
-                      onClick={() => runLocal("navigate")}
-                    >
-                      Cómo llegar
-                    </button>
-                    <button type="button" className="drawer-item" onClick={() => runLocal("history")}>
-                      Historial de ubicación
-                    </button>
-                    {tools.locationLabel ? (
-                      <p className="muted drawer-note">{tools.locationLabel}</p>
-                    ) : null}
-                  </div>
-                ) : (
-                  <p className="muted drawer-note">
-                    Abra la ficha de un cliente para usar GPS, fachada y navegación.
-                  </p>
-                )}
-              </section>
-
-              <section className="drawer-section">
-                <h3>Pruebas</h3>
-                <div className="drawer-actions">
-                  <Link
-                    className="drawer-item"
-                    href="/pruebas/reportes-whatsapp"
-                    onClick={() => setOpen(false)}
-                  >
-                    Reportes WhatsApp (ficticios)
-                  </Link>
-                </div>
-                <p className="muted drawer-note">
-                  Solo demostración. No escribe entregas reales ni usa enlaces de grupo.
-                </p>
-              </section>
-            </div>
-
-            <div className="drawer-footer">
-              <button
-                type="button"
-                className="drawer-item drawer-item-danger drawer-item-logout"
-                onClick={logout}
-              >
-                <IconLogout />
-                Cerrar sesión
-              </button>
-            </div>
-          </aside>
-        </div>
-      ) : null}
+      {drawer}
     </>
   )
 }
