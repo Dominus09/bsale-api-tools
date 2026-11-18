@@ -111,7 +111,8 @@ export default function EntregaDocumentosPage() {
   const [confirmKey, setConfirmKey] = useState<string | null>(null)
   const [partialKey, setPartialKey] = useState<string | null>(null)
   const [partialNote, setPartialNote] = useState("")
-  const [selectedDiffs, setSelectedDiffs] = useState<Record<number, boolean>>({})
+  /** Productos con diferencia: cantidad REAL entregada (no forzar 0). */
+  const [diffDelivered, setDiffDelivered] = useState<Record<number, string>>({})
   const [productQ, setProductQ] = useState("")
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
 
@@ -139,6 +140,7 @@ export default function EntregaDocumentosPage() {
 
   async function confirmFull(doc: (typeof session.documents)[0]) {
     if (!session.activeVisit || doc.related_document_id == null) return
+    if (busyKey) return
     const key = docKeyFromDocument(doc)
     if (
       !window.confirm(
@@ -148,6 +150,7 @@ export default function EntregaDocumentosPage() {
       return
     }
     setBusyKey(key)
+    setConfirmKey(key)
     setGateErr(null)
     try {
       await confirmVisitDocumentDelivery(planId, session.activeVisit.id, {
@@ -172,22 +175,61 @@ export default function EntregaDocumentosPage() {
 
   async function confirmPartial(doc: (typeof session.documents)[0]) {
     if (!session.activeVisit || doc.related_document_id == null) return
+    if (busyKey) return
     const key = docKeyFromDocument(doc)
-    const diffs = (doc.products || [])
-      .filter((p) => p.source_detail_id != null && selectedDiffs[Number(p.source_detail_id)])
-      .map((p) => ({
-        source_detail_id: Number(p.source_detail_id),
-        delivered_units: 0,
-        undelivered_reason: "physical_shortage" as const,
-        undelivered_note: partialNote.trim() || "Diferencia en modo simple",
-      }))
-    if (!diffs.length) {
+    const selected = (doc.products || []).filter(
+      (p) => p.source_detail_id != null && diffDelivered[Number(p.source_detail_id)] != null,
+    )
+    if (!selected.length) {
       setGateErr("Seleccione al menos un producto con diferencia")
       return
     }
+    const diffs: Array<{
+      source_detail_id: number
+      delivered_units: number
+      undelivered_reason: string
+      undelivered_note: string
+    }> = []
+    for (const p of selected) {
+      const sid = Number(p.source_detail_id)
+      const planned = typeof p.unidades === "number" ? p.unidades : 0
+      const raw = String(diffDelivered[sid] ?? "").trim()
+      if (raw === "") {
+        setGateErr(
+          `Indique unidades entregadas de «${commercialProductLabel(p)}» (0…${planned - 1}). Si desconoce la cantidad, use Incidencia.`,
+        )
+        return
+      }
+      const delivered = Number(raw.replace(",", "."))
+      if (!Number.isFinite(delivered) || delivered < 0 || delivered > planned) {
+        setGateErr(
+          `Cantidad inválida en «${commercialProductLabel(p)}» (0…${planned})`,
+        )
+        return
+      }
+      if (delivered >= planned) {
+        setGateErr(
+          `«${commercialProductLabel(p)}» sin diferencia real: quítelo de la lista o use entrega completa`,
+        )
+        return
+      }
+      diffs.push({
+        source_detail_id: sid,
+        delivered_units: delivered,
+        undelivered_reason: "physical_shortage",
+        undelivered_note: partialNote.trim() || "Diferencia en modo simple",
+      })
+    }
+    const summary = diffs
+      .map((d) => {
+        const p = selected.find((x) => Number(x.source_detail_id) === d.source_detail_id)
+        const planned = typeof p?.unidades === "number" ? p.unidades : "?"
+        return `${commercialProductLabel(p || {})}: ${d.delivered_units}/${planned}`
+      })
+      .join("\n")
     if (
       !window.confirm(
-        `¿Registrar entrega PARCIAL?\n${diffs.length} producto(s) con diferencia.\nEl resto se registrará como entregado completo.`,
+        `¿Registrar entrega PARCIAL?\n${summary}\n\nEl resto se registrará como entregado completo.`,
       )
     ) {
       return
@@ -209,7 +251,7 @@ export default function EntregaDocumentosPage() {
         notes: partialNote.trim() || null,
       })
       setPartialKey(null)
-      setSelectedDiffs({})
+      setDiffDelivered({})
       setPartialNote("")
       void session.softReloadVisitDetail()
     } catch (e) {
@@ -440,7 +482,7 @@ export default function EntregaDocumentosPage() {
                         disabled={busyKey === key}
                         onClick={() => {
                           setPartialKey(key)
-                          setSelectedDiffs({})
+                          setDiffDelivered({})
                           setConfirmKey(null)
                         }}
                       >
@@ -463,43 +505,96 @@ export default function EntregaDocumentosPage() {
                   {partialKey === key ? (
                     <div className="card" style={{ marginTop: 10 }}>
                       <p style={{ marginTop: 0, fontSize: "0.85rem" }}>
-                        Seleccione solo los productos con diferencia. El resto se
-                        registrará como entregado completo tras confirmar.
+                        Marque solo los productos con diferencia e indique las
+                        unidades realmente entregadas (ej. 35 de 60). El resto se
+                        registra completo tras confirmar. Si no conoce la
+                        cantidad, use Incidencia — no se inventan unidades.
                       </p>
                       <div className="stack-gap">
                         {(doc.products || [])
                           .filter((p) => p.source_detail_id != null)
                           .map((p) => {
                             const sid = Number(p.source_detail_id)
+                            const planned =
+                              typeof p.unidades === "number" ? p.unidades : 0
+                            const selected = diffDelivered[sid] != null
                             return (
-                              <label
+                              <div
                                 key={`diff-${sid}`}
+                                className="card guide-product-card"
                                 style={{
-                                  display: "flex",
-                                  gap: 8,
-                                  alignItems: "flex-start",
-                                  fontSize: "0.85rem",
+                                  borderColor: selected
+                                    ? "var(--accent)"
+                                    : undefined,
                                 }}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(selectedDiffs[sid])}
-                                  onChange={(e) =>
-                                    setSelectedDiffs((prev) => ({
-                                      ...prev,
-                                      [sid]: e.target.checked,
-                                    }))
-                                  }
-                                />
-                                <span>
-                                  {commercialProductLabel(p)}
-                                  <span className="muted">
-                                    {" "}
-                                    · {typeof p.unidades === "number" ? p.unidades : 0} u
-                                    (se registrará 0 entregado)
+                                <label
+                                  style={{
+                                    display: "flex",
+                                    gap: 8,
+                                    alignItems: "flex-start",
+                                    fontSize: "0.85rem",
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selected}
+                                    onChange={(e) => {
+                                      setDiffDelivered((prev) => {
+                                        const next = { ...prev }
+                                        if (e.target.checked) {
+                                          next[sid] = ""
+                                        } else {
+                                          delete next[sid]
+                                        }
+                                        return next
+                                      })
+                                    }}
+                                  />
+                                  <span>
+                                    {commercialProductLabel(p)}
+                                    <span className="muted">
+                                      {" "}
+                                      · pedido {planned} u
+                                    </span>
                                   </span>
-                                </span>
-                              </label>
+                                </label>
+                                {selected ? (
+                                  <div
+                                    className="field"
+                                    style={{ marginTop: 8, marginBottom: 0 }}
+                                  >
+                                    <label htmlFor={`deliv-${key}-${sid}`}>
+                                      Entregadas (0…{Math.max(0, planned - 1)})
+                                    </label>
+                                    <input
+                                      id={`deliv-${key}-${sid}`}
+                                      inputMode="decimal"
+                                      value={diffDelivered[sid] ?? ""}
+                                      placeholder="Ej. 35"
+                                      onChange={(e) =>
+                                        setDiffDelivered((prev) => ({
+                                          ...prev,
+                                          [sid]: e.target.value,
+                                        }))
+                                      }
+                                    />
+                                    <button
+                                      type="button"
+                                      className="btn btn-ghost btn-compact"
+                                      style={{ marginTop: 6 }}
+                                      onClick={() =>
+                                        setDiffDelivered((prev) => ({
+                                          ...prev,
+                                          [sid]: "0",
+                                        }))
+                                      }
+                                    >
+                                      Nada entregado (0)
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
                             )
                           })}
                       </div>
@@ -512,11 +607,23 @@ export default function EntregaDocumentosPage() {
                           placeholder="Ej. faltante físico en 2 SKUs"
                         />
                       </div>
+                      <p className="muted" style={{ fontSize: "0.78rem" }}>
+                        Cantidad desconocida →{" "}
+                        <Link
+                          href={buildEntregaHref(planId, customerKey, "incidencia")}
+                        >
+                          registrar incidencia
+                        </Link>
+                        , sin inventar unidades.
+                      </p>
                       <div className="btn-row" style={{ marginTop: 10 }}>
                         <button
                           type="button"
                           className="btn btn-ghost"
-                          onClick={() => setPartialKey(null)}
+                          onClick={() => {
+                            setPartialKey(null)
+                            setDiffDelivered({})
+                          }}
                         >
                           Cancelar
                         </button>

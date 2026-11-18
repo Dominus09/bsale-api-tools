@@ -1292,12 +1292,30 @@ def confirm_document_delivery(
                 raise HTTPException(
                     status_code=400, detail="delivered_units inválido"
                 ) from exc
+            if delivered < 0 or delivered > planned:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Cantidad entregada fuera de rango para {product_name} "
+                        f"(0…{planned})"
+                    ),
+                )
+            if delivered >= planned:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{product_name}: si no hay diferencia, no lo marque como "
+                        "diferencia (use el resto confirmado completo)"
+                    ),
+                )
+            reason = (raw.get("undelivered_reason") or "").strip() or "physical_shortage"
+            note = (raw.get("undelivered_note") or "").strip() or None
             lines.append(
                 {
                     **base,
                     "delivered_units": delivered,
-                    "undelivered_reason": raw.get("undelivered_reason"),
-                    "undelivered_note": raw.get("undelivered_note"),
+                    "undelivered_reason": reason,
+                    "undelivered_note": note,
                 }
             )
         else:
@@ -1409,6 +1427,14 @@ def declare_payment_method(
                 "declared_amount": None,
                 "conformity_invalidated": bool(invalidated),
                 "new_version": int((bumped or visit).get("version") or 0),
+                # check_declared = evidencia del hecho; no autoriza crédito/cheque.
+                "check_is_declaration_only": method_n == "check_declared",
+                "admin_review_hint": (
+                    "Declaración de cheque recibido; revisar condiciones "
+                    "comerciales del cliente si aplica"
+                    if method_n == "check_declared"
+                    else None
+                ),
             },
         )
         conn.commit()
@@ -1450,17 +1476,21 @@ def declare_payment_method(
     finally:
         conn.close()
 
+    note_es = "Forma de pago declarada sin montos. No modifica Bsale."
+    if method_n == "check_declared":
+        note_es = (
+            "Cheque recibido: declaración del chofer. No implica compensación, "
+            "crédito ni autorización comercial. declared_amount=NULL."
+        )
     return serialize_value(
         {
             "collection": row,
             "persisted": True,
             "declarative": True,
+            "check_is_declaration_only": method_n == "check_declared",
             "visit_version": int((bumped or visit).get("version") or 1),
             "conformity_invalidated": bool(invalidated),
-            "note_es": (
-                "Forma de pago declarada (sin montos). "
-                "No es recibo ni verificación Bsale."
-            ),
+            "note_es": note_es,
         }
     )
 

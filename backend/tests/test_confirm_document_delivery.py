@@ -140,6 +140,74 @@ def test_confirm_partial_with_rest_ok(monkeypatch):
     assert by_id[2]["delivered_units"] == 5
 
 
+def test_confirm_partial_keeps_real_quantities_example(monkeypatch):
+    """A=35, B=48 (completo), C=0 — no forzar 0 en A solo por diferencia."""
+    from backend.services.distribuidora import delivery_visit_service as svc
+
+    monkeypatch.setattr(
+        svc.read_svc,
+        "_document_detail_lines",
+        lambda _doc_id: [
+            {"source_detail_id": 101, "unidades": 60, "producto": "A"},
+            {"source_detail_id": 102, "unidades": 48, "producto": "B"},
+            {"source_detail_id": 103, "unidades": 24, "producto": "C"},
+        ],
+    )
+    captured: dict = {}
+    monkeypatch.setattr(
+        svc,
+        "save_document_lines",
+        lambda **kwargs: captured.update(kwargs) or {"ok": True},
+    )
+
+    svc.confirm_document_delivery(
+        user={"id": 1},
+        plan_id=1,
+        visit_id=9,
+        related_document_id=100,
+        mode="partial",
+        difference_lines=[
+            {
+                "source_detail_id": 101,
+                "delivered_units": 35,
+                "undelivered_reason": "physical_shortage",
+            },
+            {
+                "source_detail_id": 103,
+                "delivered_units": 0,
+                "undelivered_reason": "physical_shortage",
+            },
+        ],
+        rest_delivered_confirmed=True,
+    )
+    by_id = {ln["source_detail_id"]: ln["delivered_units"] for ln in captured["lines"]}
+    assert by_id[101] == 35
+    assert by_id[102] == 48
+    assert by_id[103] == 0
+    assert captured["result_status"] == "partial"
+
+
+def test_confirm_partial_rejects_delivered_eq_planned(monkeypatch):
+    from backend.services.distribuidora import delivery_visit_service as svc
+
+    monkeypatch.setattr(
+        svc.read_svc,
+        "_document_detail_lines",
+        lambda _doc_id: [{"source_detail_id": 1, "unidades": 60, "producto": "A"}],
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.confirm_document_delivery(
+            user={"id": 1},
+            plan_id=1,
+            visit_id=9,
+            related_document_id=100,
+            mode="partial",
+            difference_lines=[{"source_detail_id": 1, "delivered_units": 60}],
+            rest_delivered_confirmed=True,
+        )
+    assert ei.value.status_code == 400
+
+
 def test_confirm_partial_rejects_unknown_quantity(monkeypatch):
     from backend.services.distribuidora import delivery_visit_service as svc
 

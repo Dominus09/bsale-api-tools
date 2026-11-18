@@ -174,14 +174,10 @@ export default function DespachosPage() {
         const list = data.items || []
         setItems(list)
         const buckets = partitionPlansByDate(list)
-        const targets = [
-          ...buckets.today,
-          ...buckets.history.slice(0, 12),
-          ...buckets.unknown.slice(0, 4),
-        ]
+        // Solo hoy en la carga inicial (evita N+1 de progreso).
         const map: Record<number, RouteProgress> = {}
         await Promise.all(
-          targets.map(async (p) => {
+          buckets.today.map(async (p) => {
             try {
               const res = await getMyDespachoProgress(p.id)
               if (res.progress) map[p.id] = res.progress
@@ -191,6 +187,21 @@ export default function DespachosPage() {
           }),
         )
         if (!cancelled) setProgressById(map)
+
+        // Historial: progreso diferido, máximo 6 planes, secuencial.
+        const past = [...buckets.history, ...buckets.unknown].slice(0, 6)
+        for (const p of past) {
+          if (cancelled) break
+          try {
+            const res = await getMyDespachoProgress(p.id)
+            if (cancelled || !res.progress) continue
+            setProgressById((prev) =>
+              prev[p.id] ? prev : { ...prev, [p.id]: res.progress },
+            )
+          } catch {
+            /* ignore */
+          }
+        }
       } catch (err) {
         if (cancelled) return
         setError(err instanceof ApiError ? err.message : "No se pudieron cargar los despachos")
@@ -209,6 +220,7 @@ export default function DespachosPage() {
   )
 
   const pendingPast = useMemo(() => {
+    // Sin progreso aún: mostrar históricos (no asumir completados por fecha).
     return [...buckets.history, ...buckets.unknown].filter((p) => {
       const pr = progressById[p.id]
       if (!pr) return true
