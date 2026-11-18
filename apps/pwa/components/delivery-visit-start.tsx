@@ -25,6 +25,8 @@ type Props = {
   /** Si false, no ofrecer "nueva visita" tras cierre válido. */
   allowCreateAfterClose?: boolean
   blockNote?: string | null
+  /** Solo lectura offline: no iniciar / retomar escritura en servidor. */
+  offlineReadOnly?: boolean
   onChanged: () => void
 }
 
@@ -78,6 +80,12 @@ export function DeliveryVisitStart(props: Props) {
     !canResume && !closedWithAdminDup && recovery.canViewClosedResult
 
   async function onStart() {
+    if (props.offlineReadOnly || (typeof navigator !== "undefined" && !navigator.onLine)) {
+      setErr(
+        "Sin conexión. No se inicia ni confirma entrega offline; solo consulta de datos sincronizados.",
+      )
+      return
+    }
     setBusy(true)
     setErr(null)
     try {
@@ -123,6 +131,15 @@ export function DeliveryVisitStart(props: Props) {
       <div className="banner banner-info" style={{ fontSize: "0.85rem" }}>
         Visitas de entrega no disponibles aún
         {props.p4Note ? `: ${props.p4Note}` : " (migración 056 pendiente)."}
+      </div>
+    )
+  }
+
+  if (props.offlineReadOnly) {
+    return (
+      <div className="banner banner-warn" role="status">
+        Modo sin conexión · puedes consultar pedido y estado sincronizado. No se
+        registran entregas, GPS, fotos ni WhatsApp hasta recuperar internet.
       </div>
     )
   }

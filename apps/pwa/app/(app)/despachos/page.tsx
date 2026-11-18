@@ -10,9 +10,17 @@ import {
   type DriverDespacho,
   type RouteProgress,
 } from "@/lib/api"
+import { getSessionUserId } from "@/lib/auth"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDate, statusLabel } from "@/lib/format"
 import { asAmount } from "@/lib/money-display"
+import {
+  formatSyncedAt,
+  getOfflinePlans,
+  isLikelyOfflineError,
+  saveOfflineMeta,
+  saveOfflinePlans,
+} from "@/lib/offline-store"
 import { partitionPlansByDate, santiagoTodayYmd } from "@/lib/plan-buckets"
 
 function PlanCard(props: {
@@ -166,6 +174,7 @@ export default function DespachosPage() {
   const [items, setItems] = useState<DriverDespacho[] | null>(null)
   const [progressById, setProgressById] = useState<Record<number, RouteProgress>>({})
   const [error, setError] = useState<string | null>(null)
+  const [offlineSource, setOfflineSource] = useState<string | null>(null)
   const todayLabel = useMemo(() => {
     const ymd = santiagoTodayYmd()
     const [y, m, d] = ymd.split("-")
@@ -180,6 +189,23 @@ export default function DespachosPage() {
         if (cancelled) return
         const list = data.items || []
         setItems(list)
+        setOfflineSource(null)
+        setError(null)
+        const uid = getSessionUserId() || String(data.driver_user_id || "")
+        if (uid) {
+          const syncedAt = new Date().toISOString()
+          await saveOfflinePlans(uid, {
+            items: list,
+            count: list.length,
+            syncedAt,
+          })
+          await saveOfflineMeta({
+            userId: uid,
+            email: "",
+            profiles: ["chofer"],
+            syncedAt,
+          })
+        }
         const buckets = partitionPlansByDate(list)
         const map: Record<number, RouteProgress> = {}
         await Promise.all(
@@ -209,6 +235,22 @@ export default function DespachosPage() {
         }
       } catch (err) {
         if (cancelled) return
+        if (isLikelyOfflineError(err)) {
+          const uid = getSessionUserId()
+          const cached = uid ? await getOfflinePlans(uid) : null
+          if (cached?.items?.length) {
+            setItems(cached.items as DriverDespacho[])
+            setOfflineSource(cached.syncedAt)
+            setError(null)
+            return
+          }
+          setItems([])
+          setOfflineSource(null)
+          setError(
+            "Sin conexión y no hay despacho descargado en este dispositivo. Conéctate, abre Mis despachos y vuelve a intentar.",
+          )
+          return
+        }
         setError(err instanceof ApiError ? err.message : "No se pudieron cargar los despachos")
         setItems([])
       }
@@ -262,6 +304,12 @@ export default function DespachosPage() {
 
   return (
     <div className="stack-gap">
+      {offlineSource ? (
+        <div className="banner banner-warn" role="status">
+          Datos disponibles sin conexión · Última actualización:{" "}
+          {formatSyncedAt(offlineSource)} · solo lectura
+        </div>
+      ) : null}
       <section>
         <h2 className="section-title">Despacho de hoy</h2>
         <p className="muted" style={{ margin: "0 0 10px", fontSize: "0.78rem" }}>

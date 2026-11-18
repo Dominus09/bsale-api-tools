@@ -22,6 +22,11 @@ export function getSessionEmail(): string | null {
   return localStorage.getItem(EMAIL_KEY)
 }
 
+export function getSessionUserId(): string | null {
+  if (typeof window === "undefined") return null
+  return localStorage.getItem(USER_ID_KEY)
+}
+
 export function setSession(token: string, email: string, userId: number | string) {
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(EMAIL_KEY, email)
@@ -39,6 +44,7 @@ export function setSession(token: string, email: string, userId: number | string
  */
 export function clearSession() {
   if (typeof window === "undefined") return
+  const uid = localStorage.getItem(USER_ID_KEY)
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(EMAIL_KEY)
   localStorage.removeItem(USER_ID_KEY)
@@ -46,6 +52,13 @@ export function clearSession() {
     sessionStorage.clear()
   } catch {
     /* private mode / quota */
+  }
+  if (uid) {
+    void import("./offline-store")
+      .then((m) => m.clearOfflineForUser(uid))
+      .catch(() => {
+        /* ignore */
+      })
   }
 }
 

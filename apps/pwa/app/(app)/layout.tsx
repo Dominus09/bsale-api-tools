@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { AuthGate } from "@/components/auth-gate"
 import { AppMenu } from "@/components/app-menu"
+import { OfflineSyncBanner } from "@/components/offline-sync-banner"
 import { LocalToolsProvider } from "@/components/local-tools-context"
 import { BRAND } from "@/lib/brand"
 
@@ -35,7 +36,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
           <AppMenu />
         </header>
-        <div className="main">{children}</div>
+        <div className="main">
+          <OfflineSyncBanner />
+          {children}
+        </div>
       </LocalToolsProvider>
     </AuthGate>
   )

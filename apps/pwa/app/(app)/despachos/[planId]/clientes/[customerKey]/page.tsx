@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
 import { ApiError, getMyCliente } from "@/lib/api"
+import { getSessionUserId } from "@/lib/auth"
 import { breakdownBoxUnits } from "@/lib/box-units"
 import { formatRutDisplay } from "@/lib/format-rut"
 import { moneyCLP } from "@/lib/delivery-flow"
@@ -12,6 +13,12 @@ import {
   productBarcodeLabel,
   productCategoryLabel,
 } from "@/lib/delivery-labels"
+import {
+  formatSyncedAt,
+  getOfflineClientDetail,
+  isLikelyOfflineError,
+  saveOfflineClientDetail,
+} from "@/lib/offline-store"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 import { DeliveryLocalToolsHost } from "@/components/delivery-local-tools-host"
 import { DeliveryVisitStart } from "@/components/delivery-visit-start"
@@ -29,6 +36,7 @@ export default function ClienteFichaPage() {
   const [reloadToken, setReloadToken] = useState(0)
   const [lightbox, setLightbox] = useState<string | null>(null)
   const [showPedido, setShowPedido] = useState(false)
+  const [offlineSource, setOfflineSource] = useState<string | null>(null)
 
   useEffect(() => {
     if (!Number.isFinite(planId) || planId < 1 || !customerKey) {
@@ -39,16 +47,37 @@ export default function ClienteFichaPage() {
     async function load() {
       try {
         const res = await getMyCliente(planId, customerKey)
-        if (!cancelled) {
-          setData(res)
-          setError(null)
+        if (cancelled) return
+        setData(res)
+        setError(null)
+        setOfflineSource(null)
+        const uid = getSessionUserId()
+        if (uid) {
+          await saveOfflineClientDetail(uid, planId, customerKey, {
+            payload: res,
+            syncedAt: new Date().toISOString(),
+          })
         }
       } catch (err) {
         if (cancelled) return
+        if (isLikelyOfflineError(err) || !navigator.onLine) {
+          const uid = getSessionUserId()
+          const cached = uid
+            ? await getOfflineClientDetail(uid, planId, customerKey)
+            : null
+          if (cached?.payload) {
+            setData(cached.payload as Awaited<ReturnType<typeof getMyCliente>>)
+            setOfflineSource(cached.syncedAt)
+            setError(null)
+            return
+          }
+          setError(
+            "Esta ficha no está descargada. Ábrela con internet para sincronizar documentos y productos.",
+          )
+          return
+        }
         if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
           setError("Cliente no pertenece a tu despacho o no estás autorizado.")
-        } else if (!navigator.onLine) {
-          setError("Sin conexión. Reintenta cuando vuelva la red.")
         } else {
           setError(err instanceof ApiError ? err.message : "Error al cargar ficha")
         }
@@ -126,6 +155,13 @@ export default function ClienteFichaPage() {
       <Link href={backClients} className="muted" style={{ fontSize: "0.85rem" }}>
         ← Clientes
       </Link>
+
+      {offlineSource ? (
+        <div className="banner banner-warn" role="status">
+          Datos disponibles sin conexión · Última actualización:{" "}
+          {formatSyncedAt(offlineSource)} · solo lectura (sin registrar entrega)
+        </div>
+      ) : null}
 
       <div className="card">
         <div className="ficha-head">
@@ -302,10 +338,12 @@ export default function ClienteFichaPage() {
           )
         }
         blockNote={data.capabilities?.note_es || null}
+        offlineReadOnly={Boolean(offlineSource)}
         onChanged={() => setReloadToken((n) => n + 1)}
       />
 
-      {!adminReview &&
+      {!offlineSource &&
+      !adminReview &&
       (data.capabilities?.start_delivery_visit ||
         data.active_visit?.status === "in_progress" ||
         data.capabilities?.create_new_visit_after_close) ? (
@@ -327,22 +365,29 @@ export default function ClienteFichaPage() {
         </div>
       ) : null}
 
-      <DeliveryLocalToolsHost
-        planId={planId}
-        customerKey={customerKey}
-        address={c.address}
-        city={c.city}
-        latitude={c.latitude}
-        longitude={c.longitude}
-        coordinatesSource={c.coordinates_source}
-        locationRegistration={c.location_registration}
-        facade={c.facade}
-        facadePhoto={c.facade_photo}
-        navigationUrl={nav?.available ? nav.google_maps_url || null : null}
-        warnAccuracyM={data.p3?.gps_warn_accuracy_m}
-        backHref={backClients}
-        onChanged={() => setReloadToken((n) => n + 1)}
-      />
+      {offlineSource ? (
+        <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
+          Herramientas de ubicación y fachada requieren internet para guardar en
+          servidor.
+        </div>
+      ) : (
+        <DeliveryLocalToolsHost
+          planId={planId}
+          customerKey={customerKey}
+          address={c.address}
+          city={c.city}
+          latitude={c.latitude}
+          longitude={c.longitude}
+          coordinatesSource={c.coordinates_source}
+          locationRegistration={c.location_registration}
+          facade={c.facade}
+          facadePhoto={c.facade_photo}
+          navigationUrl={nav?.available ? nav.google_maps_url || null : null}
+          warnAccuracyM={data.p3?.gps_warn_accuracy_m}
+          backHref={backClients}
+          onChanged={() => setReloadToken((n) => n + 1)}
+        />
+      )}
 
       {lightbox ? (
         <div className="lightbox" role="dialog" aria-modal="true">
