@@ -8,13 +8,16 @@ import {
   ApiError,
   getMyDespachoProgress,
   listMyClientes,
-  type DriverClientCard,
   type RouteProgress,
 } from "@/lib/api"
 import { getSessionUserId } from "@/lib/auth"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDistanceM, haversineMeters } from "@/lib/geo"
 import { asAmount } from "@/lib/money-display"
+import {
+  normalizeClientCards,
+  type SafeClientCard,
+} from "@/lib/clients-list-safe"
 import { isDeviceOffline, readOfflineClients } from "@/lib/offline-load"
 import { isLikelyOfflineError } from "@/lib/offline-store"
 import { syncPlanForOffline } from "@/lib/offline-sync"
@@ -23,16 +26,16 @@ import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 type Filter = "all" | "pending" | "in_progress" | "managed" | "incidents"
 type SortMode = "route" | "near" | "name"
 
-function attentionOf(c: DriverClientCard) {
+function attentionOf(c: SafeClientCard) {
   return c.attention_status || c.visit_status || "pending"
 }
 
-function isManaged(c: DriverClientCard) {
+function isManaged(c: SafeClientCard) {
   const st = attentionOf(c)
   return st === "completed" || st === "partial" || st === "not_delivered"
 }
 
-function isIncident(c: DriverClientCard) {
+function isIncident(c: SafeClientCard) {
   const st = attentionOf(c)
   return (
     st === "not_delivered" ||
@@ -42,18 +45,34 @@ function isIncident(c: DriverClientCard) {
   )
 }
 
-function stopLabel(c: DriverClientCard, index: number) {
+function stopLabel(c: SafeClientCard, index: number) {
   if (typeof c.route_order === "number" && c.route_order > 0) return Math.trunc(c.route_order)
   return index + 1
+}
+
+function applyClientItems(
+  raw: unknown,
+  setItems: (items: SafeClientCard[]) => void,
+  setDataWarning: (msg: string | null) => void,
+) {
+  const { items, skipped } = normalizeClientCards(raw)
+  setItems(items)
+  setDataWarning(
+    skipped > 0
+      ? `${skipped} ficha(s) local(es) inválida(s) se omitieron.`
+      : null,
+  )
+  return items
 }
 
 export default function ClientesPage() {
   const params = useParams()
   const planId = Number(params.planId)
-  const [items, setItems] = useState<DriverClientCard[]>([])
+  const [items, setItems] = useState<SafeClientCard[]>([])
   const [progress, setProgress] = useState<RouteProgress | null>(null)
   const [q, setQ] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [dataWarning, setDataWarning] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<Filter>("all")
   const [sortMode, setSortMode] = useState<SortMode>("route")
@@ -78,7 +97,7 @@ export default function ClientesPage() {
         const outcome = await readOfflineClients(planId)
         if (cancelled) return
         if (outcome.status === "success") {
-          setItems(outcome.items as DriverClientCard[])
+          applyClientItems(outcome.items, setItems, setDataWarning)
           setError(
             outcome.incomplete
               ? "Descarga incompleta: algunas fichas/productos pueden faltar. Reabre Clientes con internet."
@@ -96,7 +115,7 @@ export default function ClientesPage() {
         if (!q.trim()) {
           const outcome = await readOfflineClients(planId)
           if (!cancelled && outcome.status === "success") {
-            setItems(outcome.items as DriverClientCard[])
+            applyClientItems(outcome.items, setItems, setDataWarning)
             setLoading(false)
             hasLocal = true
           }
@@ -110,8 +129,7 @@ export default function ClientesPage() {
           getMyDespachoProgress(planId).catch(() => null),
         ])
         if (cancelled) return
-        const list = data.items || []
-        setItems(list)
+        applyClientItems(data.items || [], setItems, setDataWarning)
         if (prog?.progress) setProgress(prog.progress)
         setError(null)
         // Liberar UI YA: sync offline en background (antes await bloqueaba "Cargando clientes…").
@@ -365,6 +383,11 @@ export default function ClientesPage() {
       </div>
 
       {error ? <div className="banner banner-error">{error}</div> : null}
+      {dataWarning ? (
+        <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }} role="status">
+          {dataWarning}
+        </p>
+      ) : null}
       {loading && items.length === 0 ? (
         <div className="empty">Cargando clientes…</div>
       ) : null}

@@ -32,6 +32,24 @@ function main() {
     fs.cpSync(pubSrc, pubDest, { recursive: true })
   }
 
+  // Bust SW caches en cada deploy (HTML/chunks viejos rompen Clientes offline).
+  try {
+    const buildIdPath = path.join(root, ".next", "BUILD_ID")
+    const swPath = path.join(pubDest, "sw.js")
+    if (fs.existsSync(buildIdPath) && fs.existsSync(swPath)) {
+      const buildId = fs.readFileSync(buildIdPath, "utf8").trim().slice(0, 16)
+      let sw = fs.readFileSync(swPath, "utf8")
+      sw = sw.replace(
+        /const VERSION = "([^"]+)"/,
+        (_m, ver) => `const VERSION = "${ver}-${buildId}"`,
+      )
+      fs.writeFileSync(swPath, sw)
+      console.log(`[copy-standalone-assets] SW VERSION stamped with BUILD_ID=${buildId}`)
+    }
+  } catch (err) {
+    logErr("[copy-standalone-assets] SW stamp skipped:", err)
+  }
+
   const staticSrc = path.join(root, ".next", "static")
   const staticDest = path.join(standaloneDir, ".next", "static")
   if (fs.existsSync(staticSrc)) {

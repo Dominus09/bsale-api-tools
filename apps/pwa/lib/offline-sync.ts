@@ -10,6 +10,7 @@ import {
   type DriverClientCard,
   type DriverDespacho,
 } from "./api"
+import { extractNextStaticAssets } from "./clients-list-safe"
 import {
   detailLooksComplete,
   planSnapshotIntegrity,
@@ -52,15 +53,15 @@ async function mapPool<T, R>(
 }
 
 /**
- * Precache HTML de rutas del plan (navigate-equivalent via SW PAGE_CACHE).
- * Requiere que el SW cachee text/html de /despachos/* también en fetch no-navigate.
+ * Precache HTML + chunks /_next/static de rutas del plan.
+ * Sin los JS de la ruta, hard-nav offline rompe con client-side exception.
  */
 export async function warmPlanRoutes(
   planId: number,
   customerKeys: string[] = [],
-): Promise<{ ok: boolean; warmed: number; failed: string[] }> {
+): Promise<{ ok: boolean; warmed: number; failed: string[]; assets: number }> {
   if (typeof window === "undefined") {
-    return { ok: false, warmed: 0, failed: ["ssr"] }
+    return { ok: false, warmed: 0, failed: ["ssr"], assets: 0 }
   }
   const paths = [
     "/despachos",
@@ -72,6 +73,8 @@ export async function warmPlanRoutes(
   ]
   const failed: string[] = []
   let warmed = 0
+  const assetSet = new Set<string>()
+
   await mapPool(paths, DETAIL_CONCURRENCY, async (path) => {
     try {
       const res = await fetch(path, {
@@ -83,16 +86,45 @@ export async function warmPlanRoutes(
         return
       }
       warmed += 1
+      const ct = (res.headers.get("content-type") || "").toLowerCase()
+      if (ct.includes("text/html")) {
+        const html = await res.text()
+        for (const asset of extractNextStaticAssets(html)) {
+          assetSet.add(asset)
+        }
+      }
     } catch {
       failed.push(path)
     }
   })
-  // Shell mínimo obligatorio para hard-nav offline.
+
+  let assetsOk = 0
+  const assetList = [...assetSet]
+  await mapPool(assetList, DETAIL_CONCURRENCY, async (assetPath) => {
+    try {
+      const res = await fetch(assetPath, { credentials: "same-origin" })
+      if (!res.ok) {
+        failed.push(assetPath)
+        return
+      }
+      assetsOk += 1
+    } catch {
+      failed.push(assetPath)
+    }
+  })
+
+  // HTML de shell + clientes es obligatorio; chunks se precachean best-effort
+  // (muchas veces ya están en ASSET_CACHE tras abrir Mis despachos).
   const shellOk =
     !failed.includes("/despachos") &&
     !failed.includes(`/despachos/${planId}`) &&
     !failed.includes(`/despachos/${planId}/clientes`)
-  return { ok: shellOk && failed.length === 0, warmed, failed }
+  return {
+    ok: shellOk,
+    warmed,
+    failed,
+    assets: assetsOk,
+  }
 }
 
 export async function syncPlanForOffline(

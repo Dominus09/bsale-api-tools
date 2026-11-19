@@ -26,10 +26,24 @@ describe("offline navigation + sync integrity", () => {
   })
 
   it("SW cachea HTML /despachos en fetch no-navigate (warm)", () => {
-    assert.match(sw, /lq-pwa-v7/)
+    assert.match(sw, /lq-pwa-v8/)
     assert.match(sw, /text\/html/)
     assert.match(sw, /PAGE_CACHE/)
     assert.match(sw, /path\.startsWith\("\/despachos"\)/)
+  })
+
+  it("warm precachea chunks /_next/static del HTML", () => {
+    assert.match(syncSrc, /extractNextStaticAssets/)
+    assert.match(syncSrc, /assetSet/)
+  })
+
+  it("Clientes normaliza snapshot y tiene error boundary", () => {
+    assert.match(clientesSrc, /normalizeClientCards/)
+    const errSrc = readFileSync(
+      join(root, "app/(app)/despachos/[planId]/clientes/error.tsx"),
+      "utf8",
+    )
+    assert.match(errSrc, /ClientesError|No se pudo abrir Clientes/)
   })
 
   it("RSC online usa fetch primero; 503 solo en catch", () => {

@@ -1,16 +1,18 @@
 /* Quillotana Operativa PWA — SW offline-safe.
  * - NUNCA responde null/undefined a respondWith (Safari: "Returned response is null").
  * - NUNCA cachea /api-upstream, /api, /login ni Authorization.
- * - Navegación: network-first → HTML cacheado → offline.html → Response sintético.
- * - Assets estáticos: cache-first con fallback de red; nunca null.
+ * - NUNCA sirve HTML de otra ruta (p.ej. /despachos) para /despachos/:id/clientes:
+ *   eso provoca "Application error: a client-side exception" en Next App Router.
+ * - Navegación: network-first → HTML exacto en cache → offline.html → sintético.
+ * - Assets estáticos: cache-first; nunca null.
  */
-const VERSION = "lq-pwa-v7-offline-integrity";
+const VERSION = "lq-pwa-v8-offline-route-guard";
 const STATIC_CACHE = `${VERSION}-static`;
 const PAGE_CACHE = `${VERSION}-pages`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const OFFLINE_HTML = "/offline.html";
 const OFFLINE_ROUTE = "/offline";
-/** Shell de app para arranque frío offline (consulta IndexedDB vía React). */
+/** Shell de app para arranque frío SOLO cuando la URL pedida es /despachos. */
 const APP_SHELL = "/despachos";
 
 const PRECACHE = [
@@ -58,6 +60,22 @@ function syntheticOfflineText() {
   });
 }
 
+/** JS vacío válido: evita SyntaxError si un chunk no está en cache offline. */
+function syntheticOfflineScript() {
+  return new Response(
+    "/* offline: chunk no cacheado — reabre online y sincroniza el despacho */",
+    {
+      status: 503,
+      statusText: "Offline chunk",
+      headers: {
+        "Content-Type": "application/javascript; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-LQ-Offline-Chunk": "1",
+      },
+    },
+  );
+}
+
 async function matchFirst(urls) {
   for (const u of urls) {
     try {
@@ -72,10 +90,35 @@ async function matchFirst(urls) {
   return null;
 }
 
-async function safeOfflineNavigation() {
-  // Preferir shell de app (IndexedDB) antes que la página informativa.
-  const hit = await matchFirst([APP_SHELL, "/", OFFLINE_HTML, OFFLINE_ROUTE]);
-  return hit || syntheticOfflineHtml();
+async function matchExactPage(request) {
+  const url = new URL(request.url);
+  const candidates = [request, request.url, url.pathname, url.origin + url.pathname];
+  for (const c of candidates) {
+    try {
+      const hit = await caches.match(c, { ignoreSearch: false });
+      if (hit) return hit;
+      const hitIgnore = await caches.match(c, { ignoreSearch: true });
+      if (hitIgnore) return hitIgnore;
+    } catch {
+      /* continue */
+    }
+  }
+  return null;
+}
+
+/**
+ * Fallback offline para navegación.
+ * NUNCA devolver APP_SHELL para una ruta distinta: Next hidrata mal y muestra
+ * "Application error: a client-side exception has occurred".
+ */
+async function safeOfflineNavigation(request) {
+  const path = new URL(request.url).pathname;
+  if (path === APP_SHELL || path === "/") {
+    const hit = await matchFirst([APP_SHELL, "/", OFFLINE_HTML, OFFLINE_ROUTE]);
+    return hit || syntheticOfflineHtml();
+  }
+  const offline = await matchFirst([OFFLINE_HTML, OFFLINE_ROUTE]);
+  return offline || syntheticOfflineHtml();
 }
 
 async function putCopy(cacheName, request, response) {
@@ -102,7 +145,6 @@ self.addEventListener("install", (event) => {
           }
         }),
       );
-      // Garantiza shell offline aunque /offline Next falle.
       try {
         const existing = await cache.match(OFFLINE_HTML);
         if (!existing) {
@@ -143,7 +185,6 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (isApiPath(url.pathname)) return;
 
-  // App Router RSC / data: no cachear; nunca null.
   const isRsc =
     request.headers.get("RSC") === "1" ||
     request.headers.get("Next-Router-State-Tree") != null ||
@@ -155,8 +196,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (isRsc) {
-    // NUNCA devolver text/plain a Flight: rompe soft-nav Next y deja pantallas a medias.
-    // Offline → 503 sin cuerpo Flight para forzar fallback a navegación documento.
+    // Online: fetch normal. Offline: 503 vacío (no text genérico a Flight).
     event.respondWith(
       (async () => {
         try {
@@ -189,35 +229,25 @@ async function handleNavigate(request) {
       await putCopy(PAGE_CACHE, request, fresh);
       return fresh;
     }
-    // Respuesta no OK: intentar cache / offline (nunca null).
-    const cached = await caches.match(request);
+    const cached = await matchExactPage(request);
     if (cached) return cached;
     if (fresh) return fresh;
-    return safeOfflineNavigation();
+    return safeOfflineNavigation(request);
   } catch {
-    const cached = await caches.match(request);
+    const cached = await matchExactPage(request);
     if (cached) return cached;
-    // Arranque frío / ruta no cacheada: servir shell /despachos para montar React+IDB.
-    const pageHit = await matchFirst([
-      request.url,
-      APP_SHELL,
-      "/",
-      OFFLINE_HTML,
-      OFFLINE_ROUTE,
-    ]);
-    return pageHit || syntheticOfflineHtml();
+    return safeOfflineNavigation(request);
   }
 }
 
 async function handleAsset(request) {
   const cached = await caches.match(request);
   if (cached) return cached;
+  const path = new URL(request.url).pathname;
   try {
     const fresh = await fetch(request);
     if (fresh && fresh.ok) {
-      const path = new URL(request.url).pathname;
       const ct = (fresh.headers.get("content-type") || "").toLowerCase();
-      // Warm desde JS (no-navigate) debe poblar PAGE_CACHE para hard-nav offline.
       if (
         ct.includes("text/html") &&
         (path === "/" ||
@@ -231,9 +261,16 @@ async function handleAsset(request) {
       }
       return fresh;
     }
+    if (path.startsWith("/_next/static/") && path.endsWith(".js")) {
+      return syntheticOfflineScript();
+    }
     return fresh || syntheticOfflineText();
   } catch {
     const again = await caches.match(request);
-    return again || syntheticOfflineText();
+    if (again) return again;
+    if (path.startsWith("/_next/static/") && path.endsWith(".js")) {
+      return syntheticOfflineScript();
+    }
+    return syntheticOfflineText();
   }
 }
