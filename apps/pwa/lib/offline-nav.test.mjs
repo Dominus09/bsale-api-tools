@@ -34,7 +34,8 @@ describe("offline navigation + sync integrity", () => {
 
   it("warm precachea chunks /_next/static del HTML", () => {
     assert.match(syncSrc, /extractNextStaticAssets/)
-    assert.match(syncSrc, /assetSet/)
+    assert.match(syncSrc, /criticalAssets/)
+    assert.match(syncSrc, /criticalAssetsOk/)
   })
 
   it("Clientes normaliza snapshot y tiene error boundary", () => {
