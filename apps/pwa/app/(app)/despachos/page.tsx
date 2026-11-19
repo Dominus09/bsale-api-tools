@@ -23,7 +23,11 @@ import {
   saveOfflinePlans,
   type OfflinePlanReady,
 } from "@/lib/offline-store"
-import { syncPriorityPlansForOffline } from "@/lib/offline-sync"
+import {
+  reconcileOfflineNavForCurrentBuild,
+  syncPriorityPlansForOffline,
+} from "@/lib/offline-sync"
+import { isOfflineUiReady, loadOfflineBuildInfo } from "@/lib/offline-build"
 import { partitionPlansByDate, santiagoTodayYmd } from "@/lib/plan-buckets"
 
 function PlanCard(props: {
@@ -91,6 +95,10 @@ function PlanCard(props: {
             <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.78rem" }}>
               {p.planning_code || `Plan #${p.id}`} · Listo para usar sin conexión ·{" "}
               {formatSyncedAt(props.offlineReady.syncedAt)}
+            </p>
+          ) : props.offlineReady?.dataComplete ? (
+            <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.78rem" }}>
+              Datos guardados · falta preparar navegación de esta versión
             </p>
           ) : null}
         </div>
@@ -166,6 +174,10 @@ function PlanCard(props: {
             {p.planning_code || `Plan #${p.id}`} · Listo sin conexión ·{" "}
             {formatSyncedAt(props.offlineReady.syncedAt)}
           </p>
+        ) : props.offlineReady?.dataComplete ? (
+          <p className="muted" style={{ margin: "10px 0 0", fontSize: "0.78rem" }}>
+            Datos guardados · falta preparar navegación de esta versión
+          </p>
         ) : null}
       </div>
 
@@ -208,10 +220,18 @@ export default function DespachosPage() {
       if (outcome.status === "success") {
         setItems(outcome.items as DriverDespacho[])
         setError(null)
-        const ready = await listOfflineReadyPlans(getSessionUserId() || "")
+        const build = await loadOfflineBuildInfo()
+        const ready = await listOfflineReadyPlans(getSessionUserId() || "", {
+          includeDataOnly: true,
+        })
         if (!cancelled) {
           const map: Record<number, OfflinePlanReady> = {}
-          for (const r of ready) map[r.planId] = r
+          for (const r of ready) {
+            map[r.planId] = {
+              ...r,
+              complete: isOfflineUiReady(r, build.navBuildId),
+            }
+          }
           setReadyById(map)
         }
         return
@@ -281,12 +301,23 @@ export default function DespachosPage() {
           }
         }
 
-        // Sync offline en background: no bloquea la lista ni añade banners duplicados.
+        // Reconciliar nav del build actual (no borra fichas IDB).
         if (uid && !cancelled) {
-          const existing = await listOfflineReadyPlans(uid)
+          try {
+            await reconcileOfflineNavForCurrentBuild(uid)
+          } catch {
+            /* best effort */
+          }
+          const build = await loadOfflineBuildInfo()
+          const existing = await listOfflineReadyPlans(uid, { includeDataOnly: true })
           if (!cancelled) {
             const map: Record<number, OfflinePlanReady> = {}
-            for (const r of existing) map[r.planId] = r
+            for (const r of existing) {
+              map[r.planId] = {
+                ...r,
+                complete: isOfflineUiReady(r, build.navBuildId),
+              }
+            }
             setReadyById(map)
           }
           const priority = [

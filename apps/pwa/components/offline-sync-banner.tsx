@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { getSessionUserId } from "@/lib/auth"
+import { isOfflineUiReady, loadOfflineBuildInfo } from "@/lib/offline-build"
 import {
   formatSyncedAt,
   getOfflinePlans,
@@ -14,6 +15,7 @@ export function OfflineSyncBanner() {
   const [syncedAt, setSyncedAt] = useState<string | null>(null)
   const [readyCount, setReadyCount] = useState(0)
   const [hasPlans, setHasPlans] = useState(false)
+  const [hasDataOnly, setHasDataOnly] = useState(false)
 
   useEffect(() => {
     function sync() {
@@ -33,15 +35,21 @@ export function OfflineSyncBanner() {
     async function load() {
       const uid = getSessionUserId()
       if (!uid) return
-      const [ready, plans] = await Promise.all([
-        listOfflineReadyPlans(uid),
+      const build = await loadOfflineBuildInfo()
+      const [readyRows, plans] = await Promise.all([
+        listOfflineReadyPlans(uid, { includeDataOnly: true }),
         getOfflinePlans(uid),
       ])
       if (cancelled) return
-      setReadyCount(ready.length)
+      const uiReady = readyRows.filter((r) => isOfflineUiReady(r, build.navBuildId))
+      const dataOnly = readyRows.filter(
+        (r) => Boolean(r.dataComplete ?? r.complete) && !isOfflineUiReady(r, build.navBuildId),
+      )
+      setReadyCount(uiReady.length)
+      setHasDataOnly(dataOnly.length > 0)
       setHasPlans(Boolean(plans?.items?.length))
       const latest =
-        ready
+        readyRows
           .map((r) => r.syncedAt)
           .filter(Boolean)
           .sort()
@@ -62,9 +70,11 @@ export function OfflineSyncBanner() {
 
   if (!online) {
     const label =
-      readyCount > 0 || hasPlans
+      readyCount > 0
         ? `Sin conexión · Datos guardados: ${formatSyncedAt(syncedAt)}`
-        : "Sin conexión · sin despachos descargados"
+        : hasDataOnly || hasPlans
+          ? `Sin conexión · Datos locales · falta cache de esta versión`
+          : "Sin conexión · sin despachos descargados"
     return (
       <p
         className="muted"
@@ -85,6 +95,18 @@ export function OfflineSyncBanner() {
       >
         {readyCount} listo{readyCount === 1 ? "" : "s"} sin conexión ·{" "}
         {formatSyncedAt(syncedAt)}
+      </p>
+    )
+  }
+
+  if (hasDataOnly) {
+    return (
+      <p
+        className="muted"
+        role="status"
+        style={{ margin: "0 0 10px", fontSize: "0.78rem", lineHeight: 1.35 }}
+      >
+        Datos guardados · preparando navegación de esta versión…
       </p>
     )
   }

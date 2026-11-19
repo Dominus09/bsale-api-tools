@@ -39,10 +39,15 @@ describe("service worker offline shell", () => {
     )
   })
 
-  it("chunks JS offline no devuelven text/plain (SyntaxError)", () => {
-    assert.match(sw, /syntheticOfflineScript/)
-    assert.match(sw, /X-LQ-Offline-Chunk/)
-    assert.match(sw, /application\/javascript/)
+  it("chunks JS offline: 503 explícito sin módulo ficticio", () => {
+    assert.match(sw, /missingOfflineChunkResponse/)
+    assert.match(sw, /X-LQ-Offline-Chunk-Missing/)
+    assert.doesNotMatch(sw, /syntheticOfflineScript/)
+    const fnStart = sw.indexOf("function missingOfflineChunkResponse")
+    const fnEnd = sw.indexOf("async function matchFirst", fnStart)
+    const body = sw.slice(fnStart, fnEnd)
+    assert.doesNotMatch(body, /application\/javascript/)
+    assert.doesNotMatch(body, /Content-Type/)
   })
 
   it("no intercepta API ni login", () => {

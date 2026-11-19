@@ -32,19 +32,34 @@ function main() {
     fs.cpSync(pubSrc, pubDest, { recursive: true })
   }
 
-  // Bust SW caches en cada deploy (HTML/chunks viejos rompen Clientes offline).
+  // Bust SW caches + alinear offline-build.json (navBuildId) en cada deploy.
   try {
     const buildIdPath = path.join(root, ".next", "BUILD_ID")
     const swPath = path.join(pubDest, "sw.js")
     if (fs.existsSync(buildIdPath) && fs.existsSync(swPath)) {
       const buildId = fs.readFileSync(buildIdPath, "utf8").trim().slice(0, 16)
       let sw = fs.readFileSync(swPath, "utf8")
+      const baseVer = "lq-pwa-v8-offline-route-guard"
       sw = sw.replace(
-        /const VERSION = "([^"]+)"/,
-        (_m, ver) => `const VERSION = "${ver}-${buildId}"`,
+        /const VERSION = "lq-pwa-v8-offline-route-guard(?:-[^"]*)?"/,
+        `const VERSION = "${baseVer}-${buildId}"`,
       )
       fs.writeFileSync(swPath, sw)
-      console.log(`[copy-standalone-assets] SW VERSION stamped with BUILD_ID=${buildId}`)
+
+      const buildJson = JSON.stringify(
+        {
+          navBuildId: buildId,
+          swVersionPrefix: baseVer,
+        },
+        null,
+        2,
+      )
+      fs.writeFileSync(path.join(pubDest, "offline-build.json"), `${buildJson}\n`)
+      // También en public/ fuente para next start local tras build.
+      fs.writeFileSync(path.join(pubSrc, "offline-build.json"), `${buildJson}\n`)
+      console.log(
+        `[copy-standalone-assets] SW+offline-build stamped BUILD_ID=${buildId}`,
+      )
     }
   } catch (err) {
     logErr("[copy-standalone-assets] SW stamp skipped:", err)

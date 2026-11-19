@@ -20,6 +20,7 @@ const PRECACHE = [
   OFFLINE_ROUTE,
   APP_SHELL,
   "/",
+  "/offline-build.json",
   "/manifest.webmanifest",
   "/icons/pwa/icon-192.png",
   "/icons/pwa/icon-512.png",
@@ -60,20 +61,21 @@ function syntheticOfflineText() {
   });
 }
 
-/** JS vacío válido: evita SyntaxError si un chunk no está en cache offline. */
-function syntheticOfflineScript() {
-  return new Response(
-    "/* offline: chunk no cacheado — reabre online y sincroniza el despacho */",
-    {
-      status: 503,
-      statusText: "Offline chunk",
-      headers: {
-        "Content-Type": "application/javascript; charset=utf-8",
-        "Cache-Control": "no-store",
-        "X-LQ-Offline-Chunk": "1",
-      },
+/**
+ * Chunk JS ausente offline: fallo explícito SIN fingir módulo Next.
+ * - No Content-Type application/javascript
+ * - No cuerpo que el motor ejecute como script
+ * - Header dedicado para diagnóstico
+ */
+function missingOfflineChunkResponse() {
+  return new Response(null, {
+    status: 503,
+    statusText: "Offline chunk missing",
+    headers: {
+      "Cache-Control": "no-store",
+      "X-LQ-Offline-Chunk-Missing": "1",
     },
-  );
+  });
 }
 
 async function matchFirst(urls) {
@@ -262,14 +264,14 @@ async function handleAsset(request) {
       return fresh;
     }
     if (path.startsWith("/_next/static/") && path.endsWith(".js")) {
-      return syntheticOfflineScript();
+      return missingOfflineChunkResponse();
     }
     return fresh || syntheticOfflineText();
   } catch {
     const again = await caches.match(request);
     if (again) return again;
     if (path.startsWith("/_next/static/") && path.endsWith(".js")) {
-      return syntheticOfflineScript();
+      return missingOfflineChunkResponse();
     }
     return syntheticOfflineText();
   }

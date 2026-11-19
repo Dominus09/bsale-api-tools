@@ -1,7 +1,6 @@
 /**
  * Descarga completa de un despacho para consulta offline (solo lectura).
- * Marca plan:*:ready.complete solo si clientes + fichas (docs/productos/cantidades)
- * y rutas HTML warm quedan validados.
+ * Separa datos de negocio (IDB) de navegación (HTML/chunks del build actual).
  */
 
 import {
@@ -11,8 +10,12 @@ import {
   type DriverDespacho,
 } from "./api"
 import { extractNextStaticAssets } from "./clients-list-safe"
+import { loadOfflineBuildInfo } from "./offline-build"
 import {
   detailLooksComplete,
+  getOfflineClients,
+  getOfflinePlanReady,
+  listOfflineReadyPlans,
   planSnapshotIntegrity,
   saveOfflineClientDetail,
   saveOfflineClients,
@@ -31,6 +34,15 @@ export type SyncPlanProgress = {
   clientsTotal: number
   detailsDone: number
   message: string
+}
+
+export type WarmPlanResult = {
+  ok: boolean
+  warmed: number
+  failed: string[]
+  assets: number
+  criticalAssets: string[]
+  navBuildId: string
 }
 
 async function mapPool<T, R>(
@@ -52,28 +64,55 @@ async function mapPool<T, R>(
   return out
 }
 
+function emptyReady(
+  planId: number,
+  syncedAt: string,
+  navBuildId: string | null,
+): OfflinePlanReady {
+  return {
+    planId,
+    clientsCount: 0,
+    detailsCount: 0,
+    syncedAt,
+    dataComplete: false,
+    navReady: false,
+    navBuildId,
+    complete: false,
+  }
+}
+
 /**
- * Precache HTML + chunks /_next/static de rutas del plan.
- * Sin los JS de la ruta, hard-nav offline rompe con client-side exception.
+ * Precache HTML + chunks /_next/static.
+ * `ok` exige HTML crítico Y todos los JS/CSS extraídos de esos HTML.
  */
 export async function warmPlanRoutes(
   planId: number,
   customerKeys: string[] = [],
-): Promise<{ ok: boolean; warmed: number; failed: string[]; assets: number }> {
+): Promise<WarmPlanResult> {
+  const build = await loadOfflineBuildInfo()
   if (typeof window === "undefined") {
-    return { ok: false, warmed: 0, failed: ["ssr"], assets: 0 }
+    return {
+      ok: false,
+      warmed: 0,
+      failed: ["ssr"],
+      assets: 0,
+      criticalAssets: [],
+      navBuildId: build.navBuildId,
+    }
   }
-  const paths = [
+
+  const criticalPaths = [
     "/despachos",
     `/despachos/${planId}`,
     `/despachos/${planId}/clientes`,
-    ...customerKeys.slice(0, MAX_CLIENTS).map(
-      (key) => `/despachos/${planId}/clientes/${encodeURIComponent(key)}`,
-    ),
   ]
+  const optionalPaths = customerKeys.slice(0, MAX_CLIENTS).map(
+    (key) => `/despachos/${planId}/clientes/${encodeURIComponent(key)}`,
+  )
+  const paths = [...criticalPaths, ...optionalPaths]
   const failed: string[] = []
   let warmed = 0
-  const assetSet = new Set<string>()
+  const assetsByPath = new Map<string, string[]>()
 
   await mapPool(paths, DETAIL_CONCURRENCY, async (path) => {
     try {
@@ -89,18 +128,27 @@ export async function warmPlanRoutes(
       const ct = (res.headers.get("content-type") || "").toLowerCase()
       if (ct.includes("text/html")) {
         const html = await res.text()
-        for (const asset of extractNextStaticAssets(html)) {
-          assetSet.add(asset)
-        }
+        assetsByPath.set(path, extractNextStaticAssets(html))
       }
     } catch {
       failed.push(path)
     }
   })
 
+  const criticalAssets = new Set<string>()
+  for (const path of criticalPaths) {
+    for (const a of assetsByPath.get(path) || []) criticalAssets.add(a)
+  }
+  // También precachear assets de fichas (no bloquean ok si fallan).
+  const optionalAssets = new Set<string>()
+  for (const path of optionalPaths) {
+    for (const a of assetsByPath.get(path) || []) {
+      if (!criticalAssets.has(a)) optionalAssets.add(a)
+    }
+  }
+
   let assetsOk = 0
-  const assetList = [...assetSet]
-  await mapPool(assetList, DETAIL_CONCURRENCY, async (assetPath) => {
+  await mapPool([...criticalAssets], DETAIL_CONCURRENCY, async (assetPath) => {
     try {
       const res = await fetch(assetPath, { credentials: "same-origin" })
       if (!res.ok) {
@@ -112,18 +160,24 @@ export async function warmPlanRoutes(
       failed.push(assetPath)
     }
   })
+  await mapPool([...optionalAssets], DETAIL_CONCURRENCY, async (assetPath) => {
+    try {
+      const res = await fetch(assetPath, { credentials: "same-origin" })
+      if (res.ok) assetsOk += 1
+    } catch {
+      /* optional */
+    }
+  })
 
-  // HTML de shell + clientes es obligatorio; chunks se precachean best-effort
-  // (muchas veces ya están en ASSET_CACHE tras abrir Mis despachos).
-  const shellOk =
-    !failed.includes("/despachos") &&
-    !failed.includes(`/despachos/${planId}`) &&
-    !failed.includes(`/despachos/${planId}/clientes`)
+  const shellOk = criticalPaths.every((p) => !failed.includes(p))
+  const criticalAssetsOk = [...criticalAssets].every((a) => !failed.includes(a))
   return {
-    ok: shellOk,
+    ok: shellOk && criticalAssetsOk && criticalAssets.size > 0,
     warmed,
     failed,
     assets: assetsOk,
+    criticalAssets: [...criticalAssets],
+    navBuildId: build.navBuildId,
   }
 }
 
@@ -133,6 +187,7 @@ export async function syncPlanForOffline(
   onProgress?: (p: SyncPlanProgress) => void,
 ): Promise<OfflinePlanReady> {
   const syncedAt = new Date().toISOString()
+  const build = await loadOfflineBuildInfo()
   onProgress?.({
     planId,
     phase: "clients",
@@ -199,8 +254,11 @@ export async function syncPlanForOffline(
     truncated,
   })
 
-  let complete = integrity.ok
-  if (complete) {
+  const dataComplete = integrity.ok
+  let navReady = false
+  let navBuildId: string | null = null
+
+  if (dataComplete) {
     onProgress?.({
       planId,
       phase: "warm",
@@ -212,16 +270,19 @@ export async function syncPlanForOffline(
       planId,
       targets.map((c) => c.customer_key),
     )
-    if (!warm.ok) {
-      complete = false
-    }
+    navReady = warm.ok
+    navBuildId = warm.navBuildId
   }
 
+  const complete = dataComplete && navReady && navBuildId === build.navBuildId
   const ready: OfflinePlanReady = {
     planId,
     clientsCount: list.length,
     detailsCount,
     syncedAt,
+    dataComplete,
+    navReady,
+    navBuildId,
     complete,
   }
   await saveOfflinePlanReady(userId, ready)
@@ -232,32 +293,97 @@ export async function syncPlanForOffline(
     detailsDone: detailsCount,
     message: complete
       ? `Listo sin conexión · ${integrity.expectedClients} clientes · ${integrity.expectedDocuments} docs`
-      : integrity.ok
-        ? "Rutas offline incompletas; reintenta con internet"
-        : integrity.reason || "Descarga incompleta",
+      : !dataComplete
+        ? integrity.reason || "Descarga incompleta"
+        : "Datos guardados · falta cache de navegación de este build",
   })
   return ready
 }
 
-/** Sincroniza planes prioritarios sin abrir cada ficha a mano. */
+/**
+ * Tras deploy (SW v8 + BUILD_ID nuevo): no borra fichas/productos.
+ * Marca complete=false si navBuildId no coincide; re-warms online.
+ */
+export async function reconcileOfflineNavForCurrentBuild(
+  userId: string,
+): Promise<OfflinePlanReady[]> {
+  const build = await loadOfflineBuildInfo()
+  const existing = await listOfflineReadyPlans(userId, {
+    includeDataOnly: true,
+  })
+  const out: OfflinePlanReady[] = []
+
+  for (const row of existing) {
+    const dataOk = Boolean(row.dataComplete ?? row.complete)
+    if (!dataOk) {
+      out.push(row)
+      continue
+    }
+    const buildMatch = row.navBuildId === build.navBuildId && Boolean(row.navReady)
+    if (buildMatch) {
+      const ok: OfflinePlanReady = {
+        ...row,
+        dataComplete: true,
+        navReady: true,
+        navBuildId: build.navBuildId,
+        complete: true,
+      }
+      await saveOfflinePlanReady(userId, ok)
+      out.push(ok)
+      continue
+    }
+
+    // Demote UI readiness; keep data.
+    const demoted: OfflinePlanReady = {
+      ...row,
+      dataComplete: true,
+      navReady: false,
+      navBuildId: row.navBuildId || null,
+      complete: false,
+    }
+    await saveOfflinePlanReady(userId, demoted)
+
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      out.push(demoted)
+      continue
+    }
+
+    const clients = await getOfflineClients(userId, row.planId)
+    const keys = (clients?.items || [])
+      .map((raw) =>
+        raw && typeof raw === "object"
+          ? String((raw as { customer_key?: string }).customer_key || "")
+          : "",
+      )
+      .filter(Boolean)
+    const warm = await warmPlanRoutes(row.planId, keys)
+    const refreshed: OfflinePlanReady = {
+      ...demoted,
+      navReady: warm.ok,
+      navBuildId: warm.navBuildId,
+      complete: warm.ok,
+      syncedAt: new Date().toISOString(),
+    }
+    await saveOfflinePlanReady(userId, refreshed)
+    out.push(refreshed)
+  }
+
+  return out
+}
+
 export async function syncPriorityPlansForOffline(
   userId: string,
   plans: DriverDespacho[],
   onProgress?: (p: SyncPlanProgress) => void,
 ): Promise<OfflinePlanReady[]> {
+  const build = await loadOfflineBuildInfo()
   const out: OfflinePlanReady[] = []
   for (const plan of plans) {
     try {
       const ready = await syncPlanForOffline(userId, plan.id, onProgress)
       out.push(ready)
     } catch {
-      const failed: OfflinePlanReady = {
-        planId: plan.id,
-        clientsCount: 0,
-        detailsCount: 0,
-        syncedAt: new Date().toISOString(),
-        complete: false,
-      }
+      const failed = emptyReady(plan.id, new Date().toISOString(), build.navBuildId)
       await saveOfflinePlanReady(userId, failed)
       out.push(failed)
       onProgress?.({
@@ -270,4 +396,22 @@ export async function syncPriorityPlansForOffline(
     }
   }
   return out
+}
+
+export async function getPlanReadyForUi(
+  userId: string,
+  planId: number,
+): Promise<OfflinePlanReady | null> {
+  const ready = await getOfflinePlanReady(userId, planId)
+  if (!ready) return null
+  const build = await loadOfflineBuildInfo()
+  const dataOk = Boolean(ready.dataComplete ?? ready.complete)
+  const navOk =
+    Boolean(ready.navReady) && ready.navBuildId === build.navBuildId
+  return {
+    ...ready,
+    dataComplete: dataOk,
+    navReady: navOk,
+    complete: dataOk && navOk,
+  }
 }

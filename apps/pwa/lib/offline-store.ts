@@ -39,7 +39,19 @@ export type OfflinePlanReady = {
   clientsCount: number
   detailsCount: number
   syncedAt: string
-  /** true solo si hay lista de clientes y al menos 1 ficha, o 0 clientes legítimos. */
+  /**
+   * Datos de negocio (clientes/fichas/docs/productos) OK.
+   * Persiste entre deploys; no se borra al cambiar SW.
+   */
+  dataComplete?: boolean
+  /** HTML + chunks del build actual listos para hard-nav. */
+  navReady?: boolean
+  /** Build id con el que se warm-earon las rutas (ver offline-build.json). */
+  navBuildId?: string | null
+  /**
+   * true solo si data + navegación del build actual están listos.
+   * No usar como única señal tras un redeploy sin re-warm.
+   */
   complete: boolean
 }
 
@@ -188,13 +200,23 @@ export async function getOfflinePlanReady(
   return idbGet(`${offlineUserPrefix(userId)}plan:${planId}:ready`)
 }
 
+/**
+ * Lista marcas ready del usuario.
+ * - Por defecto solo las que afirman `complete` (UI "listo").
+ * - `includeDataOnly`: incluye planes con datos aunque nav/build no estén listos
+ *   (para reconcile tras deploy; no borra fichas).
+ */
 export async function listOfflineReadyPlans(
   userId: string | number,
+  opts?: { includeDataOnly?: boolean; ignoreBuildMismatch?: boolean },
 ): Promise<OfflinePlanReady[]> {
   try {
     const db = await openDb()
     const prefix = `${offlineUserPrefix(userId)}plan:`
     const out: OfflinePlanReady[] = []
+    const includeDataOnly = Boolean(
+      opts?.includeDataOnly || opts?.ignoreBuildMismatch,
+    )
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, "readonly")
       const req = tx.objectStore(STORE).openCursor()
@@ -204,7 +226,14 @@ export async function listOfflineReadyPlans(
         const key = String(cursor.key)
         if (key.startsWith(prefix) && key.endsWith(":ready")) {
           const val = cursor.value as OfflinePlanReady
-          if (val?.complete) out.push(val)
+          if (!val) {
+            cursor.continue()
+            return
+          }
+          const dataOk = Boolean(val.dataComplete ?? val.complete)
+          if (val.complete || (includeDataOnly && dataOk)) {
+            out.push(val)
+          }
         }
         cursor.continue()
       }
