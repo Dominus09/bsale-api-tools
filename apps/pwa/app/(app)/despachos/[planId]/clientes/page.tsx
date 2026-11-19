@@ -6,7 +6,6 @@ import { useEffect, useMemo, useState } from "react"
 import { RouteProgressCard } from "@/components/route-progress-card"
 import {
   ApiError,
-  getMyCliente,
   getMyDespachoProgress,
   listMyClientes,
   type DriverClientCard,
@@ -16,15 +15,9 @@ import { getSessionUserId } from "@/lib/auth"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDistanceM, haversineMeters } from "@/lib/geo"
 import { asAmount } from "@/lib/money-display"
-import {
-  formatSyncedAt,
-  getOfflineClients,
-  getOfflinePlanReady,
-  isLikelyOfflineError,
-  saveOfflineClientDetail,
-  saveOfflineClients,
-  saveOfflinePlanReady,
-} from "@/lib/offline-store"
+import { isDeviceOffline, readOfflineClients } from "@/lib/offline-load"
+import { isLikelyOfflineError } from "@/lib/offline-store"
+import { syncPlanForOffline } from "@/lib/offline-sync"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 
 type Filter = "all" | "pending" | "in_progress" | "managed" | "incidents"
@@ -62,24 +55,9 @@ export default function ClientesPage() {
   const [q, setQ] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [offline, setOffline] = useState(false)
-  const [offlineSource, setOfflineSource] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>("all")
   const [sortMode, setSortMode] = useState<SortMode>("route")
   const [origin, setOrigin] = useState<{ lat: number; lng: number } | null>(null)
-
-  useEffect(() => {
-    function syncOnline() {
-      setOffline(typeof navigator !== "undefined" && !navigator.onLine)
-    }
-    syncOnline()
-    window.addEventListener("online", syncOnline)
-    window.addEventListener("offline", syncOnline)
-    return () => {
-      window.removeEventListener("online", syncOnline)
-      window.removeEventListener("offline", syncOnline)
-    }
-  }, [])
 
   useEffect(() => {
     if (!Number.isFinite(planId) || planId < 1) {
@@ -90,7 +68,33 @@ export default function ClientesPage() {
     let cancelled = false
     const handle = window.setTimeout(async () => {
       setLoading(true)
+
+      async function loadFromOffline() {
+        if (q.trim()) {
+          setError("La búsqueda requiere conexión. Limpia el filtro para ver datos sincronizados.")
+          setItems([])
+          return
+        }
+        const outcome = await readOfflineClients(planId)
+        if (cancelled) return
+        if (outcome.status === "success") {
+          setItems(outcome.items as DriverClientCard[])
+          setError(
+            outcome.incomplete
+              ? "Descarga incompleta: algunas fichas/productos pueden faltar. Reabre Clientes con internet."
+              : null,
+          )
+          return
+        }
+        setItems([])
+        setError(outcome.message)
+      }
+
       try {
+        if (isDeviceOffline()) {
+          await loadFromOffline()
+          return
+        }
         const [data, prog] = await Promise.all([
           listMyClientes(planId, q),
           getMyDespachoProgress(planId).catch(() => null),
@@ -100,69 +104,14 @@ export default function ClientesPage() {
         setItems(list)
         if (prog?.progress) setProgress(prog.progress)
         setError(null)
-        setOfflineSource(null)
         const uid = getSessionUserId()
-        if (uid && !q.trim()) {
-          const syncedAt = new Date().toISOString()
-          await saveOfflineClients(uid, planId, {
-            items: list,
-            count: list.length,
-            summary: data.summary as Record<string, unknown> | undefined,
-            syncedAt,
-          })
-          // Prefetch fichas (docs/productos) para consulta offline de solo lectura.
-          void (async () => {
-            let detailsCount = 0
-            for (const c of list.slice(0, 80)) {
-              if (cancelled) break
-              try {
-                const detail = await getMyCliente(planId, c.customer_key)
-                await saveOfflineClientDetail(uid, planId, c.customer_key, {
-                  payload: detail,
-                  syncedAt,
-                })
-                detailsCount += 1
-              } catch {
-                /* best effort */
-              }
-            }
-            const expected = Math.min(list.length, 80)
-            const complete =
-              list.length === 0 || (expected > 0 && detailsCount >= expected)
-            await saveOfflinePlanReady(uid, {
-              planId,
-              clientsCount: list.length,
-              detailsCount,
-              syncedAt,
-              complete,
-            })
-          })()
+        if (uid && !q.trim() && !cancelled) {
+          await syncPlanForOffline(uid, planId)
         }
       } catch (err) {
         if (cancelled) return
-        if (isLikelyOfflineError(err) || !navigator.onLine) {
-          if (q.trim()) {
-            setError("La búsqueda requiere conexión. Limpia el filtro para ver datos sincronizados.")
-            setItems([])
-            return
-          }
-          const uid = getSessionUserId()
-          const cached = uid ? await getOfflineClients(uid, planId) : null
-          const ready = uid ? await getOfflinePlanReady(uid, planId) : null
-          if (cached?.items?.length) {
-            setItems(cached.items as DriverClientCard[])
-            setOfflineSource(cached.syncedAt)
-            setError(
-              ready && !ready.complete
-                ? "Descarga incompleta: algunas fichas/productos pueden faltar. Reabre Clientes con internet."
-                : null,
-            )
-            return
-          }
-          setItems([])
-          setError(
-            "Este despacho no está disponible offline. Ábrelo con internet (lista de clientes) para sincronizar.",
-          )
+        if (isLikelyOfflineError(err) || isDeviceOffline()) {
+          await loadFromOffline()
           return
         }
         if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
@@ -326,17 +275,6 @@ export default function ClientesPage() {
 
       {progress ? (
         <RouteProgressCard progress={progress} variant="compact" nextHref={nextHref} />
-      ) : null}
-
-      {offlineSource ? (
-        <div className="banner banner-warn" role="status">
-          Datos disponibles sin conexión · Última actualización:{" "}
-          {formatSyncedAt(offlineSource)} · solo lectura
-        </div>
-      ) : offline ? (
-        <div className="banner banner-warn" role="status">
-          Sin conexión · solo consulta de datos ya sincronizados
-        </div>
       ) : null}
 
       <div className="field" style={{ marginBottom: 0 }}>

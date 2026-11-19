@@ -10,15 +10,11 @@ import {
   type DriverDespacho,
   type RouteProgress,
 } from "@/lib/api"
-import { getSessionUserId } from "@/lib/auth"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDate, statusLabel } from "@/lib/format"
 import { asAmount } from "@/lib/money-display"
-import {
-  formatSyncedAt,
-  getOfflinePlans,
-  isLikelyOfflineError,
-} from "@/lib/offline-store"
+import { isDeviceOffline, readOfflinePlanFromList } from "@/lib/offline-load"
+import { isLikelyOfflineError } from "@/lib/offline-store"
 
 export default function DespachoDetailPage() {
   const params = useParams()
@@ -26,7 +22,6 @@ export default function DespachoDetailPage() {
   const [plan, setPlan] = useState<DriverDespacho | null>(null)
   const [progress, setProgress] = useState<RouteProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [offlineSource, setOfflineSource] = useState<string | null>(null)
 
   useEffect(() => {
     if (!Number.isFinite(planId) || planId < 1) {
@@ -34,32 +29,32 @@ export default function DespachoDetailPage() {
       return
     }
     let cancelled = false
+    async function loadFromOffline() {
+      const outcome = await readOfflinePlanFromList(planId)
+      if (cancelled) return
+      if (outcome.status === "success") {
+        setPlan(outcome.plan as DriverDespacho)
+        setProgress(null)
+        setError(null)
+        return
+      }
+      setError(outcome.message)
+    }
     async function load() {
+      if (isDeviceOffline()) {
+        await loadFromOffline()
+        return
+      }
       try {
         const data = await getMyDespacho(planId)
         if (cancelled) return
         setPlan(data.plan)
         setProgress(data.progress || null)
-        setOfflineSource(null)
         setError(null)
       } catch (err) {
         if (cancelled) return
-        if (isLikelyOfflineError(err)) {
-          const uid = getSessionUserId()
-          const cached = uid ? await getOfflinePlans(uid) : null
-          const hit = (cached?.items || []).find(
-            (raw) => Number((raw as DriverDespacho).id) === planId,
-          ) as DriverDespacho | undefined
-          if (hit) {
-            setPlan(hit)
-            setProgress(null)
-            setOfflineSource(cached?.syncedAt || null)
-            setError(null)
-            return
-          }
-          setError(
-            "Este despacho no está descargado en el dispositivo. Ábrelo con internet para sincronizarlo.",
-          )
+        if (isLikelyOfflineError(err) || isDeviceOffline()) {
+          await loadFromOffline()
           return
         }
         if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
@@ -95,12 +90,6 @@ export default function DespachoDetailPage() {
 
   return (
     <div className="stack-gap">
-      {offlineSource ? (
-        <div className="banner banner-warn" role="status">
-          Datos disponibles sin conexión · Última actualización:{" "}
-          {formatSyncedAt(offlineSource)} · solo lectura
-        </div>
-      ) : null}
       <div className="card despacho-hero">
         <div className="despacho-hero-head">
           <div>

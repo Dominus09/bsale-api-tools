@@ -14,14 +14,16 @@ import { getSessionUserId } from "@/lib/auth"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDate, statusLabel } from "@/lib/format"
 import { asAmount } from "@/lib/money-display"
+import { isDeviceOffline, readOfflineDespachos } from "@/lib/offline-load"
 import {
   formatSyncedAt,
-  getOfflinePlans,
   isLikelyOfflineError,
   listOfflineReadyPlans,
   saveOfflineMeta,
   saveOfflinePlans,
+  type OfflinePlanReady,
 } from "@/lib/offline-store"
+import { syncPriorityPlansForOffline } from "@/lib/offline-sync"
 import { partitionPlansByDate, santiagoTodayYmd } from "@/lib/plan-buckets"
 
 function PlanCard(props: {
@@ -30,6 +32,7 @@ function PlanCard(props: {
   compact?: boolean
   cta?: string
   progress?: RouteProgress | null
+  offlineReady?: OfflinePlanReady | null
 }) {
   const p = props.plan
   const amount = asAmount(p.amount_total)
@@ -82,6 +85,12 @@ function PlanCard(props: {
           {remaining != null && remaining > 0 && !props.progress ? (
             <p className="muted plan-card-remaining">
               Faltan {remaining} cliente{remaining === 1 ? "" : "s"} por gestionar
+            </p>
+          ) : null}
+          {props.offlineReady?.complete ? (
+            <p className="muted" style={{ margin: "8px 0 0", fontSize: "0.78rem" }}>
+              {p.planning_code || `Plan #${p.id}`} · Listo para usar sin conexión ·{" "}
+              {formatSyncedAt(props.offlineReady.syncedAt)}
             </p>
           ) : null}
         </div>
@@ -151,6 +160,13 @@ function PlanCard(props: {
             {amount != null ? moneyCLP(amount) : "Monto no disponible"}
           </div>
         </div>
+
+        {props.offlineReady?.complete ? (
+          <div className="banner banner-info" style={{ marginTop: 10, fontSize: "0.82rem" }}>
+            {p.planning_code || `Plan #${p.id}`} · Listo para usar sin conexión ·{" "}
+            {formatSyncedAt(props.offlineReady.syncedAt)}
+          </div>
+        ) : null}
       </div>
 
       <div className="plan-card-footer">
@@ -175,8 +191,8 @@ export default function DespachosPage() {
   const [items, setItems] = useState<DriverDespacho[] | null>(null)
   const [progressById, setProgressById] = useState<Record<number, RouteProgress>>({})
   const [error, setError] = useState<string | null>(null)
-  const [offlineSource, setOfflineSource] = useState<string | null>(null)
-  const [offlineReadyCount, setOfflineReadyCount] = useState(0)
+  const [syncNote, setSyncNote] = useState<string | null>(null)
+  const [readyById, setReadyById] = useState<Record<number, OfflinePlanReady>>({})
   const todayLabel = useMemo(() => {
     const ymd = santiagoTodayYmd()
     const [y, m, d] = ymd.split("-")
@@ -185,14 +201,42 @@ export default function DespachosPage() {
 
   useEffect(() => {
     let cancelled = false
+
+    async function applyOfflineSnapshot() {
+      const outcome = await readOfflineDespachos()
+      if (cancelled) return
+      if (outcome.status === "success") {
+        setItems(outcome.items as DriverDespacho[])
+        setError(null)
+        const ready = await listOfflineReadyPlans(getSessionUserId() || "")
+        if (!cancelled) {
+          const map: Record<number, OfflinePlanReady> = {}
+          for (const r of ready) map[r.planId] = r
+          setReadyById(map)
+        }
+        return
+      }
+      setItems([])
+      setError(
+        outcome.status === "empty"
+          ? outcome.message
+          : outcome.message ||
+              "No tienes despachos descargados. Conéctate a internet para sincronizarlos.",
+      )
+    }
+
     async function load() {
+      // Causa raíz iPhone: fetch API cuelga offline → nunca caía al catch de IDB.
+      if (isDeviceOffline()) {
+        await applyOfflineSnapshot()
+        return
+      }
+
       try {
         const data = await listMyDespachos()
         if (cancelled) return
         const list = data.items || []
         setItems(list)
-        setOfflineSource(null)
-        setOfflineReadyCount(0)
         setError(null)
         const uid = getSessionUserId() || String(data.driver_user_id || "")
         if (uid) {
@@ -236,24 +280,39 @@ export default function DespachosPage() {
             /* ignore */
           }
         }
+
+        // Descarga completa observable (clientes + fichas) sin abrir cada ficha a mano.
+        if (uid && !cancelled) {
+          const priority = [
+            ...buckets.today,
+            ...buckets.history.slice(0, 2),
+          ].slice(0, 3)
+          if (priority.length) {
+            setSyncNote("Sincronizando datos para uso sin conexión…")
+            const readyList = await syncPriorityPlansForOffline(
+              uid,
+              priority,
+              (p) => {
+                if (!cancelled) setSyncNote(p.message)
+              },
+            )
+            if (!cancelled) {
+              const readyMap: Record<number, OfflinePlanReady> = {}
+              for (const r of readyList) readyMap[r.planId] = r
+              setReadyById((prev) => ({ ...prev, ...readyMap }))
+              const ok = readyList.filter((r) => r.complete).length
+              setSyncNote(
+                ok > 0
+                  ? `${ok} despacho(s) listo(s) para usar sin conexión`
+                  : "No se completó la descarga offline. Reintenta con mejor señal.",
+              )
+            }
+          }
+        }
       } catch (err) {
         if (cancelled) return
-        if (isLikelyOfflineError(err)) {
-          const uid = getSessionUserId()
-          const cached = uid ? await getOfflinePlans(uid) : null
-          const ready = uid ? await listOfflineReadyPlans(uid) : []
-          if (cached?.items?.length) {
-            setItems(cached.items as DriverDespacho[])
-            setOfflineSource(cached.syncedAt)
-            setOfflineReadyCount(ready.length)
-            setError(null)
-            return
-          }
-          setItems([])
-          setOfflineSource(null)
-          setError(
-            "Sin conexión y no hay despacho descargado en este dispositivo. Conéctate, abre Mis despachos y vuelve a intentar.",
-          )
+        if (isLikelyOfflineError(err) || isDeviceOffline()) {
+          await applyOfflineSnapshot()
           return
         }
         setError(err instanceof ApiError ? err.message : "No se pudieron cargar los despachos")
@@ -292,7 +351,20 @@ export default function DespachosPage() {
   }
 
   if (error) {
-    return <div className="banner banner-error">{error}</div>
+    return (
+      <div className="stack-gap">
+        <div className="banner banner-error" role="alert">
+          {error}
+        </div>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => window.location.reload()}
+        >
+          Reintentar
+        </button>
+      </div>
+    )
   }
 
   if (!items || items.length === 0) {
@@ -309,11 +381,9 @@ export default function DespachosPage() {
 
   return (
     <div className="stack-gap">
-      {offlineSource ? (
-        <div className="banner banner-warn" role="status">
-          {offlineReadyCount > 0
-            ? `Datos disponibles sin conexión (${offlineReadyCount} completo${offlineReadyCount === 1 ? "" : "s"}) · Última actualización: ${formatSyncedAt(offlineSource)} · solo lectura`
-            : `Lista de despachos en caché · ${formatSyncedAt(offlineSource)}. Para clientes/productos abre cada despacho → Clientes con internet.`}
+      {syncNote ? (
+        <div className="banner banner-info" role="status" style={{ fontSize: "0.82rem" }}>
+          {syncNote}
         </div>
       ) : null}
       <section>
@@ -339,6 +409,7 @@ export default function DespachosPage() {
                 hero
                 cta="Abrir despacho"
                 progress={progressById[p.id] || null}
+                offlineReady={readyById[p.id] || null}
               />
             ))}
           </div>
@@ -359,6 +430,7 @@ export default function DespachosPage() {
                 plan={p}
                 compact
                 progress={progressById[p.id] || null}
+                offlineReady={readyById[p.id] || null}
               />
             ))}
           </div>

@@ -13,12 +13,8 @@ import {
   productBarcodeLabel,
   productCategoryLabel,
 } from "@/lib/delivery-labels"
-import {
-  formatSyncedAt,
-  getOfflineClientDetail,
-  isLikelyOfflineError,
-  saveOfflineClientDetail,
-} from "@/lib/offline-store"
+import { isDeviceOffline, readOfflineClientDetail } from "@/lib/offline-load"
+import { isLikelyOfflineError, saveOfflineClientDetail } from "@/lib/offline-store"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 import { DeliveryLocalToolsHost } from "@/components/delivery-local-tools-host"
 import { DeliveryVisitStart } from "@/components/delivery-visit-start"
@@ -44,7 +40,22 @@ export default function ClienteFichaPage() {
       return
     }
     let cancelled = false
+    async function loadFromOffline() {
+      const outcome = await readOfflineClientDetail(planId, customerKey)
+      if (cancelled) return
+      if (outcome.status === "success") {
+        setData(outcome.payload as Awaited<ReturnType<typeof getMyCliente>>)
+        setOfflineSource(outcome.syncedAt)
+        setError(null)
+        return
+      }
+      setError(outcome.message)
+    }
     async function load() {
+      if (isDeviceOffline()) {
+        await loadFromOffline()
+        return
+      }
       try {
         const res = await getMyCliente(planId, customerKey)
         if (cancelled) return
@@ -60,20 +71,8 @@ export default function ClienteFichaPage() {
         }
       } catch (err) {
         if (cancelled) return
-        if (isLikelyOfflineError(err) || !navigator.onLine) {
-          const uid = getSessionUserId()
-          const cached = uid
-            ? await getOfflineClientDetail(uid, planId, customerKey)
-            : null
-          if (cached?.payload) {
-            setData(cached.payload as Awaited<ReturnType<typeof getMyCliente>>)
-            setOfflineSource(cached.syncedAt)
-            setError(null)
-            return
-          }
-          setError(
-            "Esta ficha no está descargada. Ábrela con internet para sincronizar documentos y productos.",
-          )
+        if (isLikelyOfflineError(err) || isDeviceOffline()) {
+          await loadFromOffline()
           return
         }
         if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
@@ -155,13 +154,6 @@ export default function ClienteFichaPage() {
       <Link href={backClients} className="muted" style={{ fontSize: "0.85rem" }}>
         ← Clientes
       </Link>
-
-      {offlineSource ? (
-        <div className="banner banner-warn" role="status">
-          Datos disponibles sin conexión · Última actualización:{" "}
-          {formatSyncedAt(offlineSource)} · solo lectura (sin registrar entrega)
-        </div>
-      ) : null}
 
       <div className="card">
         <div className="ficha-head">

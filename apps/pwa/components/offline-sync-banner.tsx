@@ -2,15 +2,19 @@
 
 import { useEffect, useState } from "react"
 import { getSessionUserId } from "@/lib/auth"
+import { offlineBannerLabel } from "@/lib/offline-load"
 import {
   formatSyncedAt,
+  getOfflinePlans,
   listOfflineReadyPlans,
 } from "@/lib/offline-store"
 
+/** Único banner de estado de conexión / sync (evita duplicados AuthGate + página). */
 export function OfflineSyncBanner() {
   const [online, setOnline] = useState(true)
   const [syncedAt, setSyncedAt] = useState<string | null>(null)
   const [readyCount, setReadyCount] = useState(0)
+  const [hasPlans, setHasPlans] = useState(false)
 
   useEffect(() => {
     function sync() {
@@ -30,15 +34,22 @@ export function OfflineSyncBanner() {
     async function load() {
       const uid = getSessionUserId()
       if (!uid) return
-      const ready = await listOfflineReadyPlans(uid)
+      const [ready, plans] = await Promise.all([
+        listOfflineReadyPlans(uid),
+        getOfflinePlans(uid),
+      ])
       if (cancelled) return
       setReadyCount(ready.length)
-      const latest = ready
-        .map((r) => r.syncedAt)
-        .filter(Boolean)
-        .sort()
-        .at(-1)
-      setSyncedAt(latest || null)
+      setHasPlans(Boolean(plans?.items?.length))
+      const latest =
+        ready
+          .map((r) => r.syncedAt)
+          .filter(Boolean)
+          .sort()
+          .at(-1) ||
+        plans?.syncedAt ||
+        null
+      setSyncedAt(latest)
     }
     void load()
     return () => {
@@ -46,22 +57,22 @@ export function OfflineSyncBanner() {
     }
   }, [online])
 
-  if (online && readyCount > 0 && syncedAt) {
+  if (!online) {
     return (
-      <div className="banner banner-info" role="status" style={{ fontSize: "0.82rem" }}>
-        Datos disponibles sin conexión ({readyCount} despacho
-        {readyCount === 1 ? "" : "s"}) · Última actualización:{" "}
-        {formatSyncedAt(syncedAt)}
+      <div className="banner banner-warn" role="status" style={{ fontSize: "0.82rem" }}>
+        {readyCount > 0 || hasPlans
+          ? offlineBannerLabel(syncedAt)
+          : "Sin conexión · No tienes despachos descargados. Conéctate a internet para sincronizarlos."}
       </div>
     )
   }
 
-  if (!online) {
+  if (readyCount > 0 && syncedAt) {
     return (
-      <div className="banner banner-warn" role="status">
-        {readyCount > 0
-          ? `Sin conexión · consulta solo lectura · ${formatSyncedAt(syncedAt)}`
-          : "Sin conexión · no hay despacho completo descargado (abre Clientes con internet)"}
+      <div className="banner banner-info" role="status" style={{ fontSize: "0.82rem" }}>
+        {readyCount} despacho{readyCount === 1 ? "" : "s"} listo
+        {readyCount === 1 ? "" : "s"} para usar sin conexión · Última sync:{" "}
+        {formatSyncedAt(syncedAt)}
       </div>
     )
   }

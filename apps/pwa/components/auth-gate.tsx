@@ -107,14 +107,8 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   if (!ready) {
     return <div className="empty">Verificando sesión…</div>
   }
+  // Un solo banner de conexión vive en OfflineSyncBanner (layout).
   return (
-    <>
-      {offlineMode ? (
-        <div className="banner banner-warn" role="status">
-          Modo sin conexión · consulta de datos ya sincronizados (solo lectura)
-        </div>
-      ) : null}
-      {children}
-    </>
+    <div data-offline-mode={offlineMode ? "1" : "0"}>{children}</div>
   )
 }

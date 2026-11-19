@@ -246,3 +246,24 @@ export function isLikelyOfflineError(err: unknown): boolean {
   }
   return false
 }
+
+export function isDeviceOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false
+}
+
+export function shouldUseOfflineSnapshot(
+  navigatorOnline: boolean | undefined,
+  err?: unknown,
+): boolean {
+  if (navigatorOnline === false) return true
+  return isLikelyOfflineError(err)
+}
+
+export function plansBundleUsable(bundle: OfflinePlansBundle | null): boolean {
+  return Boolean(bundle?.items && bundle.items.length > 0)
+}
+
+export function offlineBannerLabel(syncedAt: string | null | undefined): string {
+  if (!syncedAt) return "Sin conexión · sin datos sincronizados"
+  return `Sin conexión · Datos del ${formatSyncedAt(syncedAt)}`
+}

@@ -46,11 +46,25 @@ function networkErrorMessage(_err: unknown): string {
   return CONNECT_ERROR_ES
 }
 
+/** Safari iOS en modo avión a veces no rechaza fetch; abort evita spinners eternos. */
+const FETCH_TIMEOUT_MS = 8000
+
 async function fetchOnce(url: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  const upstream = init?.signal
+  const onAbort = () => controller.abort()
+  if (upstream) {
+    if (upstream.aborted) controller.abort()
+    else upstream.addEventListener("abort", onAbort, { once: true })
+  }
   try {
-    return await fetch(url, init)
+    return await fetch(url, { ...init, signal: controller.signal })
   } catch (err) {
     throw new ApiError(503, networkErrorMessage(err))
+  } finally {
+    clearTimeout(timer)
+    if (upstream) upstream.removeEventListener("abort", onAbort)
   }
 }
 
