@@ -26,13 +26,25 @@ describe("circuito offline Mis despachos → productos", () => {
     assert.equal(`${a}plan:83:ready`, "u:u1:plan:83:ready")
   })
 
-  it("ready.complete exige fichas con documents[] (C)", () => {
+  it("ready.complete exige docs con id + productos con unidades (C)", () => {
     const incomplete = { client: { name: "X" } }
-    const complete = {
+    const noId = {
       client: { name: "X" },
       documents: [{ products: [{ unidades: 12 }] }],
     }
+    const complete = {
+      client: { name: "X" },
+      document_count: 1,
+      documents: [
+        {
+          related_document_id: 99,
+          product_count: 1,
+          products: [{ description: "Y", unidades: 12 }],
+        },
+      ],
+    }
     assert.equal(detailLooksComplete(incomplete), false)
+    assert.equal(detailLooksComplete(noId), false)
     assert.equal(detailLooksComplete(complete), true)
   })
 

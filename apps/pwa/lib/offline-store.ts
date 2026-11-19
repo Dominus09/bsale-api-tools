@@ -268,13 +268,138 @@ export function offlineBannerLabel(syncedAt: string | null | undefined): string 
   return `Sin conexión · Datos del ${formatSyncedAt(syncedAt)}`
 }
 
-/** Valida que una ficha sync tenga estructura mínima (client + documents). */
-export function detailLooksComplete(payload: unknown): boolean {
+export type DetailIntegrityExpect = {
+  /** document_count de la tarjeta de clientes (si existe). */
+  document_count?: number
+  /** units_total de la tarjeta (si existe). */
+  units_total?: number
+}
+
+function docHasStableId(doc: {
+  related_document_id?: number | null
+  document_number?: number | null
+}): boolean {
+  return doc.related_document_id != null || doc.document_number != null
+}
+
+function productHasPlannedQty(prod: { unidades?: number | null }): boolean {
+  return typeof prod.unidades === "number" && Number.isFinite(prod.unidades)
+}
+
+/**
+ * Valida ficha para offline: client, documents[], ids de documento,
+ * products[] y cantidades planificadas (unidades).
+ * Usa solo campos reales del API driver (DriverDocument / DriverProduct).
+ */
+export function detailLooksComplete(
+  payload: unknown,
+  expected?: DetailIntegrityExpect,
+): boolean {
   if (!payload || typeof payload !== "object") return false
   const p = payload as {
     client?: unknown
     documents?: unknown[]
+    document_count?: number
+    units_total?: number
   }
   if (!p.client || typeof p.client !== "object") return false
-  return Array.isArray(p.documents)
+  if (!Array.isArray(p.documents)) return false
+
+  const docs = p.documents as Array<{
+    related_document_id?: number | null
+    document_number?: number | null
+    products?: unknown[]
+    product_count?: number
+    units?: number | null
+  }>
+
+  if (typeof p.document_count === "number" && p.document_count !== docs.length) {
+    return false
+  }
+  if (
+    typeof expected?.document_count === "number" &&
+    expected.document_count !== docs.length
+  ) {
+    return false
+  }
+
+  let unitsSum = 0
+  for (const doc of docs) {
+    if (!doc || typeof doc !== "object") return false
+    if (!docHasStableId(doc)) return false
+    if (!Array.isArray(doc.products)) return false
+    const products = doc.products as Array<{ unidades?: number | null }>
+    const declared =
+      typeof doc.product_count === "number" ? doc.product_count : products.length
+    if (declared > 0 && products.length === 0) return false
+    if (typeof doc.product_count === "number" && doc.product_count > products.length) {
+      return false
+    }
+    for (const prod of products) {
+      if (!prod || typeof prod !== "object") return false
+      if (!productHasPlannedQty(prod)) return false
+      unitsSum += prod.unidades as number
+    }
+  }
+
+  if (
+    typeof expected?.units_total === "number" &&
+    expected.units_total > 0 &&
+    unitsSum <= 0
+  ) {
+    return false
+  }
+  return true
+}
+
+/** Totales esperados del listado vs fichas descargadas (estructura real). */
+export function planSnapshotIntegrity(input: {
+  clients: Array<{ document_count?: number; units_total?: number }>
+  summary?: { clients?: number; documents?: number } | null
+  detailsOk: number
+  documentsFromDetails: number
+  truncated: boolean
+}): { ok: boolean; reason?: string; expectedClients: number; expectedDocuments: number } {
+  const expectedClients =
+    typeof input.summary?.clients === "number"
+      ? input.summary.clients
+      : input.clients.length
+  const expectedDocuments =
+    typeof input.summary?.documents === "number"
+      ? input.summary.documents
+      : input.clients.reduce((acc, c) => acc + (Number(c.document_count) || 0), 0)
+
+  if (input.truncated) {
+    return {
+      ok: false,
+      reason: "Descarga truncada: demasiados clientes para sync V1",
+      expectedClients,
+      expectedDocuments,
+    }
+  }
+  if (input.clients.length !== expectedClients) {
+    return {
+      ok: false,
+      reason: `Clientes ${input.clients.length}/${expectedClients}`,
+      expectedClients,
+      expectedDocuments,
+    }
+  }
+  if (input.detailsOk !== input.clients.length) {
+    return {
+      ok: false,
+      reason: `Fichas ${input.detailsOk}/${input.clients.length}`,
+      expectedClients,
+      expectedDocuments,
+    }
+  }
+  if (expectedDocuments > 0 && input.documentsFromDetails !== expectedDocuments) {
+    return {
+      ok: false,
+      reason: `Documentos ${input.documentsFromDetails}/${expectedDocuments}`,
+      expectedClients,
+      expectedDocuments,
+    }
+  }
+  return { ok: true, expectedClients, expectedDocuments }
 }

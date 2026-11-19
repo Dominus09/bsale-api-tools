@@ -9,8 +9,8 @@ const sw = readFileSync(join(root, "public", "sw.js"), "utf8")
 const offlineHtml = readFileSync(join(root, "public", "offline.html"), "utf8")
 
 describe("service worker offline shell", () => {
-  it("usa versión v6+ y precachea shell + offline.html", () => {
-    assert.match(sw, /lq-pwa-v6-offline-nav/)
+  it("usa versión v7+ y precachea shell + offline.html", () => {
+    assert.match(sw, /lq-pwa-v7-offline-integrity/)
     assert.match(sw, /OFFLINE_HTML\s*=\s*"\/offline\.html"/)
     assert.match(sw, /APP_SHELL\s*=\s*"\/despachos"/)
     assert.match(sw, /const PRECACHE = \[\s*OFFLINE_HTML/)

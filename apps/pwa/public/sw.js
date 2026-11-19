@@ -4,7 +4,7 @@
  * - Navegación: network-first → HTML cacheado → offline.html → Response sintético.
  * - Assets estáticos: cache-first con fallback de red; nunca null.
  */
-const VERSION = "lq-pwa-v6-offline-nav";
+const VERSION = "lq-pwa-v7-offline-integrity";
 const STATIC_CACHE = `${VERSION}-static`;
 const PAGE_CACHE = `${VERSION}-pages`;
 const ASSET_CACHE = `${VERSION}-assets`;
@@ -216,7 +216,17 @@ async function handleAsset(request) {
     const fresh = await fetch(request);
     if (fresh && fresh.ok) {
       const path = new URL(request.url).pathname;
-      if (path.startsWith("/_next/static/") || path.startsWith("/icons/")) {
+      const ct = (fresh.headers.get("content-type") || "").toLowerCase();
+      // Warm desde JS (no-navigate) debe poblar PAGE_CACHE para hard-nav offline.
+      if (
+        ct.includes("text/html") &&
+        (path === "/" ||
+          path === "/offline" ||
+          path === "/offline.html" ||
+          path.startsWith("/despachos"))
+      ) {
+        await putCopy(PAGE_CACHE, request, fresh);
+      } else if (path.startsWith("/_next/static/") || path.startsWith("/icons/")) {
         await putCopy(ASSET_CACHE, request, fresh);
       }
       return fresh;

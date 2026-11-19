@@ -1,6 +1,7 @@
 /**
  * Descarga completa de un despacho para consulta offline (solo lectura).
- * Marca plan:*:ready.complete solo si clientes + fichas (docs/productos) quedaron validados.
+ * Marca plan:*:ready.complete solo si clientes + fichas (docs/productos/cantidades)
+ * y rutas HTML warm quedan validados.
  */
 
 import {
@@ -11,20 +12,21 @@ import {
 } from "./api"
 import {
   detailLooksComplete,
+  planSnapshotIntegrity,
   saveOfflineClientDetail,
   saveOfflineClients,
   saveOfflinePlanReady,
   type OfflinePlanReady,
 } from "./offline-store"
 
-export { detailLooksComplete }
+export { detailLooksComplete, planSnapshotIntegrity }
 
 const MAX_CLIENTS = 80
 const DETAIL_CONCURRENCY = 3
 
 export type SyncPlanProgress = {
   planId: number
-  phase: "clients" | "details" | "done" | "error"
+  phase: "clients" | "details" | "warm" | "done" | "error"
   clientsTotal: number
   detailsDone: number
   message: string
@@ -49,26 +51,48 @@ async function mapPool<T, R>(
   return out
 }
 
-/** Precache HTML de rutas del plan para navegación documento offline. */
-async function warmPlanRoutes(
+/**
+ * Precache HTML de rutas del plan (navigate-equivalent via SW PAGE_CACHE).
+ * Requiere que el SW cachee text/html de /despachos/* también en fetch no-navigate.
+ */
+export async function warmPlanRoutes(
   planId: number,
   customerKeys: string[] = [],
-): Promise<void> {
-  if (typeof window === "undefined") return
+): Promise<{ ok: boolean; warmed: number; failed: string[] }> {
+  if (typeof window === "undefined") {
+    return { ok: false, warmed: 0, failed: ["ssr"] }
+  }
   const paths = [
+    "/despachos",
     `/despachos/${planId}`,
     `/despachos/${planId}/clientes`,
     ...customerKeys.slice(0, MAX_CLIENTS).map(
       (key) => `/despachos/${planId}/clientes/${encodeURIComponent(key)}`,
     ),
   ]
+  const failed: string[] = []
+  let warmed = 0
   await mapPool(paths, DETAIL_CONCURRENCY, async (path) => {
     try {
-      await fetch(path, { credentials: "same-origin" })
+      const res = await fetch(path, {
+        credentials: "same-origin",
+        headers: { Accept: "text/html" },
+      })
+      if (!res.ok) {
+        failed.push(path)
+        return
+      }
+      warmed += 1
     } catch {
-      /* ignore */
+      failed.push(path)
     }
   })
+  // Shell mínimo obligatorio para hard-nav offline.
+  const shellOk =
+    !failed.includes("/despachos") &&
+    !failed.includes(`/despachos/${planId}`) &&
+    !failed.includes(`/despachos/${planId}/clientes`)
+  return { ok: shellOk && failed.length === 0, warmed, failed }
 }
 
 export async function syncPlanForOffline(
@@ -87,16 +111,19 @@ export async function syncPlanForOffline(
 
   const data = await listMyClientes(planId)
   const list = (data.items || []) as DriverClientCard[]
+  const summary = data.summary || null
   await saveOfflineClients(userId, planId, {
     items: list,
     count: list.length,
-    summary: data.summary as Record<string, unknown> | undefined,
+    summary: summary as Record<string, unknown> | undefined,
     syncedAt,
   })
 
+  const truncated = list.length > MAX_CLIENTS
   const targets = list.slice(0, MAX_CLIENTS)
   const expected = targets.length
   let detailsCount = 0
+  let documentsFromDetails = 0
   onProgress?.({
     planId,
     phase: "details",
@@ -107,9 +134,17 @@ export async function syncPlanForOffline(
 
   await mapPool(targets, DETAIL_CONCURRENCY, async (c) => {
     const detail = await getMyCliente(planId, c.customer_key)
-    if (!detailLooksComplete(detail)) {
+    if (
+      !detailLooksComplete(detail, {
+        document_count: c.document_count,
+        units_total: c.units_total,
+      })
+    ) {
       throw new Error(`Ficha incompleta: ${c.customer_key}`)
     }
+    documentsFromDetails += Array.isArray(detail.documents)
+      ? detail.documents.length
+      : 0
     await saveOfflineClientDetail(userId, planId, c.customer_key, {
       payload: detail,
       syncedAt,
@@ -124,7 +159,32 @@ export async function syncPlanForOffline(
     })
   })
 
-  const complete = list.length === 0 || (expected > 0 && detailsCount >= expected)
+  const integrity = planSnapshotIntegrity({
+    clients: list,
+    summary,
+    detailsOk: detailsCount,
+    documentsFromDetails,
+    truncated,
+  })
+
+  let complete = integrity.ok
+  if (complete) {
+    onProgress?.({
+      planId,
+      phase: "warm",
+      clientsTotal: list.length,
+      detailsDone: detailsCount,
+      message: "Preparando navegación offline…",
+    })
+    const warm = await warmPlanRoutes(
+      planId,
+      targets.map((c) => c.customer_key),
+    )
+    if (!warm.ok) {
+      complete = false
+    }
+  }
+
   const ready: OfflinePlanReady = {
     planId,
     clientsCount: list.length,
@@ -133,20 +193,16 @@ export async function syncPlanForOffline(
     complete,
   }
   await saveOfflinePlanReady(userId, ready)
-  if (complete) {
-    void warmPlanRoutes(
-      planId,
-      targets.map((c) => c.customer_key),
-    )
-  }
   onProgress?.({
     planId,
     phase: complete ? "done" : "error",
     clientsTotal: list.length,
     detailsDone: detailsCount,
     message: complete
-      ? "Listo para usar sin conexión"
-      : `Descarga incompleta (${detailsCount}/${expected} fichas)`,
+      ? `Listo sin conexión · ${integrity.expectedClients} clientes · ${integrity.expectedDocuments} docs`
+      : integrity.ok
+        ? "Rutas offline incompletas; reintenta con internet"
+        : integrity.reason || "Descarga incompleta",
   })
   return ready
 }
