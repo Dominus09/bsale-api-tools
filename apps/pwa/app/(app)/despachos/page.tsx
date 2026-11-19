@@ -23,12 +23,11 @@ import {
   saveOfflinePlans,
   type OfflinePlanReady,
 } from "@/lib/offline-store"
-import {
-  reconcileOfflineNavForCurrentBuild,
-  syncPriorityPlansForOffline,
-} from "@/lib/offline-sync"
 import { isOfflineUiReady, loadOfflineBuildInfo } from "@/lib/offline-build"
+import { offlineSyncRuntime } from "@/lib/offline-sync-runtime"
+import { selectProgressProbeCandidates } from "@/lib/offline-priority"
 import { partitionPlansByDate, santiagoTodayYmd } from "@/lib/plan-buckets"
+import { getActivePlanId, setActivePlanId } from "@/lib/active-plan"
 
 function PlanCard(props: {
   plan: DriverDespacho
@@ -37,6 +36,8 @@ function PlanCard(props: {
   cta?: string
   progress?: RouteProgress | null
   offlineReady?: OfflinePlanReady | null
+  onPrepareOffline?: (plan: DriverDespacho) => void
+  preparing?: boolean
 }) {
   const p = props.plan
   const amount = asAmount(p.amount_total)
@@ -102,13 +103,23 @@ function PlanCard(props: {
             </p>
           ) : null}
         </div>
-        <div className="plan-card-footer">
+        <div className="plan-card-footer plan-card-footer-stack">
           <AppLink
             href={`/despachos/${p.id}`}
             className={`btn ${hasPendingOps ? "btn-primary" : "btn-secondary"}`}
           >
             {cta}
           </AppLink>
+          {!props.offlineReady?.complete && props.onPrepareOffline ? (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={props.preparing}
+              onClick={() => props.onPrepareOffline?.(p)}
+            >
+              {props.preparing ? "Preparando…" : "Preparar sin conexión"}
+            </button>
+          ) : null}
         </div>
       </article>
     )
@@ -181,7 +192,7 @@ function PlanCard(props: {
         ) : null}
       </div>
 
-      <div className="plan-card-footer">
+      <div className="plan-card-footer plan-card-footer-stack">
         <AppLink
           href={`/despachos/${p.id}`}
           className={`btn ${props.hero ? "btn-primary btn-with-arrow" : "btn-secondary"}`}
@@ -194,6 +205,16 @@ function PlanCard(props: {
             </svg>
           ) : null}
         </AppLink>
+        {!props.offlineReady?.complete && props.onPrepareOffline ? (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={props.preparing}
+            onClick={() => props.onPrepareOffline?.(p)}
+          >
+            {props.preparing ? "Preparando…" : "Preparar sin conexión"}
+          </button>
+        ) : null}
       </div>
     </article>
   )
@@ -205,11 +226,37 @@ export default function DespachosPage() {
   const [error, setError] = useState<string | null>(null)
   const [syncNote, setSyncNote] = useState<string | null>(null)
   const [readyById, setReadyById] = useState<Record<number, OfflinePlanReady>>({})
+  const [preparingId, setPreparingId] = useState<number | null>(null)
   const todayLabel = useMemo(() => {
     const ymd = santiagoTodayYmd()
     const [y, m, d] = ymd.split("-")
     return `${d}/${m}/${y}`
   }, [])
+
+  async function preparePlanOffline(plan: DriverDespacho) {
+    const uid = getSessionUserId()
+    if (!uid) return
+    setActivePlanId(uid, plan.id)
+    setPreparingId(plan.id)
+    setSyncNote(`Preparando ${plan.planning_code || `plan #${plan.id}`}…`)
+    try {
+      const ready = await offlineSyncRuntime.syncPlan(plan.id, {
+        force: false,
+        manual: true,
+        plan,
+      })
+      if (ready) {
+        setReadyById((prev) => ({ ...prev, [ready.planId]: ready }))
+        setSyncNote(
+          ready.complete
+            ? `${plan.planning_code || `Plan #${plan.id}`} listo sin conexión`
+            : "Preparación incompleta · reintenta con señal",
+        )
+      }
+    } finally {
+      setPreparingId(null)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -274,9 +321,11 @@ export default function DespachosPage() {
           })
         }
         const buckets = partitionPlansByDate(list)
+        const activePlanId = uid ? getActivePlanId(uid) : null
+        const probePlans = selectProgressProbeCandidates(list, { activePlanId })
         const map: Record<number, RouteProgress> = {}
         await Promise.all(
-          buckets.today.map(async (p) => {
+          probePlans.map(async (p) => {
             try {
               const res = await getMyDespachoProgress(p.id)
               if (res.progress) map[p.id] = res.progress
@@ -287,64 +336,44 @@ export default function DespachosPage() {
         )
         if (!cancelled) setProgressById(map)
 
-        const past = [...buckets.history, ...buckets.unknown].slice(0, 6)
-        for (const p of past) {
-          if (cancelled) break
-          try {
-            const res = await getMyDespachoProgress(p.id)
-            if (cancelled || !res.progress) continue
-            setProgressById((prev) =>
-              prev[p.id] ? prev : { ...prev, [p.id]: res.progress },
-            )
-          } catch {
-            /* ignore */
-          }
-        }
-
-        // Reconciliar nav del build actual (no borra fichas IDB).
         if (uid && !cancelled) {
-          try {
-            await reconcileOfflineNavForCurrentBuild(uid)
-          } catch {
-            /* best effort */
-          }
+          offlineSyncRuntime.setUserId(uid)
+          offlineSyncRuntime.markApiReachable(true)
+          offlineSyncRuntime.rememberPlans(list)
           const build = await loadOfflineBuildInfo()
           const existing = await listOfflineReadyPlans(uid, { includeDataOnly: true })
           if (!cancelled) {
-            const map: Record<number, OfflinePlanReady> = {}
+            const readyMap: Record<number, OfflinePlanReady> = {}
             for (const r of existing) {
-              map[r.planId] = {
+              readyMap[r.planId] = {
                 ...r,
                 complete: isOfflineUiReady(r, build.navBuildId),
               }
             }
-            setReadyById(map)
+            setReadyById(readyMap)
           }
-          const priority = [
-            ...buckets.today,
-            ...buckets.history.slice(0, 2),
-          ].slice(0, 3)
-          if (priority.length) {
-            setSyncNote("Sincronizando para uso sin conexión…")
-            void syncPriorityPlansForOffline(uid, priority, (p) => {
-              if (!cancelled) setSyncNote(p.message)
+          setSyncNote("Preparando recorrido prioritario…")
+          void offlineSyncRuntime
+            .runPriorityCycle(list)
+            .then(async () => {
+              if (cancelled) return
+              const st = offlineSyncRuntime.getState()
+              setSyncNote(st.message || null)
+              const refreshed = await listOfflineReadyPlans(uid, {
+                includeDataOnly: true,
+              })
+              const readyMap: Record<number, OfflinePlanReady> = {}
+              for (const r of refreshed) {
+                readyMap[r.planId] = {
+                  ...r,
+                  complete: isOfflineUiReady(r, build.navBuildId),
+                }
+              }
+              setReadyById(readyMap)
             })
-              .then((readyList) => {
-                if (cancelled) return
-                const readyMap: Record<number, OfflinePlanReady> = {}
-                for (const r of readyList) readyMap[r.planId] = r
-                setReadyById((prev) => ({ ...prev, ...readyMap }))
-                const ok = readyList.filter((r) => r.complete).length
-                setSyncNote(
-                  ok > 0
-                    ? `${ok} despacho(s) listo(s) sin conexión`
-                    : "Descarga offline incompleta · reintenta con señal",
-                )
-              })
-              .catch(() => {
-                if (!cancelled) setSyncNote("No se pudo completar sync offline")
-              })
-          }
+            .catch(() => {
+              if (!cancelled) setSyncNote("No se pudo completar sync offline")
+            })
         }
       } catch (err) {
         if (cancelled) return
@@ -447,6 +476,8 @@ export default function DespachosPage() {
                 cta="Abrir despacho"
                 progress={progressById[p.id] || null}
                 offlineReady={readyById[p.id] || null}
+                onPrepareOffline={preparePlanOffline}
+                preparing={preparingId === p.id}
               />
             ))}
           </div>
@@ -468,6 +499,8 @@ export default function DespachosPage() {
                 compact
                 progress={progressById[p.id] || null}
                 offlineReady={readyById[p.id] || null}
+                onPrepareOffline={preparePlanOffline}
+                preparing={preparingId === p.id}
               />
             ))}
           </div>

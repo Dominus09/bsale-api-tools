@@ -357,6 +357,8 @@ export async function listMyClientes(
   }
   picking_ready?: boolean
   picking_reason?: string | null
+  picking_id?: number | null
+  picking_version?: number | string | null
 }> {
   const qs = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""
   return apiFetch(`/distribuidora/pwa/driver/despachos/${planId}/clientes${qs}`)

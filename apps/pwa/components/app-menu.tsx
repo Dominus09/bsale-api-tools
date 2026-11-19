@@ -5,6 +5,7 @@ import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import { getSessionEmail, logoutAndRedirect } from "@/lib/auth"
 import { useLocalTools } from "@/components/local-tools-context"
+import { OfflineStatusIndicator } from "@/components/offline-status-indicator"
 
 function IconLogout() {
   return (
@@ -193,7 +194,8 @@ export function AppMenu() {
       : null
 
   return (
-    <>
+    <div className="topbar-actions">
+      <OfflineStatusIndicator />
       <button
         type="button"
         className="icon-btn"
@@ -204,6 +206,6 @@ export function AppMenu() {
         <span className="icon-btn-bars" aria-hidden />
       </button>
       {drawer}
-    </>
+    </div>
   )
 }

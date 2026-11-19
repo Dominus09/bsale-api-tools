@@ -4,6 +4,8 @@
  * No simula escrituras de entrega / GPS / R2 / WhatsApp.
  */
 
+import type { OfflineSnapshotFingerprint } from "./offline-fingerprint"
+
 const DB_NAME = "quillotana-ops-offline"
 const DB_VERSION = 1
 const STORE = "kv"
@@ -38,6 +40,7 @@ export type OfflinePlanReady = {
   planId: number
   clientsCount: number
   detailsCount: number
+  documentsCount?: number
   syncedAt: string
   /**
    * Datos de negocio (clientes/fichas/docs/productos) OK.
@@ -48,6 +51,10 @@ export type OfflinePlanReady = {
   navReady?: boolean
   /** Build id con el que se warm-earon las rutas (ver offline-build.json). */
   navBuildId?: string | null
+  /** Snapshot fingerprint (picking_id/version + volúmenes). */
+  fingerprint?: OfflineSnapshotFingerprint | null
+  pickingId?: number | null
+  pickingVersion?: string | null
   /**
    * true solo si data + navegación del build actual están listos.
    * No usar como única señal tras un redeploy sin re-warm.

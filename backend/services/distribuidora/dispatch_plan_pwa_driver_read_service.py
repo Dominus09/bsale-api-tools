@@ -899,6 +899,7 @@ def list_clients_for_driver(plan_id: int, *, q: str | None = None) -> dict[str, 
                 "admin_review_pending": bool(att.get("admin_review_pending")),
             }
         )
+    # picking_id/version: ya en bundle; expuestos para fingerprint offline PWA (solo lectura).
     return serialize_value(
         {
             "dispatch_plan_id": int(plan_id),
@@ -907,6 +908,8 @@ def list_clients_for_driver(plan_id: int, *, q: str | None = None) -> dict[str, 
             "summary": bundle["summary"],
             "picking_ready": bundle["picking_ready"],
             "picking_reason": bundle.get("picking_reason"),
+            "picking_id": bundle.get("picking_id"),
+            "picking_version": bundle.get("picking_version"),
             "sources": bundle["sources"],
             "future_contracts": FUTURE_CONTRACTS,
             "read_only": True,

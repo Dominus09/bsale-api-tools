@@ -58,7 +58,7 @@ describe("circuito offline Mis despachos → productos", () => {
     }
     assert.match(detail, /readOfflinePlanFromList/)
     assert.match(clientes, /readOfflineClients/)
-    assert.match(clientes, /void syncPlanForOffline/)
+    assert.match(clientes, /offlineSyncRuntime/)
     assert.match(ficha, /readOfflineClientDetail/)
     assert.match(ficha, /Ver pedido/)
   })

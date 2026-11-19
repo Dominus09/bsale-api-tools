@@ -4,6 +4,7 @@ import Link from "next/link"
 import { AuthGate } from "@/components/auth-gate"
 import { AppMenu } from "@/components/app-menu"
 import { OfflineSyncBanner } from "@/components/offline-sync-banner"
+import { OfflineSyncProvider } from "@/components/offline-sync-provider"
 import { LocalToolsProvider } from "@/components/local-tools-context"
 import { BRAND } from "@/lib/brand"
 
@@ -22,24 +23,26 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthGate>
       <LocalToolsProvider>
-        <header className="topbar">
-          <div className="topbar-brand">
-            <UserAvatar />
-            <div className="topbar-title">
-              <h1>
-                <Link href="/despachos">{BRAND.name}</Link>
-              </h1>
-              <div className="muted topbar-sub">
-                {BRAND.subtitle} · Chofer
+        <OfflineSyncProvider>
+          <header className="topbar">
+            <div className="topbar-brand">
+              <UserAvatar />
+              <div className="topbar-title">
+                <h1>
+                  <Link href="/despachos">{BRAND.name}</Link>
+                </h1>
+                <div className="muted topbar-sub">
+                  {BRAND.subtitle} · Chofer
+                </div>
               </div>
             </div>
+            <AppMenu />
+          </header>
+          <div className="main">
+            <OfflineSyncBanner />
+            {children}
           </div>
-          <AppMenu />
-        </header>
-        <div className="main">
-          <OfflineSyncBanner />
-          {children}
-        </div>
+        </OfflineSyncProvider>
       </LocalToolsProvider>
     </AuthGate>
   )

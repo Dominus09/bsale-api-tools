@@ -10,6 +10,8 @@ import {
   type DriverDespacho,
   type RouteProgress,
 } from "@/lib/api"
+import { setActivePlanId } from "@/lib/active-plan"
+import { getSessionUserId } from "@/lib/auth"
 import { moneyCLP } from "@/lib/delivery-flow"
 import { formatDate, statusLabel } from "@/lib/format"
 import { asAmount } from "@/lib/money-display"
@@ -28,6 +30,8 @@ export default function DespachoDetailPage() {
       setError("Identificador de despacho inválido")
       return
     }
+    const uid = getSessionUserId()
+    if (uid) setActivePlanId(uid, planId)
     let cancelled = false
     async function loadFromOffline() {
       const outcome = await readOfflinePlanFromList(planId)

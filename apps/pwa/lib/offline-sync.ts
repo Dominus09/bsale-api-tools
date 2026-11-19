@@ -1,6 +1,7 @@
 /**
  * Descarga completa de un despacho para consulta offline (solo lectura).
  * Separa datos de negocio (IDB) de navegación (HTML/chunks del build actual).
+ * Skip por fingerprint cuando data + nav + BUILD_ID siguen vigentes.
  */
 
 import {
@@ -11,6 +12,12 @@ import {
 } from "./api"
 import { extractNextStaticAssets } from "./clients-list-safe"
 import { loadOfflineBuildInfo } from "./offline-build"
+import {
+  buildOfflineFingerprint,
+  fingerprintsEqual,
+  pickingIdentityChanged,
+  type OfflineSnapshotFingerprint,
+} from "./offline-fingerprint"
 import {
   detailLooksComplete,
   getOfflineClients,
@@ -30,10 +37,13 @@ const DETAIL_CONCURRENCY = 3
 
 export type SyncPlanProgress = {
   planId: number
-  phase: "clients" | "details" | "warm" | "done" | "error"
+  phase: "clients" | "details" | "warm" | "done" | "error" | "skip"
   clientsTotal: number
   detailsDone: number
+  documentsDone?: number
+  documentsTotal?: number
   message: string
+  skipped?: boolean
 }
 
 export type WarmPlanResult = {
@@ -68,17 +78,48 @@ function emptyReady(
   planId: number,
   syncedAt: string,
   navBuildId: string | null,
+  extra?: Partial<OfflinePlanReady>,
 ): OfflinePlanReady {
   return {
     planId,
     clientsCount: 0,
     detailsCount: 0,
+    documentsCount: 0,
     syncedAt,
     dataComplete: false,
     navReady: false,
     navBuildId,
+    fingerprint: null,
     complete: false,
+    ...extra,
   }
+}
+
+export function fingerprintFromClientesPayload(
+  planId: number,
+  data: {
+    picking_id?: number | null
+    picking_version?: number | string | null
+    items?: DriverClientCard[]
+    summary?: { clients?: number; documents?: number } | null
+  },
+  truncated: boolean,
+): OfflineSnapshotFingerprint {
+  const list = data.items || []
+  const clients =
+    typeof data.summary?.clients === "number" ? data.summary.clients : list.length
+  const documents =
+    typeof data.summary?.documents === "number"
+      ? data.summary.documents
+      : list.reduce((acc, c) => acc + (Number(c.document_count) || 0), 0)
+  return buildOfflineFingerprint({
+    planId,
+    pickingId: data.picking_id,
+    pickingVersion: data.picking_version,
+    clients,
+    documents,
+    truncated,
+  })
 }
 
 /**
@@ -181,11 +222,22 @@ export async function warmPlanRoutes(
   }
 }
 
+export type SyncPlanOptions = {
+  force?: boolean
+  onProgress?: (p: SyncPlanProgress) => void
+}
+
 export async function syncPlanForOffline(
   userId: string,
   planId: number,
-  onProgress?: (p: SyncPlanProgress) => void,
+  onProgressOrOpts?: ((p: SyncPlanProgress) => void) | SyncPlanOptions,
 ): Promise<OfflinePlanReady> {
+  const opts: SyncPlanOptions =
+    typeof onProgressOrOpts === "function"
+      ? { onProgress: onProgressOrOpts }
+      : onProgressOrOpts || {}
+  const onProgress = opts.onProgress
+  const force = Boolean(opts.force)
   const syncedAt = new Date().toISOString()
   const build = await loadOfflineBuildInfo()
   onProgress?.({
@@ -193,12 +245,110 @@ export async function syncPlanForOffline(
     phase: "clients",
     clientsTotal: 0,
     detailsDone: 0,
-    message: "Descargando clientes…",
+    message: "Consultando despacho…",
   })
 
   const data = await listMyClientes(planId)
+  if (data.picking_ready === false) {
+    const failed = emptyReady(planId, syncedAt, build.navBuildId, {
+      fingerprint: fingerprintFromClientesPayload(planId, data, false),
+    })
+    await saveOfflinePlanReady(userId, failed)
+    onProgress?.({
+      planId,
+      phase: "error",
+      clientsTotal: 0,
+      detailsDone: 0,
+      message: data.picking_reason || "Picking no disponible aún",
+    })
+    return failed
+  }
+
   const list = (data.items || []) as DriverClientCard[]
   const summary = data.summary || null
+  const truncated = list.length > MAX_CLIENTS
+  const nextFp = fingerprintFromClientesPayload(planId, data, truncated)
+  const existing = await getOfflinePlanReady(userId, planId)
+  const dataOk = Boolean(existing?.dataComplete ?? existing?.complete)
+  const fpMatch = fingerprintsEqual(existing?.fingerprint, nextFp)
+  const navOk =
+    Boolean(existing?.navReady) && existing?.navBuildId === build.navBuildId
+
+  // Fingerprint vigente + datos OK: no re-descargar fichas.
+  if (!force && dataOk && fpMatch && !pickingIdentityChanged(existing?.fingerprint, nextFp)) {
+    if (navOk) {
+      const skipped: OfflinePlanReady = {
+        ...existing!,
+        fingerprint: nextFp,
+        pickingId: nextFp.pickingId,
+        pickingVersion: nextFp.pickingVersion,
+        documentsCount: nextFp.documents,
+        clientsCount: existing!.clientsCount || nextFp.clients,
+        dataComplete: true,
+        navReady: true,
+        navBuildId: build.navBuildId,
+        complete: true,
+      }
+      await saveOfflinePlanReady(userId, skipped)
+      onProgress?.({
+        planId,
+        phase: "skip",
+        clientsTotal: skipped.clientsCount,
+        detailsDone: skipped.detailsCount,
+        documentsDone: skipped.documentsCount,
+        documentsTotal: nextFp.documents,
+        message: "Ya preparado · sin cambios de picking",
+        skipped: true,
+      })
+      return skipped
+    }
+    // Solo BUILD_ID / nav: re-warm sin fichas.
+    onProgress?.({
+      planId,
+      phase: "warm",
+      clientsTotal: existing!.clientsCount,
+      detailsDone: existing!.detailsCount,
+      documentsDone: existing!.documentsCount,
+      documentsTotal: nextFp.documents,
+      message: "Actualizando navegación de esta versión…",
+    })
+    const clients = await getOfflineClients(userId, planId)
+    const keys = (clients?.items || [])
+      .map((raw) =>
+        raw && typeof raw === "object"
+          ? String((raw as { customer_key?: string }).customer_key || "")
+          : "",
+      )
+      .filter(Boolean)
+      .slice(0, MAX_CLIENTS)
+    const warm = await warmPlanRoutes(planId, keys)
+    const refreshed: OfflinePlanReady = {
+      ...existing!,
+      fingerprint: nextFp,
+      pickingId: nextFp.pickingId,
+      pickingVersion: nextFp.pickingVersion,
+      documentsCount: nextFp.documents,
+      dataComplete: true,
+      navReady: warm.ok,
+      navBuildId: warm.navBuildId,
+      complete: warm.ok,
+      syncedAt: new Date().toISOString(),
+    }
+    await saveOfflinePlanReady(userId, refreshed)
+    onProgress?.({
+      planId,
+      phase: refreshed.complete ? "done" : "error",
+      clientsTotal: refreshed.clientsCount,
+      detailsDone: refreshed.detailsCount,
+      documentsDone: refreshed.documentsCount,
+      documentsTotal: nextFp.documents,
+      message: refreshed.complete
+        ? "Navegación lista · datos previos vigentes"
+        : "Datos OK · falta cache de navegación de este build",
+    })
+    return refreshed
+  }
+
   await saveOfflineClients(userId, planId, {
     items: list,
     count: list.length,
@@ -206,7 +356,6 @@ export async function syncPlanForOffline(
     syncedAt,
   })
 
-  const truncated = list.length > MAX_CLIENTS
   const targets = list.slice(0, MAX_CLIENTS)
   const expected = targets.length
   let detailsCount = 0
@@ -216,7 +365,11 @@ export async function syncPlanForOffline(
     phase: "details",
     clientsTotal: list.length,
     detailsDone: 0,
-    message: `Descargando fichas 0/${expected}…`,
+    documentsDone: 0,
+    documentsTotal: nextFp.documents,
+    message: truncated
+      ? `Demasiados clientes (${list.length}>${MAX_CLIENTS}) · sync V1 truncado`
+      : `Descargando fichas 0/${expected}…`,
   })
 
   await mapPool(targets, DETAIL_CONCURRENCY, async (c) => {
@@ -242,6 +395,8 @@ export async function syncPlanForOffline(
       phase: "details",
       clientsTotal: list.length,
       detailsDone: detailsCount,
+      documentsDone: documentsFromDetails,
+      documentsTotal: nextFp.documents,
       message: `Descargando fichas ${detailsCount}/${expected}…`,
     })
   })
@@ -264,6 +419,8 @@ export async function syncPlanForOffline(
       phase: "warm",
       clientsTotal: list.length,
       detailsDone: detailsCount,
+      documentsDone: documentsFromDetails,
+      documentsTotal: integrity.expectedDocuments,
       message: "Preparando navegación offline…",
     })
     const warm = await warmPlanRoutes(
@@ -279,10 +436,14 @@ export async function syncPlanForOffline(
     planId,
     clientsCount: list.length,
     detailsCount,
+    documentsCount: documentsFromDetails,
     syncedAt,
     dataComplete,
     navReady,
     navBuildId,
+    fingerprint: nextFp,
+    pickingId: nextFp.pickingId,
+    pickingVersion: nextFp.pickingVersion,
     complete,
   }
   await saveOfflinePlanReady(userId, ready)
@@ -291,6 +452,8 @@ export async function syncPlanForOffline(
     phase: complete ? "done" : "error",
     clientsTotal: list.length,
     detailsDone: detailsCount,
+    documentsDone: documentsFromDetails,
+    documentsTotal: integrity.expectedDocuments,
     message: complete
       ? `Listo sin conexión · ${integrity.expectedClients} clientes · ${integrity.expectedDocuments} docs`
       : !dataComplete
@@ -371,31 +534,43 @@ export async function reconcileOfflineNavForCurrentBuild(
   return out
 }
 
+/**
+ * @deprecated Prefer syncSinglePriorityPlanForOffline (máx. 1 por ciclo).
+ * Conservado: sincroniza solo el primer plan de la lista.
+ */
 export async function syncPriorityPlansForOffline(
   userId: string,
   plans: DriverDespacho[],
   onProgress?: (p: SyncPlanProgress) => void,
 ): Promise<OfflinePlanReady[]> {
+  if (!plans.length) return []
+  const ready = await syncSinglePriorityPlanForOffline(userId, plans[0], {
+    onProgress,
+  })
+  return [ready]
+}
+
+/** Descarga automática: un solo despacho prioritario por ciclo. */
+export async function syncSinglePriorityPlanForOffline(
+  userId: string,
+  plan: DriverDespacho,
+  opts?: SyncPlanOptions,
+): Promise<OfflinePlanReady> {
   const build = await loadOfflineBuildInfo()
-  const out: OfflinePlanReady[] = []
-  for (const plan of plans) {
-    try {
-      const ready = await syncPlanForOffline(userId, plan.id, onProgress)
-      out.push(ready)
-    } catch {
-      const failed = emptyReady(plan.id, new Date().toISOString(), build.navBuildId)
-      await saveOfflinePlanReady(userId, failed)
-      out.push(failed)
-      onProgress?.({
-        planId: plan.id,
-        phase: "error",
-        clientsTotal: 0,
-        detailsDone: 0,
-        message: `No se pudo sincronizar plan #${plan.id}`,
-      })
-    }
+  try {
+    return await syncPlanForOffline(userId, plan.id, opts)
+  } catch {
+    const failed = emptyReady(plan.id, new Date().toISOString(), build.navBuildId)
+    await saveOfflinePlanReady(userId, failed)
+    opts?.onProgress?.({
+      planId: plan.id,
+      phase: "error",
+      clientsTotal: 0,
+      detailsDone: 0,
+      message: `No se pudo sincronizar plan #${plan.id}`,
+    })
+    return failed
   }
-  return out
 }
 
 export async function getPlanReadyForUi(

@@ -66,12 +66,13 @@ describe("offline navigation + sync integrity", () => {
     assert.match(appLinkSrc, /preventDefault/)
   })
 
-  it("Clientes no await syncPlanForOffline antes de liberar loading", () => {
+  it("Clientes no await sync completo antes de liberar loading", () => {
     assert.match(clientesSrc, /setLoading\(false\)/)
-    assert.match(clientesSrc, /void syncPlanForOffline/)
+    assert.match(clientesSrc, /offlineSyncRuntime/)
+    assert.doesNotMatch(clientesSrc, /await syncPlanForOffline/)
     assert.doesNotMatch(
       clientesSrc,
-      /await syncPlanForOffline\([\s\S]*setLoading\(false\)/,
+      /await offlineSyncRuntime\.syncPlan\([\s\S]*setLoading\(false\)/,
     )
   })
 

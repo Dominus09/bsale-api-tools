@@ -20,7 +20,8 @@ import {
 } from "@/lib/clients-list-safe"
 import { isDeviceOffline, readOfflineClients } from "@/lib/offline-load"
 import { isLikelyOfflineError } from "@/lib/offline-store"
-import { syncPlanForOffline } from "@/lib/offline-sync"
+import { setActivePlanId } from "@/lib/active-plan"
+import { offlineSyncRuntime } from "@/lib/offline-sync-runtime"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 
 type Filter = "all" | "pending" | "in_progress" | "managed" | "incidents"
@@ -136,7 +137,17 @@ export default function ClientesPage() {
         if (!cancelled) setLoading(false)
         const uid = getSessionUserId()
         if (uid && !q.trim() && !cancelled) {
-          void syncPlanForOffline(uid, planId).catch(() => undefined)
+          setActivePlanId(uid, planId)
+          // No forzar descarga completa aquí: el ciclo prioritario / manual
+          // vive en offlineSyncRuntime (evita duplicar sync al abrir Clientes).
+          const st = offlineSyncRuntime.getState()
+          if (st.plan?.id === planId && st.phase === "syncing") {
+            /* join in-flight via shared runtime */
+          } else if (st.priority?.planId === planId || st.plan?.id === planId) {
+            void offlineSyncRuntime
+              .syncPlan(planId, { force: false, plan: st.plan || undefined })
+              .catch(() => undefined)
+          }
         }
         return
       } catch (err) {

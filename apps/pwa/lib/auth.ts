@@ -54,6 +54,11 @@ export function clearSession() {
     /* private mode / quota */
   }
   if (uid) {
+    try {
+      localStorage.removeItem(`lq:ops:activePlan:${uid}`)
+    } catch {
+      /* ignore */
+    }
     void import("./offline-store")
       .then((m) => m.clearOfflineForUser(uid))
       .catch(() => {
