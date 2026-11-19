@@ -9,11 +9,12 @@ const sw = readFileSync(join(root, "public", "sw.js"), "utf8")
 const offlineHtml = readFileSync(join(root, "public", "offline.html"), "utf8")
 
 describe("service worker offline shell", () => {
-  it("usa versión v5+ y precachea shell + offline.html", () => {
-    assert.match(sw, /lq-pwa-v5-offline-shell/)
+  it("usa versión v6+ y precachea shell + offline.html", () => {
+    assert.match(sw, /lq-pwa-v6-offline-nav/)
     assert.match(sw, /OFFLINE_HTML\s*=\s*"\/offline\.html"/)
     assert.match(sw, /APP_SHELL\s*=\s*"\/despachos"/)
     assert.match(sw, /const PRECACHE = \[\s*OFFLINE_HTML/)
+    assert.match(sw, /X-LQ-Offline-RSC/)
   })
 
   it("nunca deja respondWith con null (navegación y assets)", () => {

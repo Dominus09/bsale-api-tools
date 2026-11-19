@@ -1,7 +1,7 @@
 "use client"
 
-import Link from "next/link"
 import { useParams, usePathname } from "next/navigation"
+import { AppLink } from "@/components/app-link"
 import { PlanTabs } from "@/components/plan-tabs"
 
 export default function PlanLayout({ children }: { children: React.ReactNode }) {
@@ -14,9 +14,9 @@ export default function PlanLayout({ children }: { children: React.ReactNode }) 
     <div className={`plan-shell${focusEntrega ? " plan-shell-focus" : ""}`}>
       {!focusEntrega ? (
         <div className="plan-top">
-          <Link href="/despachos" className="muted" style={{ fontSize: "0.85rem" }}>
+          <AppLink href="/despachos" className="muted" style={{ fontSize: "0.85rem" }}>
             ← Inicio
-          </Link>
+          </AppLink>
           {Number.isFinite(planId) && planId > 0 ? <PlanTabs planId={planId} /> : null}
         </div>
       ) : null}

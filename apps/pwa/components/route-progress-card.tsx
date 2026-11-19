@@ -1,6 +1,6 @@
 "use client"
 
-import Link from "next/link"
+import { AppLink } from "@/components/app-link"
 import type { RouteProgress } from "@/lib/api"
 
 type Variant = "full" | "compact" | "overlay"
@@ -141,9 +141,9 @@ export function RouteProgressCard({
             </div>
           </div>
           {nextHref ? (
-            <Link href={nextHref} className="btn btn-primary btn-compact">
+            <AppLink href={nextHref} className="btn btn-primary btn-compact">
               Ir
-            </Link>
+            </AppLink>
           ) : null}
         </div>
       ) : remaining === 0 && total > 0 ? (

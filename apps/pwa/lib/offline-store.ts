@@ -267,3 +267,14 @@ export function offlineBannerLabel(syncedAt: string | null | undefined): string 
   if (!syncedAt) return "Sin conexión · sin datos sincronizados"
   return `Sin conexión · Datos del ${formatSyncedAt(syncedAt)}`
 }
+
+/** Valida que una ficha sync tenga estructura mínima (client + documents). */
+export function detailLooksComplete(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object") return false
+  const p = payload as {
+    client?: unknown
+    documents?: unknown[]
+  }
+  if (!p.client || typeof p.client !== "object") return false
+  return Array.isArray(p.documents)
+}

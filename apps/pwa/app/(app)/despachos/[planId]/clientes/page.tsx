@@ -1,8 +1,8 @@
 "use client"
 
-import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
+import { AppLink } from "@/components/app-link"
 import { RouteProgressCard } from "@/components/route-progress-card"
 import {
   ApiError,
@@ -90,7 +90,17 @@ export default function ClientesPage() {
         setError(outcome.message)
       }
 
+      let hasLocal = false
       try {
+        // Snapshot local primero (evita spinner + tarjeta parcial mientras la API responde).
+        if (!q.trim()) {
+          const outcome = await readOfflineClients(planId)
+          if (!cancelled && outcome.status === "success") {
+            setItems(outcome.items as DriverClientCard[])
+            setLoading(false)
+            hasLocal = true
+          }
+        }
         if (isDeviceOffline()) {
           await loadFromOffline()
           return
@@ -104,12 +114,15 @@ export default function ClientesPage() {
         setItems(list)
         if (prog?.progress) setProgress(prog.progress)
         setError(null)
+        // Liberar UI YA: sync offline en background (antes await bloqueaba "Cargando clientes…").
+        if (!cancelled) setLoading(false)
         const uid = getSessionUserId()
         if (uid && !q.trim() && !cancelled) {
-          await syncPlanForOffline(uid, planId)
+          void syncPlanForOffline(uid, planId).catch(() => undefined)
         }
+        return
       } catch (err) {
-        if (cancelled) return
+        if (cancelled || hasLocal) return
         if (isLikelyOfflineError(err) || isDeviceOffline()) {
           await loadFromOffline()
           return
@@ -352,7 +365,9 @@ export default function ClientesPage() {
       </div>
 
       {error ? <div className="banner banner-error">{error}</div> : null}
-      {loading ? <div className="empty">Cargando clientes…</div> : null}
+      {loading && items.length === 0 ? (
+        <div className="empty">Cargando clientes…</div>
+      ) : null}
 
       {!loading && !error && sortedVisible.length === 0 ? (
         <div className="empty">No hay clientes para mostrar.</div>
@@ -378,7 +393,7 @@ export default function ClientesPage() {
                 : sem.labelEs
           const val = validationLabelEs(c.closure_review_status)
           return (
-            <Link
+            <AppLink
               key={c.customer_key}
               href={`/despachos/${planId}/clientes/${encodeURIComponent(c.customer_key)}`}
               className="card tap-card client-card"
@@ -425,7 +440,7 @@ export default function ClientesPage() {
               <div className={obs ? "obs-block" : "obs-block obs-empty"}>
                 {obs ? `Obs: ${obs}` : "Sin observaciones"}
               </div>
-            </Link>
+            </AppLink>
           )
         })}
       </div>

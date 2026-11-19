@@ -4,7 +4,7 @@
  * - Navegación: network-first → HTML cacheado → offline.html → Response sintético.
  * - Assets estáticos: cache-first con fallback de red; nunca null.
  */
-const VERSION = "lq-pwa-v5-offline-shell";
+const VERSION = "lq-pwa-v6-offline-nav";
 const STATIC_CACHE = `${VERSION}-static`;
 const PAGE_CACHE = `${VERSION}-pages`;
 const ASSET_CACHE = `${VERSION}-assets`;
@@ -155,11 +155,26 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (isRsc) {
+    // NUNCA devolver text/plain a Flight: rompe soft-nav Next y deja pantallas a medias.
+    // Offline → 503 sin cuerpo Flight para forzar fallback a navegación documento.
     event.respondWith(
-      fetch(request).catch(async () => {
-        const cached = await caches.match(request);
-        return cached || syntheticOfflineText();
-      }),
+      (async () => {
+        try {
+          return await fetch(request);
+        } catch {
+          const cached = await caches.match(request);
+          if (cached) return cached;
+          return new Response("", {
+            status: 503,
+            statusText: "Offline RSC",
+            headers: {
+              "Content-Type": "text/plain; charset=utf-8",
+              "Cache-Control": "no-store",
+              "X-LQ-Offline-RSC": "1",
+            },
+          });
+        }
+      })(),
     );
     return;
   }

@@ -1,7 +1,7 @@
 "use client"
 
-import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
+import { AppLink } from "@/components/app-link"
 import { RouteProgressCard } from "@/components/route-progress-card"
 import {
   ApiError,
@@ -95,12 +95,12 @@ function PlanCard(props: {
           ) : null}
         </div>
         <div className="plan-card-footer">
-          <Link
+          <AppLink
             href={`/despachos/${p.id}`}
             className={`btn ${hasPendingOps ? "btn-primary" : "btn-secondary"}`}
           >
             {cta}
-          </Link>
+          </AppLink>
         </div>
       </article>
     )
@@ -162,15 +162,15 @@ function PlanCard(props: {
         </div>
 
         {props.offlineReady?.complete ? (
-          <div className="banner banner-info" style={{ marginTop: 10, fontSize: "0.82rem" }}>
-            {p.planning_code || `Plan #${p.id}`} · Listo para usar sin conexión ·{" "}
+          <p className="muted" style={{ margin: "10px 0 0", fontSize: "0.78rem" }}>
+            {p.planning_code || `Plan #${p.id}`} · Listo sin conexión ·{" "}
             {formatSyncedAt(props.offlineReady.syncedAt)}
-          </div>
+          </p>
         ) : null}
       </div>
 
       <div className="plan-card-footer">
-        <Link
+        <AppLink
           href={`/despachos/${p.id}`}
           className={`btn ${props.hero ? "btn-primary btn-with-arrow" : "btn-secondary"}`}
         >
@@ -181,7 +181,7 @@ function PlanCard(props: {
               <path d="m13 6 6 6-6 6" />
             </svg>
           ) : null}
-        </Link>
+        </AppLink>
       </div>
     </article>
   )
@@ -281,32 +281,38 @@ export default function DespachosPage() {
           }
         }
 
-        // Descarga completa observable (clientes + fichas) sin abrir cada ficha a mano.
+        // Sync offline en background: no bloquea la lista ni añade banners duplicados.
         if (uid && !cancelled) {
+          const existing = await listOfflineReadyPlans(uid)
+          if (!cancelled) {
+            const map: Record<number, OfflinePlanReady> = {}
+            for (const r of existing) map[r.planId] = r
+            setReadyById(map)
+          }
           const priority = [
             ...buckets.today,
             ...buckets.history.slice(0, 2),
           ].slice(0, 3)
           if (priority.length) {
-            setSyncNote("Sincronizando datos para uso sin conexión…")
-            const readyList = await syncPriorityPlansForOffline(
-              uid,
-              priority,
-              (p) => {
-                if (!cancelled) setSyncNote(p.message)
-              },
-            )
-            if (!cancelled) {
-              const readyMap: Record<number, OfflinePlanReady> = {}
-              for (const r of readyList) readyMap[r.planId] = r
-              setReadyById((prev) => ({ ...prev, ...readyMap }))
-              const ok = readyList.filter((r) => r.complete).length
-              setSyncNote(
-                ok > 0
-                  ? `${ok} despacho(s) listo(s) para usar sin conexión`
-                  : "No se completó la descarga offline. Reintenta con mejor señal.",
-              )
-            }
+            setSyncNote("Sincronizando para uso sin conexión…")
+            void syncPriorityPlansForOffline(uid, priority, (p) => {
+              if (!cancelled) setSyncNote(p.message)
+            })
+              .then((readyList) => {
+                if (cancelled) return
+                const readyMap: Record<number, OfflinePlanReady> = {}
+                for (const r of readyList) readyMap[r.planId] = r
+                setReadyById((prev) => ({ ...prev, ...readyMap }))
+                const ok = readyList.filter((r) => r.complete).length
+                setSyncNote(
+                  ok > 0
+                    ? `${ok} despacho(s) listo(s) sin conexión`
+                    : "Descarga offline incompleta · reintenta con señal",
+                )
+              })
+              .catch(() => {
+                if (!cancelled) setSyncNote("No se pudo completar sync offline")
+              })
           }
         }
       } catch (err) {
@@ -382,9 +388,9 @@ export default function DespachosPage() {
   return (
     <div className="stack-gap">
       {syncNote ? (
-        <div className="banner banner-info" role="status" style={{ fontSize: "0.82rem" }}>
+        <p className="muted" role="status" style={{ margin: 0, fontSize: "0.78rem" }}>
           {syncNote}
-        </div>
+        </p>
       ) : null}
       <section>
         <h2 className="section-title">Despacho de hoy</h2>

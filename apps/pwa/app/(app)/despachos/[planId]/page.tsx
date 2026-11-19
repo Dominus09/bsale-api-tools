@@ -1,8 +1,8 @@
 "use client"
 
-import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useState } from "react"
+import { AppLink } from "@/components/app-link"
 import { RouteProgressCard } from "@/components/route-progress-card"
 import {
   ApiError,
@@ -41,10 +41,23 @@ export default function DespachoDetailPage() {
       setError(outcome.message)
     }
     async function load() {
-      if (isDeviceOffline()) {
-        await loadFromOffline()
+      // Pintar snapshot local de inmediato; refrescar en red si hay conectividad.
+      const local = await readOfflinePlanFromList(planId)
+      let hasLocal = false
+      if (!cancelled && local.status === "success") {
+        setPlan(local.plan as DriverDespacho)
+        setProgress(null)
+        setError(null)
+        hasLocal = true
+      } else if (!cancelled && isDeviceOffline()) {
+        setError(
+          local.status === "error" || local.status === "empty"
+            ? local.message
+            : "Este despacho no está descargado.",
+        )
         return
       }
+      if (cancelled || isDeviceOffline()) return
       try {
         const data = await getMyDespacho(planId)
         if (cancelled) return
@@ -52,7 +65,7 @@ export default function DespachoDetailPage() {
         setProgress(data.progress || null)
         setError(null)
       } catch (err) {
-        if (cancelled) return
+        if (cancelled || hasLocal) return
         if (isLikelyOfflineError(err) || isDeviceOffline()) {
           await loadFromOffline()
           return
@@ -147,20 +160,20 @@ export default function DespachoDetailPage() {
       <RouteProgressCard progress={progress} nextHref={nextHref} />
 
       <div className="btn-row">
-        <Link
+        <AppLink
           href={`/despachos/${planId}/clientes`}
           className="btn btn-secondary"
           style={{ textAlign: "center" }}
         >
           Ver clientes
-        </Link>
-        <Link
+        </AppLink>
+        <AppLink
           href={`/despachos/${planId}/mapa`}
           className="btn btn-primary"
           style={{ textAlign: "center" }}
         >
           Ver mapa
-        </Link>
+        </AppLink>
       </div>
     </div>
   )

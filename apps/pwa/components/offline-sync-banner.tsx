@@ -2,14 +2,13 @@
 
 import { useEffect, useState } from "react"
 import { getSessionUserId } from "@/lib/auth"
-import { offlineBannerLabel } from "@/lib/offline-load"
 import {
   formatSyncedAt,
   getOfflinePlans,
   listOfflineReadyPlans,
 } from "@/lib/offline-store"
 
-/** Único banner de estado de conexión / sync (evita duplicados AuthGate + página). */
+/** Único aviso compacto de conexión / sync. */
 export function OfflineSyncBanner() {
   const [online, setOnline] = useState(true)
   const [syncedAt, setSyncedAt] = useState<string | null>(null)
@@ -52,28 +51,41 @@ export function OfflineSyncBanner() {
       setSyncedAt(latest)
     }
     void load()
+    const t = window.setInterval(() => {
+      void load()
+    }, 8000)
     return () => {
       cancelled = true
+      window.clearInterval(t)
     }
   }, [online])
 
   if (!online) {
+    const label =
+      readyCount > 0 || hasPlans
+        ? `Sin conexión · Datos guardados: ${formatSyncedAt(syncedAt)}`
+        : "Sin conexión · sin despachos descargados"
     return (
-      <div className="banner banner-warn" role="status" style={{ fontSize: "0.82rem" }}>
-        {readyCount > 0 || hasPlans
-          ? offlineBannerLabel(syncedAt)
-          : "Sin conexión · No tienes despachos descargados. Conéctate a internet para sincronizarlos."}
-      </div>
+      <p
+        className="muted"
+        role="status"
+        style={{ margin: "0 0 10px", fontSize: "0.78rem", lineHeight: 1.35 }}
+      >
+        {label}
+      </p>
     )
   }
 
   if (readyCount > 0 && syncedAt) {
     return (
-      <div className="banner banner-info" role="status" style={{ fontSize: "0.82rem" }}>
-        {readyCount} despacho{readyCount === 1 ? "" : "s"} listo
-        {readyCount === 1 ? "" : "s"} para usar sin conexión · Última sync:{" "}
+      <p
+        className="muted"
+        role="status"
+        style={{ margin: "0 0 10px", fontSize: "0.78rem", lineHeight: 1.35 }}
+      >
+        {readyCount} listo{readyCount === 1 ? "" : "s"} sin conexión ·{" "}
         {formatSyncedAt(syncedAt)}
-      </div>
+      </p>
     )
   }
 

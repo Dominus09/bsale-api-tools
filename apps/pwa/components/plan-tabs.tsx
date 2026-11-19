@@ -1,7 +1,7 @@
 "use client"
 
-import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { AppLink } from "@/components/app-link"
 
 export function PlanTabs({ planId }: { planId: number }) {
   const pathname = usePathname() || ""
@@ -25,9 +25,9 @@ export function PlanTabs({ planId }: { planId: number }) {
       {tabs.map((t) => {
         const active = t.match(pathname)
         return (
-          <Link key={t.href} href={t.href} className={active ? "plan-tab active" : "plan-tab"}>
+          <AppLink key={t.href} href={t.href} className={active ? "plan-tab active" : "plan-tab"}>
             {t.label}
-          </Link>
+          </AppLink>
         )
       })}
     </nav>

@@ -1,8 +1,8 @@
 "use client"
 
-import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
+import { AppLink } from "@/components/app-link"
 import { ApiError, getMyCliente } from "@/lib/api"
 import { getSessionUserId } from "@/lib/auth"
 import { breakdownBoxUnits } from "@/lib/box-units"
@@ -52,10 +52,22 @@ export default function ClienteFichaPage() {
       setError(outcome.message)
     }
     async function load() {
-      if (isDeviceOffline()) {
-        await loadFromOffline()
+      const local = await readOfflineClientDetail(planId, customerKey)
+      let hasLocal = false
+      if (!cancelled && local.status === "success") {
+        setData(local.payload as Awaited<ReturnType<typeof getMyCliente>>)
+        setOfflineSource(local.syncedAt)
+        setError(null)
+        hasLocal = true
+      } else if (!cancelled && isDeviceOffline()) {
+        setError(
+          local.status === "error" || local.status === "empty"
+            ? local.message
+            : "Esta ficha no está descargada.",
+        )
         return
       }
+      if (cancelled || isDeviceOffline()) return
       try {
         const res = await getMyCliente(planId, customerKey)
         if (cancelled) return
@@ -70,7 +82,7 @@ export default function ClienteFichaPage() {
           })
         }
       } catch (err) {
-        if (cancelled) return
+        if (cancelled || hasLocal) return
         if (isLikelyOfflineError(err) || isDeviceOffline()) {
           await loadFromOffline()
           return
@@ -104,9 +116,9 @@ export default function ClienteFichaPage() {
   if (error) {
     return (
       <div className="stack-gap">
-        <Link href={`/despachos/${planId}/clientes`} className="muted">
+        <AppLink href={`/despachos/${planId}/clientes`} className="muted">
           ← Clientes
-        </Link>
+        </AppLink>
         <div className="banner banner-error">{error}</div>
       </div>
     )
@@ -151,9 +163,9 @@ export default function ClienteFichaPage() {
 
   return (
     <div className="stack-gap">
-      <Link href={backClients} className="muted" style={{ fontSize: "0.85rem" }}>
+      <AppLink href={backClients} className="muted" style={{ fontSize: "0.85rem" }}>
         ← Clientes
-      </Link>
+      </AppLink>
 
       <div className="card">
         <div className="ficha-head">
@@ -340,28 +352,27 @@ export default function ClienteFichaPage() {
         data.active_visit?.status === "in_progress" ||
         data.capabilities?.create_new_visit_after_close) ? (
         <div className="btn-row">
-          <Link
+          <AppLink
             href={`/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/entrega/incidencia?reason=closed_store`}
             className="btn btn-danger"
             style={{ textAlign: "center" }}
           >
             Local cerrado
-          </Link>
-          <Link
+          </AppLink>
+          <AppLink
             href={`/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/entrega/incidencia?reason=rejected_order`}
             className="btn btn-secondary"
             style={{ textAlign: "center" }}
           >
             Pedido rechazado
-          </Link>
+          </AppLink>
         </div>
       ) : null}
 
       {offlineSource ? (
-        <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
-          Herramientas de ubicación y fachada requieren internet para guardar en
-          servidor.
-        </div>
+        <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
+          Ubicación/fachada requieren internet para guardar.
+        </p>
       ) : (
         <DeliveryLocalToolsHost
           planId={planId}

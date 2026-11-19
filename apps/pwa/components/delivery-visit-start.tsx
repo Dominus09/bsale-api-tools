@@ -137,10 +137,9 @@ export function DeliveryVisitStart(props: Props) {
 
   if (props.offlineReadOnly) {
     return (
-      <div className="banner banner-warn" role="status">
-        Modo sin conexión · puedes consultar pedido y estado sincronizado. No se
-        registran entregas, GPS, fotos ni WhatsApp hasta recuperar internet.
-      </div>
+      <p className="muted" role="status" style={{ margin: "0 0 8px", fontSize: "0.82rem" }}>
+        Solo lectura offline · no se registran entregas hasta recuperar internet.
+      </p>
     )
   }
 
