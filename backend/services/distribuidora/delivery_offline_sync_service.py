@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import zlib
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -28,6 +29,7 @@ from backend.services.distribuidora import delivery_semaphore as sem
 from backend.services.distribuidora import delivery_visit_service as visit_svc
 from backend.services.distribuidora import dispatch_plan_pwa_driver_read_service as read_svc
 from backend.services.distribuidora import client_location_service as loc_svc
+from backend.services.distribuidora import delivery_offline_validate as offline_validate
 from backend.utils.json_safe import serialize_value
 
 OP_COMPLETE = "complete_delivery"
@@ -36,14 +38,26 @@ ALLOWED_OPS = frozenset({OP_COMPLETE, OP_CLOSED})
 
 ERR_IDEMPOTENCY_PAYLOAD_MISMATCH = "IDEMPOTENCY_PAYLOAD_MISMATCH"
 ERR_DUPLICATE_VISIT_OP = "DUPLICATE_VISIT_OPERATION"
-ERR_PICKING_CHANGED = "PICKING_CHANGED"
+ERR_PICKING_CHANGED = offline_validate.ERR_PICKING_CHANGED
 ERR_UNAUTHORIZED = "OFFLINE_OP_UNAUTHORIZED"
 ERR_VISIT_CLOSED = "VISIT_ALREADY_CLOSED"
 ERR_EVIDENCE_REQUIRED = "EVIDENCE_REQUIRED"
 ERR_INVALID_PAYMENT = "INVALID_PAYMENT_METHOD"
+ERR_SYNC_WRITES_DISABLED = "OFFLINE_SYNC_WRITES_DISABLED"
 
 # Inyectable en tests (simula R2 sin red).
 R2PutFn = Callable[[str, bytes, str], str]
+LiveContextFetcher = offline_validate.LiveContextFetcher
+
+
+def offline_sync_writes_enabled() -> bool:
+    """Feature flag backend: OFF por defecto. Solo laboratorio explícito."""
+    return os.getenv("OFFLINE_SYNC_WRITES_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def compute_request_hash(payload: dict[str, Any]) -> str:
@@ -196,9 +210,23 @@ def sync_offline_operation(
     evidence_bytes: bytes | None = None,
     evidence_content_type: str = "image/jpeg",
     r2_put: R2PutFn | None = None,
+    context_fetcher: LiveContextFetcher | None = None,
+    require_writes_flag: bool = False,
     picking_validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Orquesta sync Offline 2A.1 con idempotencia real y etapas R2 separadas."""
+    """Sync offline idempotente + validador vivo. Flag HTTP: require_writes_flag."""
+    if require_writes_flag and not offline_sync_writes_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": ERR_SYNC_WRITES_DISABLED,
+                "message_es": (
+                    "Sincronización de escrituras offline deshabilitada "
+                    "(feature flag). No se aceptan envíos."
+                ),
+                "message": "offline sync writes disabled",
+            },
+        )
     uid = read_svc.enforce_driver_plan_read_access(user, int(plan_id))
     idem = str(body.get("idempotency_key") or "").strip()
     if not idem:
@@ -247,6 +275,7 @@ def sync_offline_operation(
             evidence_bytes=evidence_bytes,
             evidence_content_type=evidence_content_type,
             r2_put=r2_put,
+            context_fetcher=context_fetcher,
             picking_validator=picking_validator,
         )
     finally:
@@ -281,6 +310,7 @@ def _sync_offline_operation_locked(
     evidence_bytes: bytes | None,
     evidence_content_type: str,
     r2_put: R2PutFn | None,
+    context_fetcher: LiveContextFetcher | None,
     picking_validator: Callable[[dict[str, Any]], dict[str, Any]] | None,
 ) -> dict[str, Any]:
     # --- Fase A: claim idempotente (TX corta) ---
@@ -420,12 +450,23 @@ def _sync_offline_operation_locked(
     finally:
         conn.close()
 
-    # --- Validación picking (inyectable) ---
-    if picking_validator is not None:
-        try:
+    # --- Validación real picking/docs (oficial; fetcher solo en lab) ---
+    try:
+        if picking_validator is not None:
+            # Compat tests legados: se ejecuta además del real si hay fetcher.
             picking_validator(body)
-        except HTTPException as exc:
-            return _fail_op(int(op_row["id"]), exc)
+        allow_vid = op_row.get("visit_id")
+        offline_validate.validate_offline_operation(
+            user=user,
+            plan_id=int(plan_id),
+            body=body,
+            context_fetcher=context_fetcher,
+            allow_closed_visit_id=(
+                int(allow_vid) if allow_vid is not None else None
+            ),
+        )
+    except HTTPException as exc:
+        return _fail_op(int(op_row["id"]), exc)
 
     # --- Fase B: evidencia R2 (fuera de TX) ---
     evidence_key = op_row.get("evidence_object_key")

@@ -57,6 +57,8 @@ def main() -> int:
 
     env = os.environ.copy()
     env["SIMPLE_PLANNING_TEST_DSN"] = uri
+    # Laboratorio: permite ejercicio del servicio; el router HTTP sigue exigiendo flag.
+    env["OFFLINE_SYNC_WRITES_ENABLED"] = "1"
     env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     Path(ROOT / "_tmp_isolated_pg_dsn.txt").write_text(uri + "\n", encoding="utf-8")
 

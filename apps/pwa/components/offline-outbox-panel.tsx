@@ -10,6 +10,8 @@ import {
   outboxStatusLabelEs,
   type OutboxOperation,
 } from "@/lib/offline-outbox"
+import { isOutboxSyncWritesEnabled } from "@/lib/offline-outbox-policy"
+import { outboxSyncRuntime } from "@/lib/offline-outbox-sync"
 import { formatSyncedAt } from "@/lib/offline-store"
 
 type Props = {
@@ -20,6 +22,8 @@ type Props = {
 export function OfflineOutboxPanel({ open, onClose }: Props) {
   const [ops, setOps] = useState<OutboxOperation[]>([])
   const [mounted, setMounted] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const writesOn = isOutboxSyncWritesEnabled()
 
   useEffect(() => {
     setMounted(true)
@@ -33,6 +37,9 @@ export function OfflineOutboxPanel({ open, onClose }: Props) {
       return
     }
     void listPendingOutboxOps(uid).then(setOps).catch(() => setOps([]))
+    return outboxSyncRuntime.subscribe((s) => {
+      setSyncMsg(s.message || s.lastResult)
+    })
   }, [open])
 
   if (!open || !mounted || typeof document === "undefined") return null
@@ -58,9 +65,30 @@ export function OfflineOutboxPanel({ open, onClose }: Props) {
           </button>
         </div>
         <p className="muted" style={{ margin: "0 0 12px", fontSize: "0.78rem" }}>
-          Guardadas en este dispositivo. Aún no confirmadas por el servidor.
-          No se envían en esta fase.
+          {writesOn
+            ? "Motor de sync de laboratorio activo. No usar contra API productiva."
+            : "Guardadas en este dispositivo. Sync de escrituras deshabilitado por defecto."}
         </p>
+        {syncMsg ? (
+          <div className="banner banner-info" style={{ fontSize: "0.78rem" }}>
+            {syncMsg}
+          </div>
+        ) : null}
+        {writesOn ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            style={{ width: "100%", marginBottom: 12 }}
+            onClick={() => {
+              void outboxSyncRuntime.syncNow().then(async () => {
+                const uid = getSessionUserId()
+                if (uid) setOps(await listPendingOutboxOps(uid))
+              })
+            }}
+          >
+            Sincronizar ahora
+          </button>
+        ) : null}
         {ops.length === 0 ? (
           <p className="empty">No hay operaciones pendientes.</p>
         ) : (
@@ -75,7 +103,13 @@ export function OfflineOutboxPanel({ open, onClose }: Props) {
                 </div>
                 <div className="muted" style={{ fontSize: "0.75rem" }}>
                   {formatSyncedAt(op.captured_at)} · {outboxStatusLabelEs(op.status)}
+                  {op.attempt_count > 0 ? ` · intentos ${op.attempt_count}` : ""}
                 </div>
+                {op.last_error ? (
+                  <div className="banner banner-error" style={{ fontSize: "0.72rem", marginTop: 6 }}>
+                    {op.last_error}
+                  </div>
+                ) : null}
                 {op.evidence ? (
                   <div className="pill" style={{ marginTop: 6 }}>
                     Foto guardada en dispositivo
@@ -89,6 +123,16 @@ export function OfflineOutboxPanel({ open, onClose }: Props) {
                   >
                     Ver cliente
                   </AppLink>
+                  {writesOn &&
+                  (op.status === "pending" || op.status === "failed_needs_action") ? (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-compact"
+                      onClick={() => void outboxSyncRuntime.syncNow()}
+                    >
+                      Reintentar
+                    </button>
+                  ) : null}
                 </div>
               </li>
             ))}

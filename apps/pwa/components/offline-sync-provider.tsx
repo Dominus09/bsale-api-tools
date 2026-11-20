@@ -13,6 +13,7 @@ import {
   offlineSyncRuntime,
   type OfflineSyncRuntimeState,
 } from "@/lib/offline-sync-runtime"
+import { bindOutboxSyncTriggers } from "@/lib/offline-outbox-sync"
 import { OfflinePrepModal } from "@/components/offline-prep-modal"
 import { OfflineStatusPanel } from "@/components/offline-status-panel"
 
@@ -60,9 +61,11 @@ export function OfflineSyncProvider({ children }: { children: ReactNode }) {
     }
     window.addEventListener("online", onOnline)
     window.addEventListener("offline", onOffline)
+    const unbindOutbox = bindOutboxSyncTriggers()
     return () => {
       window.removeEventListener("online", onOnline)
       window.removeEventListener("offline", onOffline)
+      unbindOutbox()
     }
   }, [])
 

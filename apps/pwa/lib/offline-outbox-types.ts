@@ -89,12 +89,10 @@ export type OutboxOperation = {
   created_at: string
   updated_at: string
   device_id: string | null
-  /**
-   * true solo tras respuesta verificable del servidor (futuro 2A.3+).
-   * En 2A.2 siempre false.
-   */
-  server_confirmed: false
-  sync_enabled: false
+  /** true solo tras respuesta verificable del servidor. */
+  server_confirmed: boolean
+  /** true si esta op fue/está habilitada para sync writes. */
+  sync_enabled: boolean
 }
 
 export function outboxStatusLabelEs(status: OutboxLocalStatus): string {

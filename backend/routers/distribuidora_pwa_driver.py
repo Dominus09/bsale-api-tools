@@ -663,7 +663,7 @@ async def sync_offline_operation(
     evidence: UploadFile | None = File(None),
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
-    """Sync idempotente Offline V2 (2A.1).
+    """Sync idempotente Offline V2 (2A.3).
 
     Multipart:
     - ``payload``: JSON string del contrato
@@ -671,6 +671,7 @@ async def sync_offline_operation(
     - ``evidence``: archivo foto (obligatorio en closed_store salvo replay).
 
     Misma idempotency_key + mismo contenido → replay sin duplicar.
+    Requiere ``OFFLINE_SYNC_WRITES_ENABLED=1`` (laboratorio). OFF por defecto.
     """
     import json as _json
 
@@ -693,4 +694,5 @@ async def sync_offline_operation(
         body=body,
         evidence_bytes=evidence_bytes,
         evidence_content_type=ctype,
+        require_writes_flag=True,
     )

@@ -64,8 +64,11 @@ describe("offline-outbox 2A.2", () => {
     )
     assert.ok(
       OFFLINE_V2_PUBLICATION_BLOCKERS.includes(
-        "picking_docs_validator_still_injectable_not_wired_to_ficha",
+        "sync_writes_disabled_by_default_until_explicit_lab_flag",
       ),
+    )
+    assert.ok(
+      OFFLINE_V2_PUBLICATION_BLOCKERS.includes("no_writes_to_api_quillotana_cl"),
     )
   })
 

@@ -198,6 +198,77 @@ def isolated_db(monkeypatch):
     monkeypatch.setattr(
         visit_svc, "_expected_related_document_ids", lambda _p, _k: [91055]
     )
+
+    from backend.services.distribuidora import delivery_offline_validate as ov
+
+    def _lab_context(_plan_id: int, customer_key: str) -> dict:
+        """Contexto vivo de laboratorio: picking 501/v3 + docs desde document_details."""
+        conn = _connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT detail_id, quantity
+            FROM distribuidora.document_details
+            WHERE document_id = 91055
+            ORDER BY detail_id
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        products = [
+            {
+                "source_detail_id": int(r["detail_id"]),
+                "unidades": float(r["quantity"]),
+            }
+            for r in rows
+        ]
+        return {
+            "picking_ready": True,
+            "picking_reason": None,
+            "picking_id": 501,
+            "picking_version": "3",
+            "is_current": True,
+            "plan_status": "confirmed",
+            "customer_key": customer_key,
+            "ficha": {
+                "client": {
+                    "client_id": 9201,
+                    "customer_key": customer_key,
+                    "client_name": "Cliente 2A1",
+                },
+                "documents": [
+                    {
+                        "related_document_id": 91055,
+                        "products": products,
+                    }
+                ],
+            },
+        }
+
+    real_validate = ov.validate_offline_operation
+
+    def _validate_with_lab(
+        *,
+        user,
+        plan_id,
+        body,
+        context_fetcher=None,
+        allow_closed_visit_id=None,
+    ):
+        return real_validate(
+            user=user,
+            plan_id=plan_id,
+            body=body,
+            context_fetcher=context_fetcher or _lab_context,
+            allow_closed_visit_id=allow_closed_visit_id,
+        )
+
+    monkeypatch.setattr(ov, "validate_offline_operation", _validate_with_lab)
+    monkeypatch.setattr(ov, "get_connection", fake_get_connection)
+    monkeypatch.setattr(ov.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42)
+    # Expuesto para tests de conflicto de picking
+    monkeypatch.setattr(offline_svc, "_lab_context_for_tests", _lab_context, raising=False)
     yield
 
 
@@ -437,15 +508,12 @@ def test_unauthorized_user(isolated_db, monkeypatch):
 
 
 def test_picking_changed_validator(isolated_db):
-    def reject(_body):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": offline_svc.ERR_PICKING_CHANGED,
-                "message": "picking modificado",
-                "message_es": "picking modificado",
-            },
-        )
+    def stale_ctx(plan_id: int, customer_key: str):
+        base = offline_svc._lab_context_for_tests(plan_id, customer_key)
+        base = dict(base)
+        base["picking_id"] = 999
+        base["picking_version"] = "99"
+        return base
 
     with pytest.raises(HTTPException) as ei:
         offline_svc.sync_offline_operation(
@@ -453,10 +521,54 @@ def test_picking_changed_validator(isolated_db):
             plan_id=910,
             body=_complete_body("idem-pick-chg"),
             r2_put=lambda *a, **k: "",
-            picking_validator=reject,
+            context_fetcher=stale_ctx,
         )
     assert ei.value.status_code == 409
     assert ei.value.detail["code"] == offline_svc.ERR_PICKING_CHANGED
+
+
+def test_document_units_mismatch_live_validator(isolated_db):
+    def bad_units_ctx(plan_id: int, customer_key: str):
+        base = offline_svc._lab_context_for_tests(plan_id, customer_key)
+        base = dict(base)
+        ficha = dict(base["ficha"])
+        docs = [dict(ficha["documents"][0])]
+        docs[0] = dict(docs[0])
+        docs[0]["products"] = [
+            {"source_detail_id": 91001, "unidades": 99},
+            {"source_detail_id": 91002, "unidades": 2},
+        ]
+        ficha["documents"] = docs
+        base["ficha"] = ficha
+        return base
+
+    with pytest.raises(HTTPException) as ei:
+        offline_svc.sync_offline_operation(
+            user=_user(),
+            plan_id=910,
+            body=_complete_body("idem-doc-units"),
+            r2_put=lambda *a, **k: "",
+            context_fetcher=bad_units_ctx,
+        )
+    assert ei.value.status_code == 409
+    assert ei.value.detail["code"] in (
+        offline_svc.offline_validate.ERR_DOC_MISMATCH,
+        "DOCUMENT_MISMATCH",
+    )
+
+
+def test_sync_writes_flag_blocks_http_path(isolated_db, monkeypatch):
+    monkeypatch.delenv("OFFLINE_SYNC_WRITES_ENABLED", raising=False)
+    with pytest.raises(HTTPException) as ei:
+        offline_svc.sync_offline_operation(
+            user=_user(),
+            plan_id=910,
+            body=_complete_body("idem-flag-off"),
+            r2_put=lambda *a, **k: "",
+            require_writes_flag=True,
+        )
+    assert ei.value.status_code == 503
+    assert ei.value.detail["code"] == offline_svc.ERR_SYNC_WRITES_DISABLED
 
 
 def test_payment_transfer_and_check(isolated_db):

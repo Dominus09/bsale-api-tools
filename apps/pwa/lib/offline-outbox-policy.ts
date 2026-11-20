@@ -1,6 +1,8 @@
 /**
- * Política Offline V2 outbox (2A.2).
+ * Política Offline V2 outbox (2A.2/2A.3).
  * Separada de snapshots regenerables Offline V1.
+ *
+ * Sync de escrituras: OFF por defecto. Nunca en hosts productivos Quillotana.
  */
 
 export const OFFLINE_OUTBOX_RETENTION = {
@@ -13,25 +15,63 @@ export const OFFLINE_OUTBOX_RETENTION = {
   onBuildIdOrSwUpdate: "retain_outbox" as const,
   onReloadOrClose: "retain_outbox" as const,
   /**
-   * 2A.2: no enviar escrituras a API productiva.
-   * Activar solo con aprobación explícita 2A.3+.
+   * Default de compilación: false.
+   * Habilitación runtime: ver isOutboxSyncWritesEnabled().
    */
   syncWritesEnabled: false as const,
-  /**
-   * IndexedDB no cifra por sí mismo. Aislamos por userId y no exponemos
-   * ops ajenas en UI. No afirmar cifrado aplicativo.
-   */
   encryptionClaim: "user_isolation_only_no_app_level_encryption" as const,
   authorizedDelete: "explicit_user_or_admin_procedure_only" as const,
 } as const
 
-/** Bloqueo de publicación 2A.1→prod / 2A.3 hasta validadores reales. */
+/** Bloqueos de publicación hasta aprobación separada. */
 export const OFFLINE_V2_PUBLICATION_BLOCKERS = [
-  "picking_docs_validator_still_injectable_not_wired_to_ficha",
-  "sync_writes_disabled_until_2a3_approval",
+  "sync_writes_disabled_by_default_until_explicit_lab_flag",
   "no_production_sql_061_until_approved",
+  "no_writes_to_api_quillotana_cl",
+  "whatsapp_only_after_server_ack",
 ] as const
 
+const LAB_FLAG_KEY = "lq:offline:syncWrites"
+
+export function isProductionQuillotanaHost(
+  hostname?: string | null,
+): boolean {
+  const h = String(hostname || "").toLowerCase()
+  if (!h) return false
+  return h === "api.quillotana.cl" || h.endsWith(".quillotana.cl") || h.includes("quillotana.cl")
+}
+
+/**
+ * Sync de escrituras:
+ * - Nunca en hosts *.quillotana.cl
+ * - Requiere NEXT_PUBLIC_OFFLINE_SYNC_WRITES=1 O localStorage lab flag
+ * - Default: false
+ */
 export function isOutboxSyncWritesEnabled(): boolean {
+  if (typeof window !== "undefined" && isProductionQuillotanaHost(window.location.hostname)) {
+    return false
+  }
+  if (process.env.NEXT_PUBLIC_OFFLINE_SYNC_WRITES === "1") {
+    return true
+  }
+  if (typeof window !== "undefined") {
+    try {
+      if (window.localStorage.getItem(LAB_FLAG_KEY) === "1") return true
+    } catch {
+      /* private mode */
+    }
+  }
   return OFFLINE_OUTBOX_RETENTION.syncWritesEnabled === true
+}
+
+/** Solo laboratorio: activa flag local. No usar en prod. */
+export function setOutboxSyncWritesLabFlag(enabled: boolean): void {
+  if (typeof window === "undefined") return
+  if (isProductionQuillotanaHost(window.location.hostname)) return
+  try {
+    if (enabled) window.localStorage.setItem(LAB_FLAG_KEY, "1")
+    else window.localStorage.removeItem(LAB_FLAG_KEY)
+  } catch {
+    /* ignore */
+  }
 }
