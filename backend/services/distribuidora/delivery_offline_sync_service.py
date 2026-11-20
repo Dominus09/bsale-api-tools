@@ -296,11 +296,17 @@ def sync_offline_operation(
         ) from exc
     company_id = loc_svc._authorized_company_id_for_plan(user, int(plan_id))  # noqa: SLF001
 
-    lock_key = _advisory_lock_key(uid, idem)
+    # Orden fijo de locks para evitar deadlock:
+    # 1) plan/cliente (negocio: una sola finalización válida)
+    # 2) idempotency_key (replay / misma clave)
+    # Visitas distintas o histórico anulado no comparten este lock de negocio.
+    pc_lock = _advisory_lock_key_plan_customer(uid, int(plan_id), customer_key)
+    idem_lock = _advisory_lock_key(uid, idem)
     lock_conn = get_connection()
     try:
         lock_cur = lock_conn.cursor()
-        lock_cur.execute("SELECT pg_advisory_lock(%s)", (lock_key,))
+        lock_cur.execute("SELECT pg_advisory_lock(%s)", (pc_lock,))
+        lock_cur.execute("SELECT pg_advisory_lock(%s)", (idem_lock,))
         lock_conn.commit()
         lock_cur.close()
         return _sync_offline_operation_locked(
@@ -324,7 +330,8 @@ def sync_offline_operation(
     finally:
         try:
             unlock_cur = lock_conn.cursor()
-            unlock_cur.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+            unlock_cur.execute("SELECT pg_advisory_unlock(%s)", (idem_lock,))
+            unlock_cur.execute("SELECT pg_advisory_unlock(%s)", (pc_lock,))
             lock_conn.commit()
             unlock_cur.close()
         except Exception:
@@ -334,6 +341,16 @@ def sync_offline_operation(
 
 def _advisory_lock_key(driver_user_id: int, idempotency_key: str) -> int:
     raw = f"offline_op:{int(driver_user_id)}:{idempotency_key}".encode("utf-8")
+    return zlib.crc32(raw) & 0x7FFFFFFF
+
+
+def _advisory_lock_key_plan_customer(
+    driver_user_id: int, plan_id: int, customer_key: str
+) -> int:
+    """Lock de negocio: serializa finalizaciones del mismo chofer/plan/cliente."""
+    raw = (
+        f"offline_visit:{int(driver_user_id)}:{int(plan_id)}:{customer_key}"
+    ).encode("utf-8")
     return zlib.crc32(raw) & 0x7FFFFFFF
 
 

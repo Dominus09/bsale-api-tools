@@ -292,6 +292,19 @@ def build_app():
     def health():
         return {"ok": True, "lab": "2a5", "r2_objects": len(R2_STORE)}
 
+    @app.get("/auth/me")
+    def auth_me():
+        """Sesión lab para AuthGate en flujo real (nunca prod)."""
+        return {
+            "id": 42,
+            "email": "chofer@lab.local",
+            "role": "driver",
+            "apps": ["pwa"],
+            "profiles": ["chofer"],
+            "has_erp_access": False,
+            "has_pwa_access": True,
+        }
+
     @app.get("/lab/pg-stats")
     def pg_stats():
         conn = connect()
@@ -329,6 +342,68 @@ def build_app():
     def r2_fail_once():
         LAB_STATE["r2_fail_once"] = True
         return {"ok": True}
+
+    @app.post("/lab/reset-plan/{plan_id}")
+    def reset_plan(plan_id: int):
+        """Limpia visitas/ops del plan lab (entre E2E). No toca prod."""
+        conn = connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            DELETE FROM distribuidora.delivery_offline_ops
+            WHERE dispatch_plan_id = %s
+            """,
+            (int(plan_id),),
+        )
+        cur.execute(
+            """
+            DELETE FROM distribuidora.delivery_visit_events e
+            USING distribuidora.delivery_visits v
+            WHERE e.visit_id = v.id AND v.dispatch_plan_id = %s
+            """,
+            (int(plan_id),),
+        )
+        cur.execute(
+            """
+            DELETE FROM distribuidora.delivery_evidence e
+            USING distribuidora.delivery_visits v
+            WHERE e.visit_id = v.id AND v.dispatch_plan_id = %s
+            """,
+            (int(plan_id),),
+        )
+        cur.execute(
+            """
+            DELETE FROM distribuidora.delivery_collections c
+            USING distribuidora.delivery_visits v
+            WHERE c.visit_id = v.id AND v.dispatch_plan_id = %s
+            """,
+            (int(plan_id),),
+        )
+        cur.execute(
+            """
+            DELETE FROM distribuidora.delivery_line_results lr
+            USING distribuidora.delivery_visits v
+            WHERE lr.visit_id = v.id AND v.dispatch_plan_id = %s
+            """,
+            (int(plan_id),),
+        )
+        cur.execute(
+            """
+            DELETE FROM distribuidora.delivery_document_results dr
+            USING distribuidora.delivery_visits v
+            WHERE dr.visit_id = v.id AND v.dispatch_plan_id = %s
+            """,
+            (int(plan_id),),
+        )
+        cur.execute(
+            "DELETE FROM distribuidora.delivery_visits WHERE dispatch_plan_id = %s",
+            (int(plan_id),),
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        R2_STORE.clear()
+        return {"ok": True, "plan_id": int(plan_id)}
 
     @app.post("/distribuidora/pwa/driver/despachos/{plan_id}/offline-ops/sync")
     async def sync_op(plan_id: int, request: Request):

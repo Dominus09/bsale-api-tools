@@ -66,6 +66,7 @@ def main() -> int:
         "-m",
         "pytest",
         "backend/tests/test_offline_v2_2a4_lab_e2e.py",
+        "backend/tests/test_offline_v2_2a5_concurrency_plan_customer.py",
         "-vv",
         "--tb=short",
     ]

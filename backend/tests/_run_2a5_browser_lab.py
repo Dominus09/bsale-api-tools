@@ -73,6 +73,10 @@ def main() -> int:
     # Sync browser → API lab directo (CORS); evita multipart colgado en proxy Next.
     env["NEXT_PUBLIC_LAB_API_DIRECT"] = f"http://127.0.0.1:{API_PORT}"
     env["NEXT_PUBLIC_OFFLINE_SYNC_WRITES"] = "1"
+    # Middleware: habilita /pruebas/offline-v2-lab solo en este proceso lab.
+    env["OFFLINE_V2_LAB_ENABLED"] = "1"
+    # Visible al Middleware Edge de Next:
+    env["NEXT_PUBLIC_OFFLINE_V2_LAB_ENABLED"] = "1"
     env["PORT"] = str(PWA_PORT)
 
     # Prefer already-built standalone if present; else next dev
@@ -100,6 +104,12 @@ def main() -> int:
     )
     try:
         _wait_http(f"http://127.0.0.1:{PWA_PORT}/pruebas/offline-v2-lab", timeout_s=180)
+        # Exigir 200 real (middleware no debe devolver 404 en lab).
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{PWA_PORT}/pruebas/offline-v2-lab", timeout=5
+        ) as r:
+            if r.status != 200:
+                raise SystemExit(f"Lab page status={r.status} (middleware?)")
         print("[2a5] PWA lab page ready", flush=True)
 
         pw_env = env.copy()
@@ -111,6 +121,7 @@ def main() -> int:
                 "playwright",
                 "test",
                 "e2e/offline-v2-2a5-idb.spec.ts",
+                "e2e/offline-v2-driver-flow.spec.ts",
                 "--config=playwright.config.ts",
             ],
             cwd=str(PWA),
