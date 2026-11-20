@@ -68,6 +68,27 @@ def offline_sync_writes_enabled() -> bool:
     }
 
 
+def offline_pilot_user_allowed(user_id: int | None) -> bool:
+    """Allowlist de piloto (diseño 2A.5) — NO activa writes por sí sola.
+
+    - Sin ``OFFLINE_SYNC_PILOT_ALLOWLIST``: no restringe (lab / histórico).
+    - Con allowlist: solo esos user_id pueden sincronizar.
+    - Desactivación inmediata: vaciar o quitar la env + writes=false.
+    Producción: mantener OFFLINE_SYNC_WRITES_ENABLED=false hasta aprobación.
+    """
+    raw = (os.getenv("OFFLINE_SYNC_PILOT_ALLOWLIST") or "").strip()
+    if not raw:
+        return True
+    if user_id is None:
+        return False
+    allowed: set[int] = set()
+    for part in raw.replace(";", ",").split(","):
+        part = part.strip()
+        if part.isdigit():
+            allowed.add(int(part))
+    return int(user_id) in allowed
+
+
 def compute_request_hash(payload: dict[str, Any]) -> str:
     """Hash del contenido lógico (sin bytes de imagen)."""
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -233,6 +254,20 @@ def sync_offline_operation(
                     "(feature flag). No se aceptan envíos."
                 ),
                 "message": "offline sync writes disabled",
+            },
+        )
+    raw_uid = user.get("id") if isinstance(user, dict) else None
+    try:
+        pilot_uid = int(raw_uid) if raw_uid is not None else None
+    except (TypeError, ValueError):
+        pilot_uid = None
+    if require_writes_flag and not offline_pilot_user_allowed(pilot_uid):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "PILOT_USER_NOT_ALLOWED",
+                "message_es": "Usuario fuera de la allowlist de piloto offline.",
+                "message": "pilot user not allowed",
             },
         )
     uid = read_svc.enforce_driver_plan_read_access(user, int(plan_id))

@@ -8,6 +8,24 @@ export function getApiBase(): string {
     return getApiProxyTarget()
   }
 
+  // Laboratorio 2A.5: API aislada en otro origen con CORS (evita multipart vía proxy).
+  // Nunca apunta a api.quillotana.cl. Solo si la env está definida en build/dev lab.
+  const labDirect = (process.env.NEXT_PUBLIC_LAB_API_DIRECT || "").trim().replace(/\/$/, "")
+  if (labDirect) {
+    try {
+      const host = new URL(labDirect).hostname.toLowerCase()
+      if (
+        host === "127.0.0.1" ||
+        host === "localhost" ||
+        host.endsWith(".lq-ops.dev")
+      ) {
+        return labDirect
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   const configured = (process.env.NEXT_PUBLIC_API_URL || "").trim().replace(/\/$/, "")
   if (!configured) return "/api-upstream"
   try {

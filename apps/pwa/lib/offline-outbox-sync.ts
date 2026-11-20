@@ -3,7 +3,7 @@
  * DESHABILITADO por defecto. No usa Background Sync (Safari iOS).
  */
 
-import { getSessionUserId, getToken } from "./auth.ts"
+import { authHeaders, getSessionUserId, getToken } from "./auth.ts"
 import { ApiError } from "./api.ts"
 import { getApiBase } from "./api-base.ts"
 import { multipartAuthHeaders } from "./multipart-headers.ts"
@@ -58,7 +58,7 @@ async function postOfflineOp(
       `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/offline-ops/sync`,
       {
         method: "POST",
-        headers: multipartAuthHeaders(),
+        headers: multipartAuthHeaders(authHeaders()),
         body: fd,
         signal: controller.signal,
       },
