@@ -5,6 +5,14 @@ Diseño aprobado:
 - R2 fuera de transacciones SQL largas (etapas recuperables).
 - GPS diferido: 300 m + pending_review; no usa horario de sync como visita.
 - No borra operaciones automáticamente (retención: ver módulo retention).
+- Clave R2 estable por (company, plan, idempotency_key, local_evidence_id):
+  reintentos NO duplican objetos; put es sobrescritura idempotente.
+
+Limpieza futura de huérfanos R2 (NO implementada; solo auditoría 2A.4):
+- Candidatos: evidence_object_key con evidence_upload_confirmed=false y
+  updated_at > TTL (p.ej. 30d) y status in (failed, awaiting_evidence).
+- Nunca borrar si visit_id apunta a evidencia confirmada en delivery_evidence.
+- Job batch + dry-run + allowlist company; nunca cascade desde logout PWA.
 
 No muta Bsale / picking / stock / cuadratura.
 """

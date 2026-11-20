@@ -100,13 +100,13 @@ export function outboxStatusLabelEs(status: OutboxLocalStatus): string {
     case "draft":
       return "Borrador en este dispositivo"
     case "pending":
-      return "Pendiente de sincronización"
+      return "Guardado en este dispositivo · Pendiente de sincronización"
     case "syncing":
-      return "Sincronizando…"
+      return "Sincronizando entregas pendientes"
     case "synced":
-      return "Confirmado por servidor"
+      return "Entrega confirmada por el servidor"
     case "conflict":
-      return "Conflicto — requiere revisión"
+      return "Requiere revisión"
     case "failed_needs_action":
       return "Error recuperable"
     default:

@@ -1,8 +1,18 @@
 /**
- * Política Offline V2 outbox (2A.2/2A.3).
+ * Política Offline V2 outbox (2A.2/2A.3/2A.4).
  * Separada de snapshots regenerables Offline V1.
  *
  * Sync de escrituras: OFF por defecto. Nunca en hosts productivos Quillotana.
+ *
+ * Autoridad: el backend (`OFFLINE_SYNC_WRITES_ENABLED`) es la fuente de verdad.
+ * NEXT_PUBLIC_* / localStorage lab solo abren el cliente en hosts no productivos;
+ * NUNCA anulan un servidor con writes deshabilitados (503).
+ *
+ * Piloto productivo futuro (NO implementado aún):
+ * 1) Aplicar 061 con aprobación explícita.
+ * 2) Backend: OFFLINE_SYNC_WRITES_ENABLED=1 solo en workers autorizados.
+ * 3) Allowlist de user_id / plan en servidor (no flag pública).
+ * 4) PWA build lab o allowlist server-driven; jamás localStorage en *.quillotana.cl.
  */
 
 export const OFFLINE_OUTBOX_RETENTION = {
