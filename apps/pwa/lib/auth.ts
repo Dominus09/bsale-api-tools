@@ -41,6 +41,10 @@ export function setSession(token: string, email: string, userId: number | string
  * stateless hasta expirar o invalidarse por token_version en admin.
  * No se llama a bump_token_version aquí para no cerrar ERP u otras apps
  * que compartan el mismo token staff.
+ *
+ * Offline V2: solo limpia snapshots regenerables (V1). La outbox de
+ * operaciones pendientes vive en otra IndexedDB y NUNCA se borra aquí
+ * (ni en 401 / JWT expirado / cambio de usuario).
  */
 export function clearSession() {
   if (typeof window === "undefined") return
@@ -59,6 +63,7 @@ export function clearSession() {
     } catch {
       /* ignore */
     }
+    // Solo snapshots Offline V1 (regenerables). Outbox V2 no se toca.
     void import("./offline-store")
       .then((m) => m.clearOfflineForUser(uid))
       .catch(() => {
@@ -68,12 +73,30 @@ export function clearSession() {
 }
 
 /**
- * Cierre de sesión local + redirección a login.
- * Usa replace para reducir historial con pantallas privadas (Safari / PWA).
+ * Cierre de sesión con advertencia si hay operaciones outbox pendientes.
+ * Conserva la outbox aislada por userId. No borra pendientes.
  */
-export function logoutAndRedirect(loginPath = "/login") {
-  clearSession()
+export async function logoutAndRedirect(loginPath = "/login"): Promise<void> {
   if (typeof window === "undefined") return
+  const uid = localStorage.getItem(USER_ID_KEY)
+  if (uid) {
+    try {
+      const { countPendingOutboxOps } = await import("./offline-outbox")
+      const n = await countPendingOutboxOps(uid)
+      if (n > 0) {
+        const ok = window.confirm(
+          `Tiene ${n} operación(es) pendiente(s) de sincronización en este dispositivo.\n\n` +
+            `Se conservarán de forma aislada (no se borran).\n` +
+            `Otro usuario no podrá verlas ni sincronizarlas.\n\n` +
+            `¿Cerrar sesión de todos modos?`,
+        )
+        if (!ok) return
+      }
+    } catch {
+      /* si falla el conteo, no bloquear logout */
+    }
+  }
+  clearSession()
   void clearAppCachesBestEffort()
   window.location.replace(loginPath)
 }

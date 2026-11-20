@@ -138,7 +138,8 @@ export function DeliveryVisitStart(props: Props) {
   if (props.offlineReadOnly) {
     return (
       <p className="muted" role="status" style={{ margin: "0 0 8px", fontSize: "0.82rem" }}>
-        Solo lectura offline · no se registran entregas hasta recuperar internet.
+        Sin internet: use «Entrega completa (local)» o «Local cerrado (local)»
+        más abajo. Quedan pendientes de sincronización (no confirman servidor).
       </p>
     )
   }

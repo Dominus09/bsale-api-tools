@@ -370,9 +370,35 @@ export default function ClienteFichaPage() {
       ) : null}
 
       {offlineSource ? (
-        <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
-          Ubicación/fachada requieren internet para guardar.
-        </p>
+        <div className="stack-gap">
+          <div className="banner banner-info">
+            <strong>Operaciones en este dispositivo</strong>
+            <div style={{ fontSize: "0.78rem", marginTop: 4 }}>
+              Se guardan localmente y quedan pendientes de sincronización. No
+              confirman visita en servidor ni avanzan el recorrido oficial.
+            </div>
+          </div>
+          <div className="btn-row">
+            <AppLink
+              href={`/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/entrega/offline-completa`}
+              className="btn btn-primary"
+              style={{ textAlign: "center" }}
+            >
+              Entrega completa (local)
+            </AppLink>
+            <AppLink
+              href={`/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/entrega/offline-cerrado`}
+              className="btn btn-danger"
+              style={{ textAlign: "center" }}
+            >
+              Local cerrado (local)
+            </AppLink>
+          </div>
+          <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
+            Ubicación/fachada online y WhatsApp final requieren confirmación del
+            servidor (fase posterior).
+          </p>
+        </div>
       ) : (
         <DeliveryLocalToolsHost
           planId={planId}

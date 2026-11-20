@@ -1,0 +1,102 @@
+"use client"
+
+import { createPortal } from "react-dom"
+import { useEffect, useState } from "react"
+import { AppLink } from "@/components/app-link"
+import { getSessionUserId } from "@/lib/auth"
+import {
+  listPendingOutboxOps,
+  outboxResultLabelEs,
+  outboxStatusLabelEs,
+  type OutboxOperation,
+} from "@/lib/offline-outbox"
+import { formatSyncedAt } from "@/lib/offline-store"
+
+type Props = {
+  open: boolean
+  onClose: () => void
+}
+
+export function OfflineOutboxPanel({ open, onClose }: Props) {
+  const [ops, setOps] = useState<OutboxOperation[]>([])
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    const uid = getSessionUserId()
+    if (!uid) {
+      setOps([])
+      return
+    }
+    void listPendingOutboxOps(uid).then(setOps).catch(() => setOps([]))
+  }, [open])
+
+  if (!open || !mounted || typeof document === "undefined") return null
+
+  const body = (
+    <div
+      className="offline-panel-root"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Operaciones pendientes de sincronización"
+    >
+      <button
+        type="button"
+        className="offline-panel-backdrop"
+        aria-label="Cerrar"
+        onClick={onClose}
+      />
+      <aside className="offline-panel-card outbox-panel-card">
+        <div className="offline-panel-head">
+          <strong>Operaciones pendientes de sincronización</strong>
+          <button type="button" className="btn btn-ghost btn-compact" onClick={onClose}>
+            Cerrar
+          </button>
+        </div>
+        <p className="muted" style={{ margin: "0 0 12px", fontSize: "0.78rem" }}>
+          Guardadas en este dispositivo. Aún no confirmadas por el servidor.
+          No se envían en esta fase.
+        </p>
+        {ops.length === 0 ? (
+          <p className="empty">No hay operaciones pendientes.</p>
+        ) : (
+          <ul className="outbox-op-list">
+            {ops.map((op) => (
+              <li key={op.localUuid} className="outbox-op-item">
+                <div className="outbox-op-title">
+                  {op.clientName || op.customerKey}
+                </div>
+                <div className="muted" style={{ fontSize: "0.75rem" }}>
+                  Plan #{op.planId} · {outboxResultLabelEs(op)}
+                </div>
+                <div className="muted" style={{ fontSize: "0.75rem" }}>
+                  {formatSyncedAt(op.captured_at)} · {outboxStatusLabelEs(op.status)}
+                </div>
+                {op.evidence ? (
+                  <div className="pill" style={{ marginTop: 6 }}>
+                    Foto guardada en dispositivo
+                  </div>
+                ) : null}
+                <div className="btn-row" style={{ marginTop: 8 }}>
+                  <AppLink
+                    href={`/despachos/${op.planId}/clientes/${encodeURIComponent(op.customerKey)}`}
+                    className="btn btn-secondary btn-compact"
+                    onClick={onClose}
+                  >
+                    Ver cliente
+                  </AppLink>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </aside>
+    </div>
+  )
+
+  return createPortal(body, document.body)
+}

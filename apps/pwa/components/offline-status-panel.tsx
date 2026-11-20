@@ -110,8 +110,9 @@ export function OfflineStatusPanel({ onClose }: { onClose: () => void }) {
           </p>
         )}
         <p className="muted" style={{ marginTop: 10, fontSize: "0.72rem" }}>
-          Offline V1 es solo consulta. Entregas, pagos y evidencias requieren
-          internet.
+          Offline V1: consulta de fichas. Offline V2: puede guardar entrega
+          completa o local cerrado en este dispositivo (pendiente de sync; sin
+          envío al servidor en esta fase).
         </p>
       </aside>
     </div>

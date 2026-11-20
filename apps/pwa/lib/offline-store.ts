@@ -253,7 +253,13 @@ export async function listOfflineReadyPlans(
   }
 }
 
-/** Borra solo el namespace del usuario (cambio de cuenta / logout). */
+/**
+ * Borra solo snapshots regenerables Offline V1 del usuario
+ * (meta/plans/clients/details/ready).
+ *
+ * NO toca la outbox Offline V2 (`quillotana-ops-outbox-v2`), que vive
+ * en otra base IndexedDB y debe sobrevivir logout / 401 / BUILD_ID.
+ */
 export async function clearOfflineForUser(
   userId: string | number | null | undefined,
 ): Promise<void> {

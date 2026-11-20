@@ -56,7 +56,7 @@ export function AppMenu() {
 
   function logout() {
     setOpen(false)
-    logoutAndRedirect("/login")
+    void logoutAndRedirect("/login")
   }
 
   function runLocal(action: "gps" | "photo" | "navigate" | "history") {
