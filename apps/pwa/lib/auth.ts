@@ -57,6 +57,11 @@ export function clearSession() {
   } catch {
     /* private mode / quota */
   }
+  void import("./offline-v2-pilot-auth")
+    .then((m) => m.clearOfflineV2PilotAuthorization())
+    .catch(() => {
+      /* ignore */
+    })
   if (uid) {
     try {
       localStorage.removeItem(`lq:ops:activePlan:${uid}`)

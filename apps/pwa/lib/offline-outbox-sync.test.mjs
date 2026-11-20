@@ -17,20 +17,22 @@ describe("offline-outbox-sync 2A.3 policy", () => {
     assert.equal(isOutboxSyncWritesEnabled(), false)
   })
 
-  it("bloquea hosts productivos Quillotana", () => {
+  it("identifica hosts Quillotana (lab route / hints; sync vía servidor)", () => {
     assert.equal(isProductionQuillotanaHost("api.quillotana.cl"), true)
-    assert.equal(isProductionQuillotanaHost("pwa.quillotana.cl"), true)
+    assert.equal(isProductionQuillotanaHost("app.quillotana.cl"), true)
     assert.equal(isProductionQuillotanaHost("localhost"), false)
     assert.equal(isProductionQuillotanaHost("127.0.0.1"), false)
   })
 
-  it("runtime documenta no Background Sync y flag", () => {
+  it("runtime documenta no Background Sync, piloto y flag", () => {
     const src = readFileSync(join(root, "lib/offline-outbox-sync.ts"), "utf8")
     assert.match(src, /No usa Background Sync/)
     assert.match(src, /isOutboxSyncWritesEnabled/)
+    assert.match(src, /refreshOfflineV2PilotAuthorization/)
     assert.match(src, /idempotency_key/)
     assert.match(src, /backoff/)
     assert.match(src, /offline-ops\/sync/)
+    assert.doesNotMatch(src, /isProdHost\(\)/)
   })
 
   it("backend flag OFF por defecto en servicio", () => {

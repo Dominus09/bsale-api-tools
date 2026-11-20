@@ -131,7 +131,7 @@ describe("offline-outbox lab E2E 2A.4", () => {
     assert.match(authSrc, /Outbox V2 no se toca/)
   })
 
-  it("flags: default off + bloqueo *.quillotana.cl", () => {
+  it("flags: default off; Quillotana host identificado (permisos vía servidor)", () => {
     assert.equal(OFFLINE_OUTBOX_RETENTION.syncWritesEnabled, false)
     assert.equal(isOutboxSyncWritesEnabled(), false)
     assert.equal(isProductionQuillotanaHost("api.quillotana.cl"), true)

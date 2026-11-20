@@ -38,6 +38,8 @@ def main() -> int:
     import pgserver
 
     os.environ["OFFLINE_SYNC_WRITES_ENABLED"] = "1"
+    os.environ["OFFLINE_SYNC_PILOT_ALLOWLIST"] = "42"
+    os.environ["OFFLINE_SYNC_PILOT_PLAN_ALLOWLIST"] = "920"
     os.environ["LAB_2A5_PORT"] = str(API_PORT)
     os.environ["PYTHONPATH"] = str(ROOT) + os.pathsep + os.environ.get("PYTHONPATH", "")
 

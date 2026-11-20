@@ -405,6 +405,16 @@ def build_app():
         R2_STORE.clear()
         return {"ok": True, "plan_id": int(plan_id)}
 
+    @app.get("/distribuidora/pwa/driver/offline-ops/pilot-status")
+    def pilot_status(plan_id: int | None = None):
+        user = {"id": 42, "email": "chofer@lab.local"}
+        return offline_svc.get_offline_v2_pilot_authorization(user, plan_id=plan_id)
+
+    @app.get("/distribuidora/pwa/driver/despachos/{plan_id}/offline-ops/pilot-status")
+    def plan_pilot_status(plan_id: int):
+        user = {"id": 42, "email": "chofer@lab.local"}
+        return offline_svc.get_offline_v2_pilot_authorization(user, plan_id=int(plan_id))
+
     @app.post("/distribuidora/pwa/driver/despachos/{plan_id}/offline-ops/sync")
     async def sync_op(plan_id: int, request: Request):
         form = await request.form()
@@ -427,6 +437,8 @@ def build_app():
         user = {"id": 42, "email": "chofer@lab.local"}
         if not offline_svc.offline_pilot_user_allowed(42):
             raise HTTPException(status_code=403, detail="PILOT_USER_NOT_ALLOWED")
+        if not offline_svc.offline_pilot_plan_allowed(int(plan_id)):
+            raise HTTPException(status_code=403, detail="PILOT_PLAN_NOT_ALLOWED")
         return offline_svc.sync_offline_operation(
             user=user,
             plan_id=int(plan_id),
@@ -446,6 +458,8 @@ def main() -> None:
     import uvicorn
 
     os.environ["OFFLINE_SYNC_WRITES_ENABLED"] = "1"
+    os.environ["OFFLINE_SYNC_PILOT_ALLOWLIST"] = "42"
+    os.environ["OFFLINE_SYNC_PILOT_PLAN_ALLOWLIST"] = "920"
     base = Path(tempfile.mkdtemp(prefix="p4_2a5_lab_"))
     srv = pgserver.get_server(base / "pgdata", cleanup_mode="stop")
     uri = srv.get_uri() if callable(getattr(srv, "get_uri", None)) else str(srv)

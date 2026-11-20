@@ -14,7 +14,9 @@ import {
   productCategoryLabel,
 } from "@/lib/delivery-labels"
 import { isDeviceOffline, readOfflineClientDetail } from "@/lib/offline-load"
+import { isOfflineV2UiEnabledForPlan } from "@/lib/offline-outbox-policy"
 import { isLikelyOfflineError, saveOfflineClientDetail } from "@/lib/offline-store"
+import { refreshOfflineV2PilotAuthorization } from "@/lib/offline-v2-pilot-auth"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 import { DeliveryLocalToolsHost } from "@/components/delivery-local-tools-host"
 import { DeliveryVisitStart } from "@/components/delivery-visit-start"
@@ -33,6 +35,28 @@ export default function ClienteFichaPage() {
   const [lightbox, setLightbox] = useState<string | null>(null)
   const [showPedido, setShowPedido] = useState(false)
   const [offlineSource, setOfflineSource] = useState<string | null>(null)
+  const [offlineV2Ui, setOfflineV2Ui] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadPilot() {
+      if (!Number.isFinite(planId) || planId < 1) {
+        setOfflineV2Ui(false)
+        return
+      }
+      await refreshOfflineV2PilotAuthorization(planId)
+      if (!cancelled) setOfflineV2Ui(isOfflineV2UiEnabledForPlan(planId))
+    }
+    void loadPilot()
+    function onPilot() {
+      setOfflineV2Ui(isOfflineV2UiEnabledForPlan(planId))
+    }
+    window.addEventListener("lq-offline-v2-pilot-changed", onPilot)
+    return () => {
+      cancelled = true
+      window.removeEventListener("lq-offline-v2-pilot-changed", onPilot)
+    }
+  }, [planId])
 
   useEffect(() => {
     if (!Number.isFinite(planId) || planId < 1 || !customerKey) {
@@ -369,13 +393,13 @@ export default function ClienteFichaPage() {
         </div>
       ) : null}
 
-      {offlineSource ? (
+      {offlineSource && offlineV2Ui ? (
         <div className="stack-gap">
           <div className="banner banner-info">
-            <strong>Operaciones en este dispositivo</strong>
+            <strong>Operaciones Offline V2 (piloto)</strong>
             <div style={{ fontSize: "0.78rem", marginTop: 4 }}>
-              Se guardan localmente y quedan pendientes de sincronización. No
-              confirman visita en servidor ni avanzan el recorrido oficial.
+              Se guardan localmente y sincronizan al recuperar conexión. Solo
+              usuarios y despachos autorizados.
             </div>
           </div>
           <div className="btn-row">
@@ -395,9 +419,16 @@ export default function ClienteFichaPage() {
             </AppLink>
           </div>
           <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
-            Ubicación/fachada online y WhatsApp final requieren confirmación del
-            servidor (fase posterior).
+            WhatsApp manual solo después de confirmación del servidor.
           </p>
+        </div>
+      ) : offlineSource ? (
+        <div className="banner banner-info">
+          <strong>Consulta Offline V1</strong>
+          <div style={{ fontSize: "0.78rem", marginTop: 4 }}>
+            Ficha disponible sin conexión. El registro Offline V2 no está
+            autorizado para este usuario o despacho.
+          </div>
         </div>
       ) : (
         <DeliveryLocalToolsHost

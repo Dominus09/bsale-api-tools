@@ -14,6 +14,7 @@ import {
   type OfflineSyncRuntimeState,
 } from "@/lib/offline-sync-runtime"
 import { bindOutboxSyncTriggers } from "@/lib/offline-outbox-sync"
+import { refreshOfflineV2PilotAuthorization } from "@/lib/offline-v2-pilot-auth"
 import { OfflinePrepModal } from "@/components/offline-prep-modal"
 import { OfflineStatusPanel } from "@/components/offline-status-panel"
 
@@ -55,10 +56,12 @@ export function OfflineSyncProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     function onOnline() {
       void offlineSyncRuntime.probeApiReachability()
+      void refreshOfflineV2PilotAuthorization()
     }
     function onOffline() {
       offlineSyncRuntime.markApiReachable(false)
     }
+    void refreshOfflineV2PilotAuthorization()
     window.addEventListener("online", onOnline)
     window.addEventListener("offline", onOffline)
     const unbindOutbox = bindOutboxSyncTriggers()

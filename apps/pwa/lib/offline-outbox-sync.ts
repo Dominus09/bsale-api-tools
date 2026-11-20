@@ -7,7 +7,10 @@ import { authHeaders, getSessionUserId, getToken } from "./auth.ts"
 import { ApiError } from "./api.ts"
 import { getApiBase } from "./api-base.ts"
 import { multipartAuthHeaders } from "./multipart-headers.ts"
-import { isOutboxSyncWritesEnabled } from "./offline-outbox-policy.ts"
+import {
+  getCachedOfflineV2PilotAuth,
+  isOutboxSyncWritesEnabled,
+} from "./offline-outbox-policy.ts"
 import {
   getOutboxBlob,
   getOutboxOp,
@@ -16,6 +19,7 @@ import {
 } from "./offline-outbox-store.ts"
 import type { OutboxOperation } from "./offline-outbox-types.ts"
 import { isActiveOutboxStatus } from "./offline-outbox.ts"
+import { refreshOfflineV2PilotAuthorization } from "./offline-v2-pilot-auth.ts"
 
 const MAX_BACKOFF_MS = 60_000
 const BASE_BACKOFF_MS = 2_000
@@ -31,14 +35,13 @@ export type OutboxSyncState = {
   pendingCount: number
 }
 
-function isProdHost(): boolean {
-  if (typeof window === "undefined") return false
-  const h = window.location.hostname.toLowerCase()
-  return (
-    h === "api.quillotana.cl" ||
-    h.endsWith(".quillotana.cl") ||
-    h.includes("quillotana.cl")
-  )
+function isPlanAuthorizedForSync(planId: number): boolean {
+  const cached = getCachedOfflineV2PilotAuth()
+  if (cached) {
+    if (!cached.offline_v2_enabled) return false
+    return cached.authorized_plan_ids.includes(Number(planId))
+  }
+  return isOutboxSyncWritesEnabled()
 }
 
 async function postOfflineOp(
@@ -194,12 +197,15 @@ class OutboxSyncRuntime {
     return n
   }
 
-  /** Kick seguro: no-op si flag off o host productivo. */
+  /** Kick seguro: solo si el servidor autorizó el piloto (o lab hint no-Quillotana). */
   async kick(reason: string): Promise<void> {
-    if (isProdHost() || !isOutboxSyncWritesEnabled()) {
+    if (getToken()) {
+      await refreshOfflineV2PilotAuthorization()
+    }
+    if (!isOutboxSyncWritesEnabled()) {
       this.emit({
         phase: "disabled",
-        message: "Sync de escrituras deshabilitado (laboratorio / flag)",
+        message: "Sync Offline V2 deshabilitado (piloto / kill switch)",
       })
       await this.refreshPendingCount()
       return
@@ -247,6 +253,15 @@ class OutboxSyncRuntime {
       if (!getToken()) {
         this.emit({ phase: "paused_auth", message: "Sesión expirada — outbox conservada" })
         return
+      }
+      if (!isPlanAuthorizedForSync(op.planId)) {
+        await putOutboxOp({
+          ...op,
+          status: "failed_needs_action",
+          last_error: "Despacho fuera del piloto Offline V2",
+          updated_at: new Date().toISOString(),
+        })
+        continue
       }
       const pcKey = `${op.planId}:${op.customerKey}`
       if (this.planCustomerLocks.has(pcKey)) continue

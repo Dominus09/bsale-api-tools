@@ -1,5 +1,8 @@
 -- 061 — Offline V2 Fase 2A.1: cola de sincronización idempotente (delivery_offline_ops)
--- ESTADO: AWAITING APPROVAL — NO aplicar en producción sin autorización.
+-- ESTADO: LISTO PARA ADMINISTRADOR — aplicar SOLO manualmente tras respaldo.
+-- NO ejecutar automáticamente desde Cursor / CI.
+-- Rollback operativo = kill switch (writes OFF). NO usar DROP TABLE con datos reales.
+-- Ver: docs/offline-v2-production-pilot-runbook.md
 --
 -- Objetivo:
 --   Registrar operaciones offline (entrega completa / local cerrado) con

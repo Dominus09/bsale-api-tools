@@ -11,8 +11,10 @@ import {
   saveClosedStoreLocal,
   type OutboxOperation,
 } from "@/lib/offline-outbox"
+import { isOfflineV2UiEnabledForPlan } from "@/lib/offline-outbox-policy"
 import { readOfflineClientDetail } from "@/lib/offline-load"
 import { getOfflinePlanReady } from "@/lib/offline-store"
+import { refreshOfflineV2PilotAuthorization } from "@/lib/offline-v2-pilot-auth"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 
 type GpsFix = {
@@ -76,6 +78,13 @@ export default function OfflineCerradoPage() {
       const uid = getSessionUserId()
       if (!uid) {
         setLoadErr("Sin sesión local.")
+        return
+      }
+      await refreshOfflineV2PilotAuthorization(planId)
+      if (!isOfflineV2UiEnabledForPlan(planId)) {
+        setLoadErr(
+          "Offline V2 no autorizado para este usuario o despacho. Use el flujo online / Offline V1.",
+        )
         return
       }
       const detail = await readOfflineClientDetail(planId, customerKey)
