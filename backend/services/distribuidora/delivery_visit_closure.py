@@ -73,6 +73,13 @@ def assert_finalize_ready(
                 )
             review = "pending_review"
             notes.append("sin_gps_final")
+        else:
+            # Excepción GPS (incl. diferido offline) NUNCA auto-verified.
+            review = "pending_review"
+            notes.append(
+                "gps_exception:"
+                + str(visit.get("gps_exception_code") or "exception")
+            )
 
     if status in ("completed", "partial"):
         if not expected_related_ids:

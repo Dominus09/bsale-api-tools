@@ -651,3 +651,46 @@ async def upload_facade_photo(
         data=data,
         idempotency_key=idempotency_key,
     )
+
+
+@router.post("/despachos/{plan_id}/offline-ops/sync")
+async def sync_offline_operation(
+    plan_id: int,
+    payload: str = Form(
+        ...,
+        description="JSON del contrato OfflineOp (idempotency_key, op_type, …)",
+    ),
+    evidence: UploadFile | None = File(None),
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    """Sync idempotente Offline V2 (2A.1).
+
+    Multipart:
+    - ``payload``: JSON string del contrato
+      (complete_delivery | closed_store).
+    - ``evidence``: archivo foto (obligatorio en closed_store salvo replay).
+
+    Misma idempotency_key + mismo contenido → replay sin duplicar.
+    """
+    import json as _json
+
+    from backend.services.distribuidora import delivery_offline_sync_service as offline_svc
+
+    try:
+        body = _json.loads(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="payload JSON inválido") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="payload debe ser objeto JSON")
+
+    evidence_bytes = await evidence.read() if evidence is not None else None
+    ctype = "image/jpeg"
+    if evidence is not None:
+        ctype = (evidence.content_type or "").strip() or "image/jpeg"
+    return offline_svc.sync_offline_operation(
+        user=user,
+        plan_id=int(plan_id),
+        body=body,
+        evidence_bytes=evidence_bytes,
+        evidence_content_type=ctype,
+    )

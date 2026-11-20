@@ -698,6 +698,8 @@ def finalize_visit(
             "gps_unavailable",
             "gps_inaccurate",
             "access_blocked",
+            # Offline V2: captura diferida — no usa frescor 120s del path online.
+            "gps_deferred_offline",
         }
         proximity_exception = (
             (gps_exception_code or "").strip() in prox_exc_codes
