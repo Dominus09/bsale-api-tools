@@ -8,9 +8,9 @@ Candidatos (fuera del bloqueo `*.quillotana.cl`):
 
 | Uso | Candidato | Estado |
 |-----|-----------|--------|
-| PWA staging | `pwa-lab.lq-ops.dev` | **PENDIENTE confirmar** registro DNS / cuenta Cloudflare / certificado |
-| API staging | `api-lab.lq-ops.dev` | **PENDIENTE confirmar** control del dominio |
-| Alternativa | Túnel HTTPS efímero (`cloudflared` / ngrok) a lab local | Solo si el dominio propio no está disponible aún |
+| PWA staging | `pwa-lab.lq-ops.dev` | **NXDOMAIN** (no usar; no controlado) |
+| API staging | `api-lab.lq-ops.dev` | **NXDOMAIN** (no usar; no controlado) |
+| Alternativa | Túnel HTTPS (`cloudflared` / ngrok) → lab local | **Requerido** hasta dominio propio confirmado |
 
 **No proponer ni usar un dominio que no controlemos.**  
 **No usar** `*.quillotana.cl` (el middleware y la política PWA lo bloquean a propósito).

@@ -5,6 +5,9 @@ node_modules/
 **/.next/
 apps/pwa/.env
 apps/pwa/.env.local
+deploy/staging-offline-v2/.env.staging
+deploy/staging-offline-v2/.lab_gate_token
+_tmp_staging_*
 __pycache__/
 *.pyc
 .venv/

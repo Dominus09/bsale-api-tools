@@ -74,9 +74,9 @@ def main() -> int:
     env["NEXT_PUBLIC_LAB_API_DIRECT"] = f"http://127.0.0.1:{API_PORT}"
     env["NEXT_PUBLIC_OFFLINE_SYNC_WRITES"] = "1"
     # Middleware: habilita /pruebas/offline-v2-lab solo en este proceso lab.
+    # Solo env de servidor (middleware NO acepta NEXT_PUBLIC_*).
     env["OFFLINE_V2_LAB_ENABLED"] = "1"
-    # Visible al Middleware Edge de Next:
-    env["NEXT_PUBLIC_OFFLINE_V2_LAB_ENABLED"] = "1"
+    env.pop("NEXT_PUBLIC_OFFLINE_V2_LAB_ENABLED", None)
     env["PORT"] = str(PWA_PORT)
 
     # Prefer already-built standalone if present; else next dev

@@ -1,0 +1,63 @@
+# Offline V2 — compose de referencia para STAGING aislado.
+# NO usar contra api.quillotana.cl / analytics / R2 prod.
+# Requiere Docker en la máquina o Coolify service apuntando a este compose
+# en un proyecto SEPARADO del productivo (verificar triggers).
+
+services:
+  pg-lab:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: offline_v2_lab
+      POSTGRES_PASSWORD: ${STAGING_PG_PASSWORD:?set STAGING_PG_PASSWORD}
+      POSTGRES_DB: offline_v2_lab
+    ports:
+      - "5433:5432"
+    volumes:
+      - offline_v2_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U offline_v2_lab -d offline_v2_lab"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api-lab:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      OFFLINE_V2_ENV_PROFILE: staging
+      DATABASE_URL: postgresql://offline_v2_lab:${STAGING_PG_PASSWORD}@pg-lab:5432/offline_v2_lab
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY staging}
+      OFFLINE_SYNC_WRITES_ENABLED: "false"
+      OFFLINE_SYNC_PILOT_ALLOWLIST: ""
+      R2_BUCKET: ${R2_BUCKET:-lq-ops-lab-evidence}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      # NUNCA BSALE_TOKEN productivo aquí
+      BSALE_TOKEN: ""
+    ports:
+      - "18080:8000"
+    depends_on:
+      pg-lab:
+        condition: service_healthy
+
+  pwa-lab:
+    build:
+      context: ../../apps/pwa
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${STAGING_API_PUBLIC_URL:?set public staging API URL}
+        NEXT_PUBLIC_OFFLINE_SYNC_WRITES: "0"
+    environment:
+      API_PROXY_TARGET: http://api-lab:8000
+      OFFLINE_V2_LAB_ENABLED: "0"
+      OFFLINE_V2_LAB_GATE_TOKEN: ${OFFLINE_V2_LAB_GATE_TOKEN:-}
+      PORT: "3000"
+    ports:
+      - "13015:3000"
+    depends_on:
+      - api-lab
+
+volumes:
+  offline_v2_pg:

@@ -1,13 +1,10 @@
 /**
- * Restricción de servidor para rutas de laboratorio Offline V2.
+ * Restricción de servidor para /pruebas/offline-v2-lab.
  *
- * /pruebas/offline-v2-lab solo si:
- *   OFFLINE_V2_LAB_ENABLED=1 (o NEXT_PUBLIC_OFFLINE_V2_LAB_ENABLED=1) Y
- *   host NO es *.quillotana.cl
- * En cualquier otro caso → 404.
+ * ÚNICA habilitación: OFFLINE_V2_LAB_ENABLED=1 (env de servidor / runtime).
+ * NUNCA NEXT_PUBLIC_*, localStorage ni headers del cliente.
  *
- * NEXT_PUBLIC_* se usa además de la env de servidor porque Middleware Edge
- * en Next puede no ver todas las env privadas en runtime.
+ * En cualquier host *.quillotana.cl → siempre 404 (producción protegida).
  */
 
 import { NextResponse } from "next/server"
@@ -25,13 +22,6 @@ function isQuillotanaHost(hostHeader: string | null): boolean {
   )
 }
 
-function labEnabled(): boolean {
-  return (
-    process.env.OFFLINE_V2_LAB_ENABLED === "1" ||
-    process.env.NEXT_PUBLIC_OFFLINE_V2_LAB_ENABLED === "1"
-  )
-}
-
 export function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname
   if (!path.startsWith("/pruebas/offline-v2-lab")) {
@@ -43,14 +33,42 @@ export function middleware(request: NextRequest) {
     request.headers.get("host") ||
     ""
 
-  if (!labEnabled() || isQuillotanaHost(host)) {
+  // Producción / cualquier Quillotana: 404 incondicional.
+  if (isQuillotanaHost(host)) {
     return new NextResponse("Not Found", {
       status: 404,
       headers: {
         "Cache-Control": "no-store",
-        "X-Offline-V2-Lab": "blocked",
+        "X-Offline-V2-Lab": "blocked-prod-host",
       },
     })
+  }
+
+  // Solo env de servidor (no pública al bundle).
+  if (process.env.OFFLINE_V2_LAB_ENABLED !== "1") {
+    return new NextResponse("Not Found", {
+      status: 404,
+      headers: {
+        "Cache-Control": "no-store",
+        "X-Offline-V2-Lab": "blocked-flag",
+      },
+    })
+  }
+
+  // Gate de laboratorio: cookie/header de servidor (no localStorage).
+  const gate = (process.env.OFFLINE_V2_LAB_GATE_TOKEN || "").trim()
+  if (gate) {
+    const hdr = (request.headers.get("x-offline-v2-lab-gate") || "").trim()
+    const cookie = request.cookies.get("lq_offline_v2_lab_gate")?.value || ""
+    if (hdr !== gate && cookie !== gate) {
+      return new NextResponse("Forbidden", {
+        status: 403,
+        headers: {
+          "Cache-Control": "no-store",
+          "X-Offline-V2-Lab": "blocked-gate",
+        },
+      })
+    }
   }
 
   return NextResponse.next()
