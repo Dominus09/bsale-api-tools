@@ -67,12 +67,31 @@ export function fingerprintsEqual(
   return fingerprintKey(a) === fingerprintKey(b)
 }
 
+/**
+ * Identidad de picking usable para declarar snapshot vigente.
+ * Sin picking_id + version reales no se puede saltar solo por conteos.
+ */
+export function hasReliablePickingIdentity(
+  fp: OfflineSnapshotFingerprint | null | undefined,
+): boolean {
+  return (
+    fp != null &&
+    fp.pickingId != null &&
+    Number.isFinite(fp.pickingId) &&
+    fp.pickingVersion != null &&
+    String(fp.pickingVersion).length > 0
+  )
+}
+
 /** True if picking identity changed (requires re-download of fichas). */
 export function pickingIdentityChanged(
   prev: OfflineSnapshotFingerprint | null | undefined,
   next: OfflineSnapshotFingerprint | null | undefined,
 ): boolean {
   if (!prev || !next) return true
+  if (!hasReliablePickingIdentity(prev) || !hasReliablePickingIdentity(next)) {
+    return true
+  }
   if (prev.planId !== next.planId) return true
   if (prev.pickingId !== next.pickingId) return true
   if (prev.pickingVersion !== next.pickingVersion) return true
@@ -80,4 +99,15 @@ export function pickingIdentityChanged(
   if (prev.documents !== next.documents) return true
   if (prev.truncated !== next.truncated) return true
   return false
+}
+
+/** ¿Se puede reutilizar el snapshot local sin re-descargar fichas? */
+export function canReuseOfflineSnapshot(
+  prev: OfflineSnapshotFingerprint | null | undefined,
+  next: OfflineSnapshotFingerprint | null | undefined,
+): boolean {
+  if (!hasReliablePickingIdentity(prev) || !hasReliablePickingIdentity(next)) {
+    return false
+  }
+  return fingerprintsEqual(prev, next) && !pickingIdentityChanged(prev, next)
 }

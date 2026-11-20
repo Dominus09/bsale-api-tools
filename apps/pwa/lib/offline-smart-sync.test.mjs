@@ -73,7 +73,7 @@ describe("offline smart-sync contratos", () => {
     assert.match(runtime, /cycleInflight/)
     assert.match(runtime, /selectProgressProbeCandidates/)
     const sync = readFileSync(join(root, "lib/offline-sync.ts"), "utf8")
-    assert.match(sync, /fingerprintsEqual/)
+    assert.match(sync, /canReuseOfflineSnapshot/)
     assert.match(sync, /phase: \"skip\"/)
   })
 

@@ -69,6 +69,8 @@ export function selectProgressProbeCandidates<T extends PriorityPlanLike>(
   opts?: {
     todayYmd?: string
     activePlanId?: number | null
+    /** Planes ya conocidos (p. ej. snapshot local / recorrido abierto). */
+    preferPlanIds?: number[]
     maxProbes?: number
   },
 ): T[] {
@@ -85,8 +87,15 @@ export function selectProgressProbeCandidates<T extends PriorityPlanLike>(
     out.push(p)
   }
 
+  // 1) Recorrido activo del chofer (solo si sigue en su listado = asignado).
   if (opts?.activePlanId != null) {
     push(byId.get(opts.activePlanId))
+  }
+
+  // 2) Otros planes ya conocidos localmente (visita en curso / sync previo).
+  for (const id of opts?.preferPlanIds || []) {
+    if (id === opts?.activePlanId) continue
+    push(byId.get(id))
   }
 
   for (const p of buckets.today.slice(0, MAX_TODAY_IN_PROBES)) {

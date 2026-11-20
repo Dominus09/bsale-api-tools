@@ -128,9 +128,15 @@ export function OfflinePrepModal() {
             </button>
           </div>
         ) : (
-          <p className="muted" style={{ margin: "12px 0 0", fontSize: "0.75rem" }}>
-            Puedes seguir usando la app con internet mientras termina la descarga.
-          </p>
+          <div className="offline-modal-actions">
+            <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
+              Puedes seguir usando la app con internet mientras termina la descarga.
+              Offline solo estará listo cuando se complete la preparación.
+            </p>
+            <button type="button" className="btn btn-ghost" onClick={dismissPrep}>
+              Seguir trabajando
+            </button>
+          </div>
         )}
       </div>
     </div>

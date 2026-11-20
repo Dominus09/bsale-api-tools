@@ -14,8 +14,7 @@ import { extractNextStaticAssets } from "./clients-list-safe"
 import { loadOfflineBuildInfo } from "./offline-build"
 import {
   buildOfflineFingerprint,
-  fingerprintsEqual,
-  pickingIdentityChanged,
+  canReuseOfflineSnapshot,
   type OfflineSnapshotFingerprint,
 } from "./offline-fingerprint"
 import {
@@ -270,12 +269,12 @@ export async function syncPlanForOffline(
   const nextFp = fingerprintFromClientesPayload(planId, data, truncated)
   const existing = await getOfflinePlanReady(userId, planId)
   const dataOk = Boolean(existing?.dataComplete ?? existing?.complete)
-  const fpMatch = fingerprintsEqual(existing?.fingerprint, nextFp)
   const navOk =
     Boolean(existing?.navReady) && existing?.navBuildId === build.navBuildId
 
-  // Fingerprint vigente + datos OK: no re-descargar fichas.
-  if (!force && dataOk && fpMatch && !pickingIdentityChanged(existing?.fingerprint, nextFp)) {
+  // Solo reutilizar si hay picking_id+version reales y el fingerprint coincide.
+  // Sin versión confiable no se declara vigente solo por conteos.
+  if (!force && dataOk && canReuseOfflineSnapshot(existing?.fingerprint, nextFp)) {
     if (navOk) {
       const skipped: OfflinePlanReady = {
         ...existing!,

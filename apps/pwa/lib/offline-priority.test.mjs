@@ -179,4 +179,22 @@ describe("offline-priority selección inteligente", () => {
     assert.ok(probes.length <= MAX_PROGRESS_PROBES)
     assert.ok(probes.some((p) => p.id === 1))
   })
+
+  it("activePlanId + preferPlanIds entran aunque el cupo sea justo", () => {
+    const plans = [
+      plan(50, "2026-11-01", 2),
+      plan(51, "2026-11-02", 2),
+      plan(1, today, 5),
+      plan(2, today, 3),
+    ]
+    const probes = selectProgressProbeCandidates(plans, {
+      todayYmd: today,
+      activePlanId: 50,
+      preferPlanIds: [51],
+      maxProbes: 6,
+    })
+    assert.equal(probes[0].id, 50)
+    assert.ok(probes.some((p) => p.id === 51))
+    assert.ok(probes.some((p) => p.id === 1))
+  })
 })

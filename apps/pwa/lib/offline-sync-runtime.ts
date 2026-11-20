@@ -357,9 +357,14 @@ class OfflineSyncRuntime {
     this.set({ phase: "selecting", message: "Eligiendo despacho prioritario…" })
     const todayYmd = santiagoTodayYmd()
     const activePlanId = getActivePlanId(this.userId)
+    const knownLocal = await listOfflineReadyPlans(this.userId!, {
+      includeDataOnly: true,
+    })
     const probes = selectProgressProbeCandidates(plans, {
       todayYmd,
       activePlanId,
+      // Conserva recorridos ya sincronizados / en curso conocidos en el cupo de 6.
+      preferPlanIds: knownLocal.map((r) => r.planId),
     })
     const signalsById: Record<number, PlanOpsSignals | undefined> = {}
 

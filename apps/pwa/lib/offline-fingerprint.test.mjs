@@ -2,8 +2,10 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
   buildOfflineFingerprint,
+  canReuseOfflineSnapshot,
   fingerprintKey,
   fingerprintsEqual,
+  hasReliablePickingIdentity,
   pickingIdentityChanged,
 } from "./offline-fingerprint.ts"
 
@@ -56,5 +58,26 @@ describe("offline-fingerprint", () => {
       truncated: true,
     })
     assert.equal(fp.truncated, true)
+  })
+
+  it("sin picking_id/version no declara snapshot reutilizable solo por conteos", () => {
+    const a = buildOfflineFingerprint({
+      planId: 1,
+      pickingId: null,
+      pickingVersion: null,
+      clients: 10,
+      documents: 20,
+    })
+    const b = buildOfflineFingerprint({
+      planId: 1,
+      pickingId: null,
+      pickingVersion: null,
+      clients: 10,
+      documents: 20,
+    })
+    assert.equal(hasReliablePickingIdentity(a), false)
+    assert.equal(fingerprintsEqual(a, b), true)
+    assert.equal(canReuseOfflineSnapshot(a, b), false)
+    assert.equal(pickingIdentityChanged(a, b), true)
   })
 })
