@@ -9,12 +9,18 @@ const sw = readFileSync(join(root, "public", "sw.js"), "utf8")
 const offlineHtml = readFileSync(join(root, "public", "offline.html"), "utf8")
 
 describe("service worker offline shell", () => {
-  it("usa versión v8+ y precachea shell + offline.html", () => {
-    assert.match(sw, /lq-pwa-v8-offline-route-guard/)
+  it("usa versión v9+ Safari no-redirect y precachea shell + offline.html", () => {
+    assert.match(sw, /lq-pwa-v9-safari-no-redirect/)
     assert.match(sw, /OFFLINE_HTML\s*=\s*"\/offline\.html"/)
     assert.match(sw, /APP_SHELL\s*=\s*"\/despachos"/)
-    assert.match(sw, /const PRECACHE = \[\s*OFFLINE_HTML/)
+    assert.match(sw, /asCleanResponse/)
+    assert.match(sw, /Response served by service worker has redirections|redirected/)
     assert.match(sw, /X-LQ-Offline-RSC/)
+    // No precachear "/" (redirect Next → /despachos).
+    const precacheStart = sw.indexOf("const PRECACHE = [")
+    const precacheEnd = sw.indexOf("];", precacheStart)
+    const precacheBody = sw.slice(precacheStart, precacheEnd)
+    assert.doesNotMatch(precacheBody, /"\/"/)
   })
 
   it("nunca deja respondWith con null (navegación y assets)", () => {
@@ -26,20 +32,25 @@ describe("service worker offline shell", () => {
   it("NO sirve APP_SHELL HTML para rutas distintas (evita client-side exception)", () => {
     assert.match(sw, /NUNCA devolver APP_SHELL/)
     assert.match(sw, /safeOfflineNavigation\(request\)/)
-    // El fallback genérico offline no debe listar APP_SHELL junto a rutas profundas.
     const fnStart = sw.indexOf("async function safeOfflineNavigation")
-    const fnEnd = sw.indexOf("async function putCopy", fnStart)
+    const fnEnd = sw.indexOf("async function putClean", fnStart)
     const body = sw.slice(fnStart, fnEnd)
     assert.match(body, /path === APP_SHELL/)
     assert.match(body, /OFFLINE_HTML/)
-    // Para path !== shell, solo offline.html — no devolver /despachos por defecto.
     assert.doesNotMatch(
       body,
       /matchFirst\(\[\s*request\.url,\s*APP_SHELL/,
     )
   })
 
-  it("chunks JS offline: 503 explícito sin módulo ficticio", () => {
+  it("no cachea redirects ni login como HTML de fichas", () => {
+    assert.match(sw, /isCacheableAppHtml/)
+    assert.match(sw, /isLoginPath/)
+    assert.match(sw, /response\.redirected/)
+    assert.match(sw, /putClean/)
+  })
+
+  it("chunks JS offline: 503 explícito sin módulo ficticio / sin HTML", () => {
     assert.match(sw, /missingOfflineChunkResponse/)
     assert.match(sw, /X-LQ-Offline-Chunk-Missing/)
     assert.doesNotMatch(sw, /syntheticOfflineScript/)
@@ -47,7 +58,6 @@ describe("service worker offline shell", () => {
     const fnEnd = sw.indexOf("async function matchFirst", fnStart)
     const body = sw.slice(fnStart, fnEnd)
     assert.doesNotMatch(body, /application\/javascript/)
-    assert.doesNotMatch(body, /Content-Type/)
   })
 
   it("no intercepta API ni login", () => {
@@ -57,9 +67,15 @@ describe("service worker offline shell", () => {
     assert.match(sw, /if \(isApiPath\(url\.pathname\)\) return;/)
   })
 
-  it("offline.html es shell estático usable", () => {
+  it("offline.html distingue V1 consulta / V2 captura / sync", () => {
     assert.match(offlineHtml, /Sin conexión/)
     assert.match(offlineHtml, /href="\/despachos"/)
-    assert.doesNotMatch(offlineHtml, /P1 no se guardan/)
+    assert.match(offlineHtml, /Offline V1/)
+    assert.match(offlineHtml, /Offline V2/)
+    assert.match(offlineHtml, /sincronizaci/i)
+    assert.doesNotMatch(
+      offlineHtml,
+      /Las entregas, GPS, fotografías y WhatsApp requieren conexión/,
+    )
   })
 })

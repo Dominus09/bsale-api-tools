@@ -39,9 +39,9 @@ function main() {
     if (fs.existsSync(buildIdPath) && fs.existsSync(swPath)) {
       const buildId = fs.readFileSync(buildIdPath, "utf8").trim().slice(0, 16)
       let sw = fs.readFileSync(swPath, "utf8")
-      const baseVer = "lq-pwa-v8-offline-route-guard"
+      const baseVer = "lq-pwa-v9-safari-no-redirect"
       sw = sw.replace(
-        /const VERSION = "lq-pwa-v8-offline-route-guard(?:-[^"]*)?"/,
+        /const VERSION = "lq-pwa-v9-safari-no-redirect(?:-[^"]*)?"/,
         `const VERSION = "${baseVer}-${buildId}"`,
       )
       fs.writeFileSync(swPath, sw)

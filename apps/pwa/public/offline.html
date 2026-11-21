@@ -30,16 +30,16 @@
   <main class="card">
     <h1>Sin conexión</h1>
     <p>
-      No hay red en este momento. Si ya sincronizaste un despacho con internet,
-      vuelve a abrir Mis despachos cuando la app cargue; la consulta offline es
-      de solo lectura.
+      Si ya sincronizaste un despacho, abre Mis despachos para consultar fichas
+      y pedidos (Offline V1, solo lectura).
     </p>
     <p class="muted">
-      Las entregas, GPS, fotografías y WhatsApp requieren conexión. No se registra
-      nada en el servidor mientras estés offline.
+      Offline V2: puedes registrar entregas y fotografías en este dispositivo
+      solo si el despacho quedó autorizado y descargado con internet. La
+      sincronización al servidor requiere recuperar conexión.
     </p>
     <a class="btn" href="/despachos">Ir a Mis despachos</a>
-    <a class="btn" href="/" style="background:#1e222b;margin-top:8px;border:1px solid #2c313c">Reintentar</a>
+    <a class="btn" href="/despachos" style="background:#1e222b;margin-top:8px;border:1px solid #2c313c">Reintentar</a>
   </main>
   <script>
     window.addEventListener("online", function () {

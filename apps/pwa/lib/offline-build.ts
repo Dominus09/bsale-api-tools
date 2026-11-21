@@ -10,7 +10,7 @@ export type OfflineBuildInfo = {
 
 const FALLBACK: OfflineBuildInfo = {
   navBuildId: "dev",
-  swVersionPrefix: "lq-pwa-v8-offline-route-guard",
+  swVersionPrefix: "lq-pwa-v9-safari-no-redirect",
 }
 
 let cached: OfflineBuildInfo | null = null

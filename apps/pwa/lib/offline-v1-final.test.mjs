@@ -34,7 +34,7 @@ describe("Offline V1 revisión final", () => {
 
   it("B: SW no sirve APP_SHELL para Clientes (HTML de otra ruta)", () => {
     const fnStart = sw.indexOf("async function safeOfflineNavigation")
-    const fnEnd = sw.indexOf("async function putCopy", fnStart)
+    const fnEnd = sw.indexOf("async function putClean", fnStart)
     const body = sw.slice(fnStart, fnEnd)
     assert.match(body, /OFFLINE_HTML/)
     assert.match(body, /path === APP_SHELL/)

@@ -26,7 +26,7 @@ describe("offline navigation + sync integrity", () => {
   })
 
   it("SW cachea HTML /despachos en fetch no-navigate (warm)", () => {
-    assert.match(sw, /lq-pwa-v8/)
+    assert.match(sw, /lq-pwa-v9/)
     assert.match(sw, /text\/html/)
     assert.match(sw, /PAGE_CACHE/)
     assert.match(sw, /path\.startsWith\("\/despachos"\)/)
@@ -49,7 +49,8 @@ describe("offline navigation + sync integrity", () => {
 
   it("RSC online usa fetch primero; 503 solo en catch", () => {
     const rscBlock = sw.slice(sw.indexOf("if (isRsc)"), sw.indexOf("event.respondWith(handleAsset"))
-    assert.match(rscBlock, /return await fetch\(request\)/)
+    assert.match(rscBlock, /await fetch\(request\)/)
+    assert.match(rscBlock, /asCleanResponse/)
     assert.match(rscBlock, /catch/)
     assert.match(rscBlock, /status: 503/)
   })

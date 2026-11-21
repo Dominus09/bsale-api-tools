@@ -158,18 +158,31 @@ export async function warmPlanRoutes(
     try {
       const res = await fetch(path, {
         credentials: "same-origin",
+        redirect: "follow",
         headers: { Accept: "text/html" },
       })
-      if (!res.ok) {
+      // No aceptar HTML de login / redirect cruzado como warm de la ruta.
+      if (!res.ok || res.redirected) {
+        failed.push(path)
+        return
+      }
+      const finalPath = new URL(res.url).pathname
+      if (finalPath !== path) {
+        failed.push(path)
+        return
+      }
+      const ct = (res.headers.get("content-type") || "").toLowerCase()
+      if (!ct.includes("text/html")) {
         failed.push(path)
         return
       }
       warmed += 1
-      const ct = (res.headers.get("content-type") || "").toLowerCase()
-      if (ct.includes("text/html")) {
-        const html = await res.text()
-        assetsByPath.set(path, extractNextStaticAssets(html))
+      const html = await res.text()
+      if (/\/login/i.test(html) && /password|contrase/i.test(html)) {
+        failed.push(path)
+        return
       }
+      assetsByPath.set(path, extractNextStaticAssets(html))
     } catch {
       failed.push(path)
     }
