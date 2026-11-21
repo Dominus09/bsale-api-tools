@@ -208,6 +208,85 @@ export async function getOfflinePlanReady(
 }
 
 /**
+ * Autorización Offline V2 confirmada por API mientras hubo red.
+ * Persiste en IDB (no localStorage). No concede permisos por sí sola:
+ * solo refleja un ACK previo del servidor para captura local sin red.
+ */
+export type OfflineV2PlanGrant = {
+  userId: string
+  planId: number
+  writesEnabled: boolean
+  pickingId: number | null
+  pickingVersion: string | null
+  /** Plan descargado íntegro al momento del ACK. */
+  planComplete: boolean
+  confirmedAt: string
+}
+
+export async function saveOfflineV2PlanGrant(
+  grant: OfflineV2PlanGrant,
+): Promise<void> {
+  await idbSet(
+    `${offlineUserPrefix(grant.userId)}plan:${grant.planId}:v2grant`,
+    grant,
+  )
+}
+
+export async function getOfflineV2PlanGrant(
+  userId: string | number,
+  planId: number,
+): Promise<OfflineV2PlanGrant | null> {
+  return idbGet(`${offlineUserPrefix(userId)}plan:${planId}:v2grant`)
+}
+
+export async function clearOfflineV2PlanGrant(
+  userId: string | number,
+  planId: number,
+): Promise<void> {
+  try {
+    const db = await openDb()
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite")
+      tx.objectStore(STORE).delete(
+        `${offlineUserPrefix(userId)}plan:${planId}:v2grant`,
+      )
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function clearOfflineV2PlanGrantsForUser(
+  userId: string | number,
+): Promise<void> {
+  try {
+    const db = await openDb()
+    const prefix = `${offlineUserPrefix(userId)}plan:`
+    const suffix = ":v2grant"
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, "readwrite")
+      const store = tx.objectStore(STORE)
+      const req = store.openCursor()
+      req.onsuccess = () => {
+        const cursor = req.result
+        if (!cursor) return
+        const key = String(cursor.key)
+        if (key.startsWith(prefix) && key.endsWith(suffix)) {
+          cursor.delete()
+        }
+        cursor.continue()
+      }
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
  * Lista marcas ready del usuario.
  * - Por defecto solo las que afirman `complete` (UI "listo").
  * - `includeDataOnly`: incluye planes con datos aunque nav/build no estén listos

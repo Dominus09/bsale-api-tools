@@ -14,9 +14,11 @@ import {
   productCategoryLabel,
 } from "@/lib/delivery-labels"
 import { isDeviceOffline, readOfflineClientDetail } from "@/lib/offline-load"
-import { isOfflineV2UiEnabledForPlan } from "@/lib/offline-outbox-policy"
 import { isLikelyOfflineError, saveOfflineClientDetail } from "@/lib/offline-store"
-import { refreshOfflineV2PilotAuthorization } from "@/lib/offline-v2-pilot-auth"
+import {
+  refreshOfflineV2PilotAuthorization,
+  resolveOfflineV2UiEnabledForPlan,
+} from "@/lib/offline-v2-pilot-auth"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 import { DeliveryLocalToolsHost } from "@/components/delivery-local-tools-host"
 import { DeliveryVisitStart } from "@/components/delivery-visit-start"
@@ -44,12 +46,20 @@ export default function ClienteFichaPage() {
         setOfflineV2Ui(false)
         return
       }
-      await refreshOfflineV2PilotAuthorization(planId)
-      if (!cancelled) setOfflineV2Ui(isOfflineV2UiEnabledForPlan(planId))
+      // IDB grant primero (modo avión); red solo en background si hay conexión.
+      const localOk = await resolveOfflineV2UiEnabledForPlan(planId)
+      if (!cancelled) setOfflineV2Ui(localOk)
+      if (isDeviceOffline()) return
+      void refreshOfflineV2PilotAuthorization(planId).then(async () => {
+        if (cancelled) return
+        setOfflineV2Ui(await resolveOfflineV2UiEnabledForPlan(planId))
+      })
     }
     void loadPilot()
     function onPilot() {
-      setOfflineV2Ui(isOfflineV2UiEnabledForPlan(planId))
+      void resolveOfflineV2UiEnabledForPlan(planId).then((ok) => {
+        if (!cancelled) setOfflineV2Ui(ok)
+      })
     }
     window.addEventListener("lq-offline-v2-pilot-changed", onPilot)
     return () => {
@@ -91,7 +101,26 @@ export default function ClienteFichaPage() {
         )
         return
       }
+      // Con snapshot local: no esperar API (avión con navigator.onLine=true).
       if (cancelled || isDeviceOffline()) return
+      if (hasLocal) {
+        void getMyCliente(planId, customerKey)
+          .then(async (res) => {
+            if (cancelled) return
+            setData(res)
+            setError(null)
+            setOfflineSource(null)
+            const uid = getSessionUserId()
+            if (uid) {
+              await saveOfflineClientDetail(uid, planId, customerKey, {
+                payload: res,
+                syncedAt: new Date().toISOString(),
+              })
+            }
+          })
+          .catch(() => undefined)
+        return
+      }
       try {
         const res = await getMyCliente(planId, customerKey)
         if (cancelled) return
@@ -425,8 +454,8 @@ export default function ClienteFichaPage() {
         <div className="banner banner-info">
           <strong>Consulta Offline V1</strong>
           <div style={{ fontSize: "0.78rem", marginTop: 4 }}>
-            Ficha disponible sin conexión. El registro Offline V2 está
-            deshabilitado en el servidor.
+            Ficha disponible sin conexión. Offline V2 requiere autorización
+            previa con internet (despacho descargado íntegramente).
           </div>
         </div>
       ) : (

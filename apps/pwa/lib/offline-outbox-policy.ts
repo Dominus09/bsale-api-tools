@@ -1,15 +1,11 @@
 /**
  * Política Offline V2 outbox.
- * Separada de snapshots regenerables Offline V1.
  *
- * Sync de escrituras: OFF por defecto (kill switch del servidor).
- * Con writes ON: todo chofer autenticado en sus despachos asignados.
- * NEXT_PUBLIC_* / localStorage NUNCA otorgan permisos en *.quillotana.cl
- * y no anulan un servidor con writes deshabilitados (503).
+ * Sync / UI: kill switch del servidor + grants IDB confirmados en línea.
+ * NEXT_PUBLIC_* / localStorage NUNCA otorgan permisos en *.quillotana.cl.
  */
 
 export const OFFLINE_OUTBOX_RETENTION = {
-  /** Snapshots V1 sí pueden borrarse; outbox NUNCA por estos eventos. */
   autoDeleteUnconfirmed: false as const,
   onLogout: "warn_and_retain" as const,
   on401: "retain_outbox" as const,
@@ -17,16 +13,11 @@ export const OFFLINE_OUTBOX_RETENTION = {
   onOtherUserLogin: "isolate_only_never_wipe_other_outbox" as const,
   onBuildIdOrSwUpdate: "retain_outbox" as const,
   onReloadOrClose: "retain_outbox" as const,
-  /**
-   * Default de compilación: false.
-   * Habilitación runtime: ver isOutboxSyncWritesEnabled().
-   */
   syncWritesEnabled: false as const,
   encryptionClaim: "user_isolation_only_no_app_level_encryption" as const,
   authorizedDelete: "explicit_user_or_admin_procedure_only" as const,
 } as const
 
-/** Bloqueos / invariantes de publicación. */
 export const OFFLINE_V2_PUBLICATION_BLOCKERS = [
   "sync_writes_disabled_by_default_until_server_flag",
   "no_client_flags_grant_backend_writes",
@@ -39,7 +30,6 @@ const LAB_FLAG_KEY = "lq:offline:syncWrites"
 export type OfflineV2PilotAuth = {
   writes_enabled: boolean
   user_allowed: boolean
-  /** Vacío = todos los despachos asignados (sin allowlist). */
   authorized_plan_ids: number[]
   plan_id: number | null
   plan_allowed: boolean | null
@@ -49,7 +39,6 @@ export type OfflineV2PilotAuth = {
   fetched_at: number
 }
 
-/** Cache en memoria (+ sessionStorage) del estado del servidor. */
 let serverPilotAuth: OfflineV2PilotAuth | null = null
 
 const PILOT_CACHE_KEY = "lq:offline:v2:pilotAuth"
@@ -59,7 +48,11 @@ export function isProductionQuillotanaHost(
 ): boolean {
   const h = String(hostname || "").toLowerCase()
   if (!h) return false
-  return h === "api.quillotana.cl" || h.endsWith(".quillotana.cl") || h.includes("quillotana.cl")
+  return (
+    h === "api.quillotana.cl" ||
+    h.endsWith(".quillotana.cl") ||
+    h.includes("quillotana.cl")
+  )
 }
 
 function readCachedPilotFromSession(): OfflineV2PilotAuth | null {
@@ -103,14 +96,14 @@ export function setCachedOfflineV2PilotAuth(auth: OfflineV2PilotAuth | null): vo
   }
 }
 
-/** Lab-only hints — nunca en hosts Quillotana. */
 function labClientWritesHintEnabled(): boolean {
-  if (typeof window !== "undefined" && isProductionQuillotanaHost(window.location.hostname)) {
+  if (
+    typeof window !== "undefined" &&
+    isProductionQuillotanaHost(window.location.hostname)
+  ) {
     return false
   }
-  if (process.env.NEXT_PUBLIC_OFFLINE_SYNC_WRITES === "1") {
-    return true
-  }
+  if (process.env.NEXT_PUBLIC_OFFLINE_SYNC_WRITES === "1") return true
   if (typeof window !== "undefined") {
     try {
       if (window.localStorage.getItem(LAB_FLAG_KEY) === "1") return true
@@ -121,20 +114,16 @@ function labClientWritesHintEnabled(): boolean {
   return OFFLINE_OUTBOX_RETENTION.syncWritesEnabled === true
 }
 
-/**
- * Sync de escrituras habilitado en el cliente:
- * 1) Si hay estado de servidor → solo ese (kill switch).
- * 2) Sin cache → hints de laboratorio fuera de Quillotana.
- */
 export function isOutboxSyncWritesEnabled(): boolean {
   const cached = getCachedOfflineV2PilotAuth()
-  if (cached) {
-    return cached.offline_v2_enabled === true
-  }
+  if (cached) return cached.offline_v2_enabled === true
   return labClientWritesHintEnabled()
 }
 
-/** ¿Mostrar UI de registro Offline V2 para este despacho? */
+/**
+ * Sync helper: usa cache de sesión. Para UI de ficha preferir
+ * resolveOfflineV2UiEnabledForPlan (IDB grant).
+ */
 export function isOfflineV2UiEnabledForPlan(planId: number): boolean {
   const cached = getCachedOfflineV2PilotAuth()
   if (cached) {
@@ -142,7 +131,6 @@ export function isOfflineV2UiEnabledForPlan(planId: number): boolean {
     if (cached.plan_id === Number(planId) && cached.plan_allowed != null) {
       return cached.plan_allowed === true
     }
-    // Sin allowlist: writes ON ⇒ UI en despachos del chofer (acceso ya filtrado).
     if (
       Array.isArray(cached.authorized_plan_ids) &&
       cached.authorized_plan_ids.length > 0
@@ -154,7 +142,6 @@ export function isOfflineV2UiEnabledForPlan(planId: number): boolean {
   return labClientWritesHintEnabled()
 }
 
-/** Solo laboratorio fuera de Quillotana. No usar en prod. */
 export function setOutboxSyncWritesLabFlag(enabled: boolean): void {
   if (typeof window === "undefined") return
   if (isProductionQuillotanaHost(window.location.hostname)) return

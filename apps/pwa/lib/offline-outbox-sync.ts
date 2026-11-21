@@ -16,6 +16,7 @@ import {
 } from "./offline-outbox-store.ts"
 import type { OutboxOperation } from "./offline-outbox-types.ts"
 import { isActiveOutboxStatus } from "./offline-outbox.ts"
+import { isDeviceOffline } from "./offline-store.ts"
 import { refreshOfflineV2PilotAuthorization } from "./offline-v2-pilot-auth.ts"
 
 const MAX_BACKOFF_MS = 60_000
@@ -187,8 +188,16 @@ class OutboxSyncRuntime {
 
   /** Kick seguro: solo si el servidor tiene writes ON (o lab hint no-Quillotana). */
   async kick(reason: string): Promise<void> {
-    if (getToken()) {
+    if (getToken() && !isDeviceOffline()) {
       await refreshOfflineV2PilotAuthorization()
+    }
+    if (isDeviceOffline()) {
+      await this.refreshPendingCount()
+      this.emit({
+        phase: "idle",
+        message: "Sin conexión — operaciones conservadas en el dispositivo",
+      })
+      return
     }
     if (!isOutboxSyncWritesEnabled()) {
       this.emit({

@@ -22,6 +22,7 @@ import { isDeviceOffline, readOfflineClients } from "@/lib/offline-load"
 import { isLikelyOfflineError } from "@/lib/offline-store"
 import { setActivePlanId } from "@/lib/active-plan"
 import { offlineSyncRuntime } from "@/lib/offline-sync-runtime"
+import { refreshOfflineV2PilotAuthorization } from "@/lib/offline-v2-pilot-auth"
 import { resolveSemaphore, validationLabelEs } from "@/lib/semaphore"
 
 type Filter = "all" | "pending" | "in_progress" | "managed" | "incidents"
@@ -112,17 +113,41 @@ export default function ClientesPage() {
 
       let hasLocal = false
       try {
-        // Snapshot local primero (evita spinner + tarjeta parcial mientras la API responde).
+        // IDB-FIRST: pintar ya; no esperar API (avión / onLine falso).
         if (!q.trim()) {
           const outcome = await readOfflineClients(planId)
           if (!cancelled && outcome.status === "success") {
             applyClientItems(outcome.items, setItems, setDataWarning)
+            setError(
+              outcome.incomplete
+                ? "Descarga incompleta: algunas fichas/productos pueden faltar. Reabre Clientes con internet."
+                : null,
+            )
             setLoading(false)
             hasLocal = true
           }
         }
         if (isDeviceOffline()) {
-          await loadFromOffline()
+          if (!hasLocal) await loadFromOffline()
+          return
+        }
+        // Con snapshot local: revalidar en background (sin bloquear navegación).
+        if (hasLocal && !q.trim()) {
+          const uid = getSessionUserId()
+          if (uid) setActivePlanId(uid, planId)
+          // Confirmar/persistir grant V2 mientras hay red (para modo avión después).
+          void refreshOfflineV2PilotAuthorization(planId)
+          void Promise.all([
+            listMyClientes(planId, q),
+            getMyDespachoProgress(planId).catch(() => null),
+          ])
+            .then(([data, prog]) => {
+              if (cancelled) return
+              applyClientItems(data.items || [], setItems, setDataWarning)
+              if (prog?.progress) setProgress(prog.progress)
+              setError(null)
+            })
+            .catch(() => undefined)
           return
         }
         const [data, prog] = await Promise.all([
@@ -133,16 +158,14 @@ export default function ClientesPage() {
         applyClientItems(data.items || [], setItems, setDataWarning)
         if (prog?.progress) setProgress(prog.progress)
         setError(null)
-        // Liberar UI YA: sync offline en background (antes await bloqueaba "Cargando clientes…").
         if (!cancelled) setLoading(false)
         const uid = getSessionUserId()
         if (uid && !q.trim() && !cancelled) {
           setActivePlanId(uid, planId)
-          // No forzar descarga completa aquí: el ciclo prioritario / manual
-          // vive en offlineSyncRuntime (evita duplicar sync al abrir Clientes).
+          void refreshOfflineV2PilotAuthorization(planId)
           const st = offlineSyncRuntime.getState()
           if (st.plan?.id === planId && st.phase === "syncing") {
-            /* join in-flight via shared runtime */
+            /* join in-flight */
           } else if (st.priority?.planId === planId || st.plan?.id === planId) {
             void offlineSyncRuntime
               .syncPlan(planId, { force: false, plan: st.plan || undefined })
@@ -188,6 +211,7 @@ export default function ClientesPage() {
 
   useEffect(() => {
     if (!origin || !Number.isFinite(planId)) return
+    if (isDeviceOffline()) return
     let cancelled = false
     void getMyDespachoProgress(planId, origin)
       .then((res) => {

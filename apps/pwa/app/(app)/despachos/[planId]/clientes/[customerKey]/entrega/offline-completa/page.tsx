@@ -12,10 +12,9 @@ import {
   saveCompleteDeliveryLocal,
   type OutboxOperation,
 } from "@/lib/offline-outbox"
-import { isOfflineV2UiEnabledForPlan } from "@/lib/offline-outbox-policy"
 import { readOfflineClientDetail } from "@/lib/offline-load"
 import { getOfflinePlanReady } from "@/lib/offline-store"
-import { refreshOfflineV2PilotAuthorization } from "@/lib/offline-v2-pilot-auth"
+import { resolveOfflineV2UiEnabledForPlan } from "@/lib/offline-v2-pilot-auth"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 
 type GpsFix = {
@@ -74,10 +73,10 @@ export default function OfflineCompletaPage() {
         setLoadErr("Sin sesión local.")
         return
       }
-      await refreshOfflineV2PilotAuthorization(planId)
-      if (!isOfflineV2UiEnabledForPlan(planId)) {
+      const v2Ok = await resolveOfflineV2UiEnabledForPlan(planId)
+      if (!v2Ok) {
         setLoadErr(
-          "Offline V2 deshabilitado en el servidor. Use el flujo online / Offline V1.",
+          "Offline V2 no disponible sin autorización previa con internet para este despacho.",
         )
         return
       }

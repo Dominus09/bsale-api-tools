@@ -13,6 +13,7 @@ import {
   offlineSyncRuntime,
   type OfflineSyncRuntimeState,
 } from "@/lib/offline-sync-runtime"
+import { isDeviceOffline } from "@/lib/offline-store"
 import { bindOutboxSyncTriggers } from "@/lib/offline-outbox-sync"
 import { refreshOfflineV2PilotAuthorization } from "@/lib/offline-v2-pilot-auth"
 import { OfflinePrepModal } from "@/components/offline-prep-modal"
@@ -61,7 +62,10 @@ export function OfflineSyncProvider({ children }: { children: ReactNode }) {
     function onOffline() {
       offlineSyncRuntime.markApiReachable(false)
     }
-    void refreshOfflineV2PilotAuthorization()
+    // Solo consultar API con red; offline usa grants IDB al abrir fichas.
+    if (!isDeviceOffline()) {
+      void refreshOfflineV2PilotAuthorization()
+    }
     window.addEventListener("online", onOnline)
     window.addEventListener("offline", onOffline)
     const unbindOutbox = bindOutboxSyncTriggers()
