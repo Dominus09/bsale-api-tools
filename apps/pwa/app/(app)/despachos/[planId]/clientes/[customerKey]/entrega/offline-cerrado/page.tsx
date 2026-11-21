@@ -83,7 +83,7 @@ export default function OfflineCerradoPage() {
       await refreshOfflineV2PilotAuthorization(planId)
       if (!isOfflineV2UiEnabledForPlan(planId)) {
         setLoadErr(
-          "Offline V2 no autorizado para este usuario o despacho. Use el flujo online / Offline V1.",
+          "Offline V2 deshabilitado en el servidor. Use el flujo online / Offline V1.",
         )
         return
       }

@@ -396,10 +396,9 @@ export default function ClienteFichaPage() {
       {offlineSource && offlineV2Ui ? (
         <div className="stack-gap">
           <div className="banner banner-info">
-            <strong>Operaciones Offline V2 (piloto)</strong>
+            <strong>Operaciones Offline V2</strong>
             <div style={{ fontSize: "0.78rem", marginTop: 4 }}>
-              Se guardan localmente y sincronizan al recuperar conexión. Solo
-              usuarios y despachos autorizados.
+              Se guardan localmente y sincronizan al recuperar conexión.
             </div>
           </div>
           <div className="btn-row">
@@ -426,8 +425,8 @@ export default function ClienteFichaPage() {
         <div className="banner banner-info">
           <strong>Consulta Offline V1</strong>
           <div style={{ fontSize: "0.78rem", marginTop: 4 }}>
-            Ficha disponible sin conexión. El registro Offline V2 no está
-            autorizado para este usuario o despacho.
+            Ficha disponible sin conexión. El registro Offline V2 está
+            deshabilitado en el servidor.
           </div>
         </div>
       ) : (

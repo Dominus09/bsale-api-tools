@@ -1,5 +1,5 @@
 /**
- * Consulta al servidor si el usuario/despacho están en el piloto Offline V2.
+ * Consulta al servidor si Offline V2 (writes) está habilitado.
  * Fuente de verdad: API. No usa localStorage para permisos.
  */
 

@@ -59,9 +59,10 @@ LiveContextFetcher = offline_validate.LiveContextFetcher
 
 
 def offline_sync_writes_enabled() -> bool:
-    """Feature flag backend / kill switch: OFF por defecto.
+    """Kill switch global: OFF por defecto.
 
-    Activar solo con allowlist de usuario + despacho piloto.
+    Con writes ON, todo chofer autenticado puede sincronizar Offline V2 en
+    sus despachos asignados (acceso + picking validados en el sync).
     ``localStorage`` / ``NEXT_PUBLIC_*`` NUNCA habilitan escrituras aquí.
     """
     return os.getenv("OFFLINE_SYNC_WRITES_ENABLED", "").strip().lower() in {
@@ -72,60 +73,16 @@ def offline_sync_writes_enabled() -> bool:
     }
 
 
-def _parse_int_allowlist(env_name: str) -> set[int]:
-    raw = (os.getenv(env_name) or "").strip()
-    if not raw:
-        return set()
-    allowed: set[int] = set()
-    for part in raw.replace(";", ",").split(","):
-        part = part.strip()
-        if part.isdigit():
-            allowed.add(int(part))
-    return allowed
-
-
-def offline_pilot_user_ids() -> set[int]:
-    return _parse_int_allowlist("OFFLINE_SYNC_PILOT_ALLOWLIST")
-
-
-def offline_pilot_plan_ids() -> set[int]:
-    return _parse_int_allowlist("OFFLINE_SYNC_PILOT_PLAN_ALLOWLIST")
-
-
-def offline_pilot_user_allowed(user_id: int | None) -> bool:
-    """Allowlist estricta de usuario piloto — NO activa writes por sí sola.
-
-    - Allowlist vacía ⇒ nadie autorizado (default seguro para prod).
-    - Kill switch: ``OFFLINE_SYNC_WRITES_ENABLED=false`` y/o vaciar allowlists.
-    """
-    if user_id is None:
-        return False
-    allowed = offline_pilot_user_ids()
-    if not allowed:
-        return False
-    return int(user_id) in allowed
-
-
-def offline_pilot_plan_allowed(plan_id: int | None) -> bool:
-    """Restricción adicional por despacho piloto.
-
-    Allowlist de planes vacía ⇒ ningún despacho autorizado.
-    """
-    if plan_id is None:
-        return False
-    allowed = offline_pilot_plan_ids()
-    if not allowed:
-        return False
-    return int(plan_id) in allowed
-
-
-def get_offline_v2_pilot_authorization(
+def get_offline_v2_authorization(
     user: dict[str, Any],
     plan_id: int | None = None,
+    *,
+    plan_access_ok: bool | None = None,
 ) -> dict[str, Any]:
-    """Estado de autorización Offline V2 para la PWA (solo lectura).
+    """Estado Offline V2 para la PWA (solo lectura).
 
-    La PWA consulta esto; no confía en localStorage / NEXT_PUBLIC_*.
+    Sin allowlists de usuario/despacho. El router exige perfil chofer;
+    el sync exige acceso al plan y picking válido.
     """
     writes = offline_sync_writes_enabled()
     raw_uid = user.get("id") if isinstance(user, dict) else None
@@ -133,21 +90,26 @@ def get_offline_v2_pilot_authorization(
         uid = int(raw_uid) if raw_uid is not None else None
     except (TypeError, ValueError):
         uid = None
-    user_ok = offline_pilot_user_allowed(uid)
-    plans = sorted(offline_pilot_plan_ids()) if (writes and user_ok) else []
+    authenticated = uid is not None
+    enabled = bool(writes and authenticated)
     plan_ok: bool | None = None
     if plan_id is not None:
-        plan_ok = bool(writes and user_ok and offline_pilot_plan_allowed(int(plan_id)))
-    enabled = bool(writes and user_ok and offline_pilot_plan_ids())
+        access = True if plan_access_ok is None else bool(plan_access_ok)
+        plan_ok = bool(enabled and access)
     return {
         "writes_enabled": writes,
-        "user_allowed": user_ok,
-        "authorized_plan_ids": plans,
+        "user_allowed": authenticated,
+        "authorized_plan_ids": [],
         "plan_id": int(plan_id) if plan_id is not None else None,
         "plan_allowed": plan_ok,
         "offline_v2_enabled": enabled,
         "can_use_offline_v2": plan_ok if plan_id is not None else enabled,
+        "scope": "all_assigned_driver_plans",
     }
+
+
+# Compat: nombre histórico usado por tests/lab.
+get_offline_v2_pilot_authorization = get_offline_v2_authorization
 
 
 def compute_request_hash(payload: dict[str, Any]) -> str:
@@ -315,29 +277,6 @@ def sync_offline_operation(
                     "(feature flag). No se aceptan envíos."
                 ),
                 "message": "offline sync writes disabled",
-            },
-        )
-    raw_uid = user.get("id") if isinstance(user, dict) else None
-    try:
-        pilot_uid = int(raw_uid) if raw_uid is not None else None
-    except (TypeError, ValueError):
-        pilot_uid = None
-    if require_writes_flag and not offline_pilot_user_allowed(pilot_uid):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "PILOT_USER_NOT_ALLOWED",
-                "message_es": "Usuario fuera de la allowlist de piloto offline.",
-                "message": "pilot user not allowed",
-            },
-        )
-    if require_writes_flag and not offline_pilot_plan_allowed(int(plan_id)):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "code": "PILOT_PLAN_NOT_ALLOWED",
-                "message_es": "Despacho fuera del piloto Offline V2 autorizado.",
-                "message": "pilot plan not allowed",
             },
         )
     uid = read_svc.enforce_driver_plan_read_access(user, int(plan_id))

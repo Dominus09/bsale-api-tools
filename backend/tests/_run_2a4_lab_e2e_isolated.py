@@ -59,8 +59,6 @@ def main() -> int:
     env = os.environ.copy()
     env["SIMPLE_PLANNING_TEST_DSN"] = uri
     env["OFFLINE_SYNC_WRITES_ENABLED"] = "1"
-    env["OFFLINE_SYNC_PILOT_ALLOWLIST"] = "42"
-    env["OFFLINE_SYNC_PILOT_PLAN_ALLOWLIST"] = "920"
     env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
 
     cmd = [

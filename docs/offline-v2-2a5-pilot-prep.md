@@ -17,22 +17,18 @@ El bloqueo PWA `isProductionQuillotanaHost` incluye **cualquier** host que conte
 
 Acceso iPhone: agregar PWA staging a pantalla de inicio vía Safari → Compartir → “Añadir a inicio”.
 
-## 2. Allowlist de piloto (servidor)
-
-Env (diseño, implementada en código, **no activar en prod**):
+## 2. Kill switch (servidor)
 
 ```
-OFFLINE_SYNC_WRITES_ENABLED=false          # prod: siempre false hasta aprobación
-OFFLINE_SYNC_PILOT_ALLOWLIST=             # vacío = sin restricción extra (solo lab)
-# staging futuro:
+OFFLINE_SYNC_WRITES_ENABLED=false          # default / emergencia
+# activación:
 # OFFLINE_SYNC_WRITES_ENABLED=1
-# OFFLINE_SYNC_PILOT_ALLOWLIST=42,77
 ```
 
-- Writes OFF ⇒ 503 aunque el usuario esté en allowlist.
-- Allowlist con user fuera ⇒ 403 `PILOT_USER_NOT_ALLOWED`.
-- Desactivación inmediata: quitar writes y/o vaciar allowlist + redeploy staging.
-- PWA: `localStorage` / `NEXT_PUBLIC_*` **no** anulan el servidor; en `*.quillotana.cl` el cliente fuerza sync off.
+- Writes OFF ⇒ 503 para sync.
+- Con writes ON: todos los choferes autenticados en despachos asignados.
+- Sin `OFFLINE_SYNC_PILOT_*` allowlists.
+- PWA: `localStorage` / `NEXT_PUBLIC_*` **no** anulan el servidor.
 
 ## 3. Procedimiento iPhone (manual, evidencia física pendiente)
 

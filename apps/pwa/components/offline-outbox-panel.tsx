@@ -66,8 +66,8 @@ export function OfflineOutboxPanel({ open, onClose }: Props) {
         </div>
         <p className="muted" style={{ margin: "0 0 12px", fontSize: "0.78rem" }}>
           {writesOn
-            ? "Piloto Offline V2 autorizado por el servidor. Sync activo para despachos permitidos."
-            : "Guardadas en este dispositivo. Sync Offline V2 deshabilitado (sin autorización de piloto)."}
+            ? "Offline V2 activo. Las operaciones se sincronizan al recuperar conexión."
+            : "Guardadas en este dispositivo. Sync Offline V2 deshabilitado (kill switch)."}
         </p>
         {syncMsg ? (
           <div className="banner banner-info" style={{ fontSize: "0.78rem" }}>

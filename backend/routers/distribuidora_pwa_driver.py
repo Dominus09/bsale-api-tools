@@ -658,14 +658,14 @@ def offline_v2_pilot_status(
     plan_id: int | None = None,
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
-    """Autorización Offline V2 (piloto controlado). Fuente de verdad del servidor.
+    """Estado Offline V2 (kill switch). Fuente de verdad del servidor.
 
-    La PWA debe consultar este endpoint; localStorage / NEXT_PUBLIC_* no otorgan
-    permisos. Fuera de allowlist ⇒ offline_v2_enabled=false (sin 403 en GET).
+    Con writes ON, todo chofer autenticado puede usar Offline V2 en sus
+    despachos asignados. localStorage / NEXT_PUBLIC_* no otorgan permisos.
     """
     from backend.services.distribuidora import delivery_offline_sync_service as offline_svc
 
-    return offline_svc.get_offline_v2_pilot_authorization(
+    return offline_svc.get_offline_v2_authorization(
         user, plan_id=int(plan_id) if plan_id is not None else None
     )
 
@@ -675,12 +675,14 @@ def offline_v2_plan_pilot_status(
     plan_id: int,
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
-    """Autorización Offline V2 para un despacho concreto."""
+    """Estado Offline V2 para un despacho asignado al chofer."""
     from backend.services.distribuidora import delivery_offline_sync_service as offline_svc
     from backend.services.distribuidora import dispatch_plan_pwa_driver_read_service as read_svc
 
     read_svc.enforce_driver_plan_read_access(user, int(plan_id))
-    return offline_svc.get_offline_v2_pilot_authorization(user, plan_id=int(plan_id))
+    return offline_svc.get_offline_v2_authorization(
+        user, plan_id=int(plan_id), plan_access_ok=True
+    )
 
 
 @router.post("/despachos/{plan_id}/offline-ops/sync")
@@ -693,7 +695,7 @@ async def sync_offline_operation(
     evidence: UploadFile | None = File(None),
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
-    """Sync idempotente Offline V2 (piloto controlado).
+    """Sync idempotente Offline V2 para choferes autenticados.
 
     Multipart:
     - ``payload``: JSON string del contrato
@@ -701,7 +703,7 @@ async def sync_offline_operation(
     - ``evidence``: archivo foto (obligatorio en closed_store salvo replay).
 
     Misma idempotency_key + mismo contenido → replay sin duplicar.
-    Requiere writes ON + usuario allowlist + despacho piloto. OFF por defecto.
+    Requiere ``OFFLINE_SYNC_WRITES_ENABLED`` + acceso al despacho + picking válido.
     """
     import json as _json
 

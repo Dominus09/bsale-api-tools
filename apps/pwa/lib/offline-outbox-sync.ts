@@ -7,10 +7,7 @@ import { authHeaders, getSessionUserId, getToken } from "./auth.ts"
 import { ApiError } from "./api.ts"
 import { getApiBase } from "./api-base.ts"
 import { multipartAuthHeaders } from "./multipart-headers.ts"
-import {
-  getCachedOfflineV2PilotAuth,
-  isOutboxSyncWritesEnabled,
-} from "./offline-outbox-policy.ts"
+import { isOutboxSyncWritesEnabled } from "./offline-outbox-policy.ts"
 import {
   getOutboxBlob,
   getOutboxOp,
@@ -33,15 +30,6 @@ export type OutboxSyncState = {
   lastResult: string | null
   inFlightCount: number
   pendingCount: number
-}
-
-function isPlanAuthorizedForSync(planId: number): boolean {
-  const cached = getCachedOfflineV2PilotAuth()
-  if (cached) {
-    if (!cached.offline_v2_enabled) return false
-    return cached.authorized_plan_ids.includes(Number(planId))
-  }
-  return isOutboxSyncWritesEnabled()
 }
 
 async function postOfflineOp(
@@ -197,7 +185,7 @@ class OutboxSyncRuntime {
     return n
   }
 
-  /** Kick seguro: solo si el servidor autorizó el piloto (o lab hint no-Quillotana). */
+  /** Kick seguro: solo si el servidor tiene writes ON (o lab hint no-Quillotana). */
   async kick(reason: string): Promise<void> {
     if (getToken()) {
       await refreshOfflineV2PilotAuthorization()
@@ -205,7 +193,7 @@ class OutboxSyncRuntime {
     if (!isOutboxSyncWritesEnabled()) {
       this.emit({
         phase: "disabled",
-        message: "Sync Offline V2 deshabilitado (piloto / kill switch)",
+        message: "Sync Offline V2 deshabilitado (kill switch)",
       })
       await this.refreshPendingCount()
       return
@@ -253,15 +241,6 @@ class OutboxSyncRuntime {
       if (!getToken()) {
         this.emit({ phase: "paused_auth", message: "Sesión expirada — outbox conservada" })
         return
-      }
-      if (!isPlanAuthorizedForSync(op.planId)) {
-        await putOutboxOp({
-          ...op,
-          status: "failed_needs_action",
-          last_error: "Despacho fuera del piloto Offline V2",
-          updated_at: new Date().toISOString(),
-        })
-        continue
       }
       const pcKey = `${op.planId}:${op.customerKey}`
       if (this.planCustomerLocks.has(pcKey)) continue

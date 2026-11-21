@@ -64,11 +64,8 @@ describe("offline-outbox 2A.2", () => {
     )
     assert.ok(
       OFFLINE_V2_PUBLICATION_BLOCKERS.includes(
-        "sync_writes_disabled_by_default_until_pilot_env",
+        "sync_writes_disabled_by_default_until_server_flag",
       ),
-    )
-    assert.ok(
-      OFFLINE_V2_PUBLICATION_BLOCKERS.includes("pilot_requires_user_and_plan_allowlist"),
     )
     assert.ok(
       OFFLINE_V2_PUBLICATION_BLOCKERS.includes("no_client_flags_grant_backend_writes"),

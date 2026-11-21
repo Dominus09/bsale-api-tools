@@ -28,10 +28,9 @@ Candidatos (fuera del bloqueo `*.quillotana.cl`):
 Flags:
 
 ```
-OFFLINE_SYNC_WRITES_ENABLED=false   # default global
+OFFLINE_SYNC_WRITES_ENABLED=false   # default / kill switch
 # Solo en API staging, tras autorización:
 # OFFLINE_SYNC_WRITES_ENABLED=1
-# OFFLINE_SYNC_PILOT_ALLOWLIST=<user_ids>
 ```
 
 ## 2. Checklist Safari iOS / PWA instalada
@@ -39,7 +38,7 @@ OFFLINE_SYNC_WRITES_ENABLED=false   # default global
 Datos: **solo despachos ficticios de staging**.
 
 1. [ ] Abrir PWA staging en Safari (HTTPS).
-2. [ ] Login usuario lab allowlisted.
+2. [ ] Login chofer lab.
 3. [ ] Descargar despacho ficticio completo (Mis despachos → Clientes).
 4. [ ] Añadir a pantalla de inicio.
 5. [ ] Modo avión.

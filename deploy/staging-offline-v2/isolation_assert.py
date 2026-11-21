@@ -92,8 +92,7 @@ def assert_staging_isolation(*, require_writes_off: bool = True) -> dict:
         if (os.getenv("OFFLINE_V2_ALLOW_WRITES_AT_BOOT") or "").strip() != "1":
             _fail(
                 "OFFLINE_SYNC_WRITES_ENABLED está ON al boot; "
-                "arranque staging exige OFF (kill switch). "
-                "Active después con allowlist."
+                "arranque staging exige OFF (kill switch)."
             )
 
     report = {
@@ -103,7 +102,6 @@ def assert_staging_isolation(*, require_writes_off: bool = True) -> dict:
         "r2_bucket_set": bool(r2_bucket),
         "api_public_set": bool(api_url),
         "lab_route_flag": os.getenv("OFFLINE_V2_LAB_ENABLED") == "1",
-        "pilot_allowlist_set": bool((os.getenv("OFFLINE_SYNC_PILOT_ALLOWLIST") or "").strip()),
     }
     print(f"[ISOLATION-OK] {report}", flush=True)
     return report

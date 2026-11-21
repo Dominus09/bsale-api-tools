@@ -1,11 +1,11 @@
 /**
- * Política Offline V2 outbox (piloto productivo controlado).
+ * Política Offline V2 outbox.
  * Separada de snapshots regenerables Offline V1.
  *
- * Sync de escrituras: OFF por defecto.
- * Autoridad: SOLO el backend (writes flag + allowlist usuario + despacho).
+ * Sync de escrituras: OFF por defecto (kill switch del servidor).
+ * Con writes ON: todo chofer autenticado en sus despachos asignados.
  * NEXT_PUBLIC_* / localStorage NUNCA otorgan permisos en *.quillotana.cl
- * y no anulan un servidor con writes deshabilitados (503/403).
+ * y no anulan un servidor con writes deshabilitados (503).
  */
 
 export const OFFLINE_OUTBOX_RETENTION = {
@@ -28,8 +28,7 @@ export const OFFLINE_OUTBOX_RETENTION = {
 
 /** Bloqueos / invariantes de publicación. */
 export const OFFLINE_V2_PUBLICATION_BLOCKERS = [
-  "sync_writes_disabled_by_default_until_pilot_env",
-  "pilot_requires_user_and_plan_allowlist",
+  "sync_writes_disabled_by_default_until_server_flag",
   "no_client_flags_grant_backend_writes",
   "lab_route_404_on_quillotana",
   "whatsapp_only_after_server_ack",
@@ -40,15 +39,17 @@ const LAB_FLAG_KEY = "lq:offline:syncWrites"
 export type OfflineV2PilotAuth = {
   writes_enabled: boolean
   user_allowed: boolean
+  /** Vacío = todos los despachos asignados (sin allowlist). */
   authorized_plan_ids: number[]
   plan_id: number | null
   plan_allowed: boolean | null
   offline_v2_enabled: boolean
   can_use_offline_v2: boolean
+  scope?: string
   fetched_at: number
 }
 
-/** Cache en memoria (+ sessionStorage) de la autorización del servidor. */
+/** Cache en memoria (+ sessionStorage) del estado del servidor. */
 let serverPilotAuth: OfflineV2PilotAuth | null = null
 
 const PILOT_CACHE_KEY = "lq:offline:v2:pilotAuth"
@@ -68,7 +69,10 @@ function readCachedPilotFromSession(): OfflineV2PilotAuth | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as OfflineV2PilotAuth
     if (!parsed || typeof parsed !== "object") return null
-    if (!Array.isArray(parsed.authorized_plan_ids)) return null
+    if (typeof parsed.offline_v2_enabled !== "boolean") return null
+    if (!Array.isArray(parsed.authorized_plan_ids)) {
+      parsed.authorized_plan_ids = []
+    }
     return parsed
   } catch {
     return null
@@ -119,9 +123,8 @@ function labClientWritesHintEnabled(): boolean {
 
 /**
  * Sync de escrituras habilitado en el cliente:
- * 1) Si hay autorización de servidor → solo esa (incluye piloto en app.quillotana.cl).
- * 2) Sin cache de servidor → solo hints de laboratorio fuera de Quillotana.
- * NEXT_PUBLIC / localStorage NUNCA autorizan en *.quillotana.cl.
+ * 1) Si hay estado de servidor → solo ese (kill switch).
+ * 2) Sin cache → hints de laboratorio fuera de Quillotana.
  */
 export function isOutboxSyncWritesEnabled(): boolean {
   const cached = getCachedOfflineV2PilotAuth()
@@ -136,9 +139,18 @@ export function isOfflineV2UiEnabledForPlan(planId: number): boolean {
   const cached = getCachedOfflineV2PilotAuth()
   if (cached) {
     if (!cached.offline_v2_enabled) return false
-    return cached.authorized_plan_ids.includes(Number(planId))
+    if (cached.plan_id === Number(planId) && cached.plan_allowed != null) {
+      return cached.plan_allowed === true
+    }
+    // Sin allowlist: writes ON ⇒ UI en despachos del chofer (acceso ya filtrado).
+    if (
+      Array.isArray(cached.authorized_plan_ids) &&
+      cached.authorized_plan_ids.length > 0
+    ) {
+      return cached.authorized_plan_ids.includes(Number(planId))
+    }
+    return true
   }
-  // Sin cache de servidor: solo hints de laboratorio fuera de Quillotana.
   return labClientWritesHintEnabled()
 }
 

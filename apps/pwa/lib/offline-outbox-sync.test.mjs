@@ -24,7 +24,7 @@ describe("offline-outbox-sync 2A.3 policy", () => {
     assert.equal(isProductionQuillotanaHost("127.0.0.1"), false)
   })
 
-  it("runtime documenta no Background Sync, piloto y flag", () => {
+  it("runtime documenta no Background Sync y flag", () => {
     const src = readFileSync(join(root, "lib/offline-outbox-sync.ts"), "utf8")
     assert.match(src, /No usa Background Sync/)
     assert.match(src, /isOutboxSyncWritesEnabled/)
