@@ -69,7 +69,16 @@ def test_templates_a_to_f_compact():
         if status in ("completed", "partial"):
             assert "$" not in text or "💵" in text  # sin montos CLP en forma de pago nueva
             assert "Firma:" not in text
-            assert "Gestión registrada" in text or "Validación pendiente" in text or "Obs:" in text
+            assert (
+                "Gestión confirmada" in text
+                or "Gestión registrada" in text
+                or "Validación pendiente" in text
+                or "Obs:" in text
+            )
+            assert "Chofer" in text and "PLAN-X" in text and "10:20" in text
+        else:
+            assert "Chofer" in text and "PLAN-X" in text
+            assert "10:20" in text
 
 
 def test_pending_review_keeps_red_semaphore_header():
@@ -79,6 +88,10 @@ def test_pending_review_keeps_red_semaphore_header():
             "result_reason": "closed_store",
             "closure_review_status": "pending_review",
             "client_name": "Cliente",
+            "driver_name": "Chofer A",
+            "planning_code": "PLAN-1",
+            "ended_at_local": "09:15",
+            "result_note": "Cerrado con candado",
             "documents": [{"document_type": "Boleta", "document_number": 1}],
             "products": [],
             "collections": [],
@@ -89,8 +102,11 @@ def test_pending_review_keeps_red_semaphore_header():
     )
     lines = [ln for ln in text.splitlines() if ln.strip()]
     assert lines[0] == "🔴 QUILLOTANA | LOCAL CERRADO"
-    assert "GPS pendiente de validación" in text
+    assert "GPS pendiente" in text
     assert "GPS validado" not in text
+    assert "Chofer A" in text and "PLAN-1" in text and "09:15" in text
+    assert "Cerrado con candado" in text
+    assert "r2.dev" not in text.lower()
     assert len(lines) <= 6
 
 
@@ -195,3 +211,30 @@ def test_share_url_has_no_group_id():
     url = bundle["share"]["whatsapp_url"]
     assert url.startswith("https://wa.me/?text=")
     assert "chat.whatsapp.com" not in url
+    assert bundle["share"]["delivery_claimed"] is False
+    assert bundle["share"]["auto_send"] is False
+
+
+def test_incident_and_delivery_include_ops_context():
+    """Local cerrado / no entregado: chofer, despacho, hora, motivo, obs, GPS."""
+    text = wa.build_report_text(
+        {
+            "status": "not_delivered",
+            "result_reason": "rejected_order",
+            "client_name": "Minimarket Sur",
+            "driver_name": "Pedro",
+            "planning_code": "PLAN-00099",
+            "ended_at_local": "14:02",
+            "observations": "Cliente rechazó por precio",
+            "documents": [{"document_type": "Factura", "document_number": 55}],
+            "products": [],
+            "collections": [],
+            "gps_registered": True,
+            "gps_within_radius": True,
+            "evidence_status": "sí",
+        }
+    )
+    assert "RECHAZ" in text.upper() or "rechaz" in text.lower() or "🔴" in text
+    assert "Pedro" in text and "PLAN-00099" in text and "14:02" in text
+    assert "precio" in text.lower()
+    assert len([ln for ln in text.splitlines() if ln.strip()]) <= 6

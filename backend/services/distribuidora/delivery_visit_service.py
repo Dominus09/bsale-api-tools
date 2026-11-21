@@ -1870,6 +1870,62 @@ def build_whatsapp_report(
             else:
                 has_sig = False
 
+        # Anti-duplicado: reintentos reutilizan el snapshot ya confirmado (sin reinsertar).
+        existing = visit_repo.get_latest_report_snapshot(cur, int(visit_id))
+        if existing and existing.get("report_text"):
+            existing_payload = existing.get("payload") or {}
+            if not isinstance(existing_payload, dict):
+                existing_payload = {}
+            report_text = str(existing["report_text"])
+            cur.close()
+            return serialize_value(
+                {
+                    "report_text": report_text,
+                    "template_key": existing_payload.get("template_key")
+                    or wa_report.resolve_template_key(
+                        status=visit.get("status"),
+                        result_reason=visit.get("result_reason"),
+                    ),
+                    "header": None,
+                    "demo": False,
+                    "share": {
+                        "whatsapp_url": wa_report.whatsapp_share_url(report_text),
+                        "supports_native_share": True,
+                        "delivery_claimed": False,
+                        "auto_send": False,
+                        "states": {
+                            "report_generated": True,
+                            "share_requested": False,
+                            "delivery_verified": False,
+                        },
+                        "note_es": (
+                            "Reporte ya generado para esta visita. Abrir WhatsApp no "
+                            "implica envío confirmado."
+                        ),
+                    },
+                    "omitted": existing_payload.get("omitted")
+                    or [
+                        "signature_image",
+                        "photos",
+                        "precise_gps",
+                        "full_rut",
+                        "phone",
+                        "group_invite_link",
+                    ],
+                    "snapshot_id": int(existing["id"]),
+                    "persisted": True,
+                    "idempotent_replay": True,
+                    "mode": "online_only",
+                    "adapter": {
+                        "kind": "manual_share_v1",
+                        "official_api_ready": False,
+                        "note_es": (
+                            "Adaptador futuro para API oficial; hoy solo compartir manual."
+                        ),
+                    },
+                }
+            )
+
         report_data = wa_report.visit_row_to_report_data(
             visit,
             docs=docs,

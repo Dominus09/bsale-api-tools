@@ -580,6 +580,22 @@ def list_collections(cur, visit_id: int) -> list[dict[str, Any]]:
     return [_row(cur, r) for r in rows]
 
 
+def get_latest_report_snapshot(cur, visit_id: int) -> dict[str, Any] | None:
+    """Último snapshot de WhatsApp de la visita (anti-duplicado por reintento)."""
+    cur.execute(
+        """
+        SELECT *
+        FROM distribuidora.delivery_report_snapshots
+        WHERE visit_id = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (int(visit_id),),
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None
+
+
 def insert_report_snapshot(cur, **kw) -> dict[str, Any]:
     cur.execute(
         """

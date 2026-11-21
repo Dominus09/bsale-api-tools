@@ -228,6 +228,14 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
             "(sin coords en mensaje)"
         )
     evid = data.get("evidence_status") or "pendiente"
+    driver = (data.get("driver_name") or "—").strip() or "—"
+    plan_code = (data.get("planning_code") or "—").strip() or "—"
+    ended = (data.get("ended_at_local") or data.get("started_at_local") or "—").strip()
+    obs_raw = (data.get("observations") or data.get("result_note") or "").strip()
+    obs_clip = (
+        (obs_raw if len(obs_raw) <= 48 else (obs_raw[:45] + "…")) if obs_raw else ""
+    )
+
     if template in (
         "closed_store",
         "not_found",
@@ -237,46 +245,54 @@ def build_report_text(data: dict[str, Any], *, demo: bool = False) -> str:
     ):
         reason = data.get("result_reason")
         reason_es = REASON_ES.get(reason, reason or sem.get("label_es") or "Incidencia")
-        # Máx. 6 líneas: header rojo/motivo + cliente + evidencia + GPS/validación.
+        # Máx. 6: resultado crítico + chofer/despacho/hora + motivo/obs + evidencia/GPS.
+        motivo = f"📝 {reason_es}"
+        if obs_clip:
+            motivo = f"{motivo} · {obs_clip}"
+        gps_short = (
+            "GPS pendiente revisión"
+            if pending_review
+            else ("GPS OK" if gps_ok else "GPS registrado" if data.get("gps_registered") else "Sin GPS")
+        )
         lines = [
-            header,  # conserva 🔴 LOCAL CERRADO / RECHAZADO (no sustituir por amarillo)
+            header,
             f"🏪 {client} · {docs_s}",
-            f"📝 {reason_es}",
-            f"📷 Evidencia: {evid}",
-            gps_line,
+            f"🚚 {driver} · {plan_code} · {ended}",
+            motivo,
+            f"📷 Evidencia: {evid} · {gps_short}",
             (
                 "✍️ Datos de prueba"
                 if demo
                 else (
-                    "⚠️ Validación pendiente"
+                    "⚠️ Validación pendiente · sync confirmada"
                     if pending_review
-                    else "✍️ Incidencia registrada"
+                    else "✍️ Incidencia confirmada en servidor"
                 )
             ),
         ]
     else:
         pay_line, pend_line = _collection_compact(list(data.get("collections") or []))
-        obs_raw = (data.get("observations") or "").strip()
-        obs_line = None
-        if obs_raw:
-            clipped = obs_raw if len(obs_raw) <= 72 else (obs_raw[:69] + "…")
-            obs_line = f"📝 Obs: {clipped}"
-        # Chofer V1: no afirmar firma. Última línea = obs / validación / gestión.
+        # Compactar forma de pago + aviso de no verificación en 1 línea (máx. 6).
+        pay_compact = pay_line
+        if pend_line and "no verificada" in pend_line.lower():
+            pay_compact = f"{pay_line} · no verificada"
+        elif pend_line and "pendiente" in pend_line.lower():
+            pay_compact = f"{pay_line} · pendiente"
+        # Entrega completa/parcial: incluir chofer, despacho y hora de gestión.
         if pending_review:
             tail = "⚠️ Validación pendiente"
         elif demo:
             tail = "🚛 Gestión registrada · Datos ficticios"
-        elif obs_line:
-            tail = obs_line
-            obs_line = None
+        elif obs_clip:
+            tail = f"📝 Obs: {obs_clip}"
         else:
-            tail = "🚛 Gestión registrada"
+            tail = "🚛 Gestión confirmada en servidor"
         lines = [
             header,
             f"🏪 {client} · {docs_s}",
+            f"🚚 {driver} · {plan_code} · {ended}",
             f"📦 {full_n} completas · {partial_n} parciales · {none_n} no entregadas",
-            pay_line,
-            pend_line if pend_line and not pending_review else (obs_line or pend_line),
+            pay_compact if not pending_review else (pend_line or pay_compact),
             tail,
         ]
 
