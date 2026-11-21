@@ -558,10 +558,14 @@ def get_dashboard(
             "by_driver": by_driver,
             "evidence_policy": {
                 "required_for_reasons": sorted(EVIDENCE_REQUIRED_REASONS),
+                "signature_required_for_delivery": False,
+                "receptor_name_required_for_delivery": False,
                 "note_es": (
-                    "Local cerrado, no encontrado, rechazo, ausente y otros "
-                    "requieren fotografía o excepción auditable. Completa/parcial "
-                    "usan conformidad (firma), no evidencia de incidencia."
+                    "Incidencias (local cerrado, no encontrado, rechazo, ausente u "
+                    "otro) requieren fotografía o excepción auditable. Entrega "
+                    "completa/parcial: documentos, cantidades y observaciones "
+                    "según reglas vigentes; sin firma ni receptor obligatorios. "
+                    "Firmas históricas en delivery_conformity se conservan si existen."
                 ),
             },
             "mode": "online_only",

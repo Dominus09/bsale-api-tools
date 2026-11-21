@@ -13,6 +13,7 @@ def test_templates_a_to_f_compact():
         ("not_delivered", "closed_store", "closed_store"),
         ("not_delivered", "not_found", "not_found"),
         ("not_delivered", "rejected_order", "rejected_order"),
+        ("not_delivered", "absent_customer", "absent_customer"),
         ("not_delivered", "other", "other_incident"),
     ]
     for status, reason, key in cases:
@@ -21,6 +22,7 @@ def test_templates_a_to_f_compact():
             {
                 "status": status,
                 "result_reason": reason,
+                "result_note": "Obs incidencia de prueba" if status == "not_delivered" else "",
                 "planning_code": "PLAN-X",
                 "client_name": "Cliente",
                 "driver_name": "Chofer",
@@ -38,8 +40,8 @@ def test_templates_a_to_f_compact():
                 "products": [
                     {
                         "planned_units": 2,
-                        "delivered_units": 2,
-                        "undelivered_units": 0,
+                        "delivered_units": 2 if status != "not_delivered" else 0,
+                        "undelivered_units": 0 if status != "not_delivered" else 2,
                     }
                 ],
                 "collections": [
@@ -54,7 +56,8 @@ def test_templates_a_to_f_compact():
                 ],
                 "gps_registered": True,
                 "evidence_status": "sí",
-                "signature_status": "sí",
+                # Firma histórica opcional: no debe exigir ni afirmar envío.
+                "signature_status": None,
             }
         )
         visible = [ln for ln in text.splitlines() if ln.strip()]
@@ -66,9 +69,11 @@ def test_templates_a_to_f_compact():
         assert "cash" not in text.lower() or "Efectivo" in text
         assert "r2.dev" not in text.lower()
         assert "cloudflare" not in text.lower()
+        assert "object_key" not in text.lower()
+        assert "Firma:" not in text
+        assert "receptor" not in text.lower()
         if status in ("completed", "partial"):
             assert "$" not in text or "💵" in text  # sin montos CLP en forma de pago nueva
-            assert "Firma:" not in text
             assert (
                 "Gestión confirmada" in text
                 or "Gestión registrada" in text
@@ -79,6 +84,7 @@ def test_templates_a_to_f_compact():
         else:
             assert "Chofer" in text and "PLAN-X" in text
             assert "10:20" in text
+            assert "Obs incidencia" in text or "📝" in text
 
 
 def test_pending_review_keeps_red_semaphore_header():

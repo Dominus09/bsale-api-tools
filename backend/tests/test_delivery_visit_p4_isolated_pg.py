@@ -340,6 +340,28 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
     monkeypatch.setattr(
         svc.loc_svc, "_authorized_company_id_for_plan", lambda _u, _p: 3
     )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_normalize_facade_image",
+        lambda raw, _mime: (raw, "image/jpeg", "jpg"),
+    )
+
+    class _FakeStorage:
+        ObjectStorageNotConfigured = type("ObjectStorageNotConfigured", (Exception,), {})
+
+        @staticmethod
+        def build_delivery_evidence_object_key(**_k):
+            return "evid/test-closed.jpg"
+
+        @staticmethod
+        def put_bytes(**_k):
+            return None
+
+        @staticmethod
+        def object_exists(_k):
+            return True
+
+    monkeypatch.setattr(svc, "storage", _FakeStorage)
 
     started = svc.start_visit(
         user=_user(),
@@ -402,17 +424,23 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
     )
     assert col["persisted"] is True
 
-    # Incidencia: evidencia excepción (sin R2) → pending_review
-    exc = svc.register_evidence_exception(
+    # Local cerrado exige fotografía confirmada (no basta excepción).
+    evid = svc.upload_incident_evidence(
         user=_user(),
         plan_id=10,
         visit_id=vid,
         evidence_kind="closed_store",
-        exception_note="Camara no disponible en prueba aislada",
+        data=b"\xff\xd8\xff" + b"0" * 128,
+        content_type="image/jpeg",
         latitude=-42.0,
         longitude=-73.0,
+        accuracy_m=12.0,
+        idempotency_key="p4-closed-photo-1",
+        proximity_exception_code="test_lab",
+        proximity_exception_note="Prueba aislada sin georef de cliente",
     )
-    assert exc["persisted"] is True
+    assert evid["persisted"] is True
+    assert evid["evidence"].get("upload_confirmed") is True
 
     # No delivered: líneas con entregado>0 bloquearían; limpiamos vía status none
     # Re-guardar líneas en 0 entregado
@@ -449,6 +477,9 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
     # Cada save_document_lines incrementa version; no usar la de start.
     assert int(cleared["visit_version"]) >= int(ver)
 
+    from datetime import datetime, timezone
+
+    gps_ts = datetime.now(timezone.utc).isoformat()
     closed = svc.finalize_visit(
         user=_user(),
         plan_id=10,
@@ -459,8 +490,13 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
         result_note="Local cerrado prueba",
         latitude=-42.0,
         longitude=-73.0,
+        accuracy_m=12.0,
+        gps_captured_at=gps_ts,
+        gps_exception_code="client_gps_missing",
+        gps_exception_note="Prueba aislada: cliente sin coordenadas referenciales",
     )
     assert closed["finalized"] is True
+    # Excepción de proximidad → pending_review (no inventar verified).
     assert closed["closure_review_status"] == "pending_review"
 
     report = svc.build_whatsapp_report(
@@ -473,10 +509,26 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
     )
     assert "Cliente Test" in report["report_text"]
     assert "LOCAL CERRADO" in report["report_text"] or "CERRADO" in report["header"]
+    assert "Chofer Test" in report["report_text"]
+    assert "PLAN-TEST-P4" in report["report_text"]
     assert report["share"]["delivery_claimed"] is False
     assert report["share"]["auto_send"] is False
     assert "-42.0" not in report["report_text"]
+    assert "r2.dev" not in report["report_text"].lower()
     assert "group_invite_link" in report["omitted"]
+    assert "photos" in report["omitted"]
+    # Anti-duplicado: reintento reutiliza snapshot.
+    again = svc.build_whatsapp_report(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        client_name="Cliente Test",
+        planning_code="PLAN-TEST-P4",
+        driver_name="Chofer Test",
+    )
+    assert again.get("idempotent_replay") is True
+    assert again["snapshot_id"] == report["snapshot_id"]
+    assert again["report_text"] == report["report_text"]
 
 
 def test_schema_integrity_restrict_and_composites(isolated_db):

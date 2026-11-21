@@ -31,6 +31,18 @@ NOT_IN_RUNNER = {
     "010_visitas_snapshot_telefonica.sql": "schema bsale (app móvil), no distribuidora",
     "026_MANUAL_pgAdmin_apply_and_validate.sql": "script manual pgAdmin; el runner aplica 026 + 048",
     "031_delivery_day_detect.sql": "funciones opcionales sin uso en el código",
+    # AWAITING_APPROVAL / audit / dry-run: no auto-aplicar en bootstrap.
+    "059_060_read_only_status_check.sql": "chequeo read-only; no DDL de runner",
+    "059_delivery_payment_declaration_AWAITING_APPROVAL.sql": "DDL pendiente de aprobación admin",
+    "060_delivery_check_declared_AWAITING_APPROVAL.sql": "DDL pendiente de aprobación admin",
+    "061_delivery_offline_ops_AWAITING_APPROVAL.sql": "DDL Offline V2 pendiente de aprobación",
+    "061_r2_orphan_dry_run.sql": "dry-run R2; no DDL de runner",
+    "061_read_only_status_check.sql": "chequeo read-only; no DDL de runner",
+    "PROPOSED_058_visit_admin_classification_DESIGN_ONLY.sql": "diseño propuesto; no aplicar",
+    "audit_plan00082_visit3_romeo_alfa_SELECT_ONLY.sql": "auditoría SELECT-only",
+    "audit_romeo_alfa_visits_1_and_3_SELECT_ONLY.sql": "auditoría SELECT-only",
+    "verify_romeo_alfa_after_void_SELECT_ONLY.sql": "verificación SELECT-only",
+    "void_romeo_alfa_visits_1_and_3_AWAITING_APPROVAL.sql": "void puntual pendiente aprobación",
 }
 
 LINEAGE_VIEWS = ("v_document_detail_lineage", "v_document_related_resolved")
@@ -285,13 +297,14 @@ def test_every_sql_file_is_registered_or_explicitly_excluded():
     assert sorted(on_disk - registered) == sorted(NOT_IN_RUNNER)
     assert list(DISTRIBUIDORA_SCHEMA_FILES) == sorted(DISTRIBUIDORA_SCHEMA_FILES)
     assert len(set(DISTRIBUIDORA_SCHEMA_FILES)) == len(DISTRIBUIDORA_SCHEMA_FILES)
-    assert DISTRIBUIDORA_SCHEMA_FILES[-6:] == (
+    assert DISTRIBUIDORA_SCHEMA_FILES[-7:] == (
         DRIVER_USER_FILE,
         ORDER_LOAD_FILE,
         PEONETAS_FILE,
         CLIENT_LOCATION_FILE,
         DELIVERY_VISITS_FILE,
         DELIVERY_CLOSURE_FILE,
+        "058_delivery_visit_admin_void.sql",
     )
 
 

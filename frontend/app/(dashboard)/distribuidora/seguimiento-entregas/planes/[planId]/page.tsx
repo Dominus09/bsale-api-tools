@@ -380,10 +380,10 @@ export default function SeguimientoPlanClientesPage() {
               )}
               {detail.conformity?.signature_url ? (
                 <MediaBlock
-                  title="Firma"
+                  title="Firma histórica"
                   item={{
                     kind: "signature",
-                    label_es: "Firma de conformidad",
+                    label_es: "Firma histórica (no requerida para cierre V1)",
                     url: detail.conformity.signature_url,
                     expires_in_sec: detail.conformity.expires_in_sec,
                   }}
