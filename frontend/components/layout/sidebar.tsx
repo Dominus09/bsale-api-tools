@@ -140,6 +140,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
       },
       { href: "/distribuidora/planificaciones", label: "Planificaciones", icon: History },
       { href: "/distribuidora/cuadraturas", label: "Cuadraturas", icon: Scale },
+      {
+        href: "/distribuidora/seguimiento-entregas",
+        label: "Seguimiento de entregas",
+        icon: Truck,
+      },
       { href: "/distribuidora/rutero", label: "Rutero vendedores", icon: Route },
       { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
       {
