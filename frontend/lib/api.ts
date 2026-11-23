@@ -7872,6 +7872,27 @@ export async function getSeguimientoEntregasDashboard(params: {
   return res.json()
 }
 
+export type SeguimientoProductRow = {
+  id?: number
+  source_detail_id?: number | null
+  document_result_id?: number | null
+  variant_id?: number | null
+  sku_code?: string | null
+  barcode?: string | null
+  commercial_name?: string | null
+  product_name?: string | null
+  product_type?: string | null
+  variant_name?: string | null
+  presentation?: string | null
+  units_per_box?: number | null
+  sale_type?: string | null
+  label_es?: string | null
+  planned_units?: number | null
+  delivered_units?: number | null
+  undelivered_units?: number | null
+  undelivered_reason?: string | null
+}
+
 export type SeguimientoClientRow = {
   customer_key: string
   route_order?: number | null
@@ -7882,14 +7903,9 @@ export type SeguimientoClientRow = {
     document_type?: string
     document_number?: string | number
     result_status?: string
+    products?: SeguimientoProductRow[]
   }>
-  products?: Array<{
-    id?: number
-    product_name?: string
-    planned_units?: number
-    delivered_units?: number
-    undelivered_units?: number
-  }>
+  products?: SeguimientoProductRow[]
   result_status?: string
   result_reason?: string | null
   result_reason_es?: string | null

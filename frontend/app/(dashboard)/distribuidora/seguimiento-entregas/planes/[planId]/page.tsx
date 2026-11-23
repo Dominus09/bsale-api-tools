@@ -21,6 +21,7 @@ import {
   getSeguimientoVisitDetail,
   type DeliveryVisitErpDetail,
   type SeguimientoClientRow,
+  type SeguimientoProductRow,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -47,6 +48,43 @@ const FILTERS = [
   { value: "not_delivered", label: "No entregados" },
   { value: "pending", label: "Pendientes" },
 ]
+
+function productRowKey(p: SeguimientoProductRow, idx: number): string {
+  if (p.source_detail_id != null) return `d-${p.source_detail_id}`
+  if (p.id != null) return `id-${p.id}`
+  if (p.variant_id != null) return `v-${p.variant_id}-${idx}`
+  return `p-${idx}`
+}
+
+function ProductIdentity({ p }: { p: SeguimientoProductRow }) {
+  const commercial = p.commercial_name || p.product_name || "Producto"
+  const presentation = p.presentation || p.variant_name
+  const meta: string[] = []
+  if (p.product_type) meta.push(p.product_type)
+  if (presentation) meta.push(presentation)
+  if (p.units_per_box != null && p.units_per_box > 0) {
+    meta.push(`${p.units_per_box} u/caja`)
+  }
+  if (p.sku_code) meta.push(`SKU ${p.sku_code}`)
+  return (
+    <div className="min-w-0">
+      <p className="font-medium text-lq-on-graphite">{commercial}</p>
+      {meta.length > 0 ? (
+        <p className="mt-0.5 text-[13px] leading-snug text-lq-on-graphite-muted">
+          {meta.join(" · ")}
+        </p>
+      ) : null}
+      <p className="mt-1 tabular-nums text-sm text-lq-on-graphite">
+        {p.delivered_units ?? 0}/{p.planned_units ?? "—"} und.
+        {p.undelivered_reason ? (
+          <span className="ml-2 text-lq-on-graphite-muted">
+            ({p.undelivered_reason})
+          </span>
+        ) : null}
+      </p>
+    </div>
+  )
+}
 
 export default function SeguimientoPlanClientesPage() {
   const params = useParams()
@@ -399,46 +437,72 @@ export default function SeguimientoPlanClientesPage() {
                       ) : null}
                     </div>
                     {open ? (
-                      <div className="mt-3 grid gap-3 border-t border-white/10 pt-3 text-sm sm:grid-cols-2">
+                      <div className="mt-3 space-y-3 border-t border-white/10 pt-3 text-sm">
                         <div>
-                          <p className="mb-1 font-medium text-lq-on-graphite-muted">
-                            Documentos
+                          <p className="mb-2 font-medium text-lq-on-graphite-muted">
+                            Documentos y productos
                           </p>
-                          {(c.documents || []).length === 0 ? (
-                            <p className="text-lq-on-graphite-muted">Sin documentos asociados</p>
-                          ) : (
-                            <ul className="space-y-1 text-lq-on-graphite-muted">
-                              {(c.documents || []).map((d) => (
-                                <li key={d.id ?? `${d.document_type}-${d.document_number}`}>
-                                  {d.document_type || "Doc"} {d.document_number ?? "—"} ·{" "}
-                                  {d.result_status || "—"}
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                        <div>
-                          <p className="mb-1 font-medium text-lq-on-graphite-muted">
-                            Productos
-                          </p>
-                          {(c.products || []).length === 0 ? (
+                          {(c.documents || []).length === 0 &&
+                          (c.products || []).length === 0 ? (
                             <p className="text-lq-on-graphite-muted">
                               {c.visit_id
-                                ? "Sin líneas de resultado"
-                                : "Sin gestiones: se mostrarán al confirmar la visita"}
+                                ? "Sin documentos ni líneas de resultado"
+                                : "Sin gestiones: los productos se mostrarán al confirmar la visita"}
                             </p>
+                          ) : (c.documents || []).length > 0 ? (
+                            <ul className="space-y-3">
+                              {(c.documents || []).map((d) => {
+                                const docProducts =
+                                  d.products && d.products.length > 0
+                                    ? d.products
+                                    : (c.products || []).filter(
+                                        (p) =>
+                                          d.id != null &&
+                                          p.document_result_id != null &&
+                                          Number(p.document_result_id) === Number(d.id),
+                                      )
+                                return (
+                                  <li
+                                    key={d.id ?? `${d.document_type}-${d.document_number}`}
+                                    className="rounded-lg border border-white/10 bg-black/20 px-3 py-2.5"
+                                  >
+                                    <p className="font-medium text-lq-on-graphite">
+                                      {d.document_type || "Doc"} {d.document_number ?? "—"}
+                                      <span className="ml-2 text-lq-on-graphite-muted">
+                                        · {d.result_status || "—"}
+                                      </span>
+                                    </p>
+                                    {docProducts.length === 0 ? (
+                                      <p className="mt-1.5 text-lq-on-graphite-muted">
+                                        Sin líneas de producto en este documento
+                                      </p>
+                                    ) : (
+                                      <ul className="mt-2 space-y-2 border-t border-white/10 pt-2">
+                                        {docProducts.map((p, idx) => (
+                                          <li key={productRowKey(p, idx)}>
+                                            <ProductIdentity p={p} />
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </li>
+                                )
+                              })}
+                            </ul>
                           ) : (
-                            <ul className="space-y-1 text-lq-on-graphite-muted">
-                              {(c.products || []).map((p) => (
-                                <li key={p.id ?? p.product_name}>
-                                  {p.product_name || "Producto"}: {p.delivered_units ?? 0}/
-                                  {p.planned_units ?? "—"}
+                            <ul className="space-y-2">
+                              {(c.products || []).map((p, idx) => (
+                                <li
+                                  key={productRowKey(p, idx)}
+                                  className="rounded-lg border border-white/10 bg-black/20 px-3 py-2.5"
+                                >
+                                  <ProductIdentity p={p} />
                                 </li>
                               ))}
                             </ul>
                           )}
                         </div>
-                        <p className="sm:col-span-2 text-sm text-lq-on-graphite-muted">
+                        <p className="text-sm text-lq-on-graphite-muted">
                           Evidencia: {c.evidence_label_es || "—"}
                           {c.payment_declared ? ` · Pago: ${c.payment_declared}` : ""}
                           {c.sync_confirmed ? " · Sync confirmado" : ""}

@@ -174,6 +174,170 @@ def test_http_endpoints_require_auth_direct():
         assert res.status_code in (401, 403), (path, res.status_code, res.text)
 
 
+def test_serialize_product_keeps_distinct_skus_same_brand():
+    """Misma marca + distinta variante/source_detail no se fusionan."""
+    heineken_330 = seg._serialize_product_line(
+        {
+            "id": 1,
+            "source_detail_id": 101,
+            "document_result_id": 9,
+            "variant_id": 501,
+            "product_name": "HEINEKEN",
+            "planned_units": 36,
+            "delivered_units": 36,
+        },
+        {
+            "product_name": "HEINEKEN",
+            "product_type": "CERVEZAS",
+            "variant_name": "DESECHABLE 330 CC (SEC 24)",
+            "presentation": "DESECHABLE 330 CC (SEC 24)",
+            "units_per_box": 24,
+            "variant_id": 501,
+            "sku_code": "7802100000354",
+            "barcode": "7802100000354",
+        },
+    )
+    heineken_lata = seg._serialize_product_line(
+        {
+            "id": 2,
+            "source_detail_id": 102,
+            "document_result_id": 9,
+            "variant_id": 502,
+            "product_name": "HEINEKEN",
+            "planned_units": 24,
+            "delivered_units": 24,
+        },
+        {
+            "product_name": "HEINEKEN",
+            "product_type": "CERVEZAS",
+            "variant_name": "LATA 350 CC (SEC 24)",
+            "presentation": "LATA 350 CC (SEC 24)",
+            "units_per_box": 24,
+            "variant_id": 502,
+            "sku_code": "7802100000316",
+            "barcode": "7802100000316",
+        },
+    )
+    assert heineken_330["source_detail_id"] != heineken_lata["source_detail_id"]
+    assert heineken_330["variant_id"] != heineken_lata["variant_id"]
+    assert heineken_330["commercial_name"] == "HEINEKEN"
+    assert heineken_330["presentation"] == "DESECHABLE 330 CC (SEC 24)"
+    assert heineken_lata["presentation"] == "LATA 350 CC (SEC 24)"
+    assert heineken_330["units_per_box"] == 24
+    assert "DESECHABLE 330 CC" in (heineken_330["label_es"] or "")
+    assert "LATA 350 CC" in (heineken_lata["label_es"] or "")
+
+
+def test_serialize_product_does_not_invent_presentation_from_brand():
+    """Sin variante estructurada no se inventa formato a partir del nombre."""
+    out = seg._serialize_product_line(
+        {
+            "id": 3,
+            "source_detail_id": 201,
+            "product_name": "CORONA",
+            "planned_units": 12,
+            "delivered_units": 12,
+        },
+        {},
+    )
+    assert out["commercial_name"] == "CORONA"
+    assert out["presentation"] is None
+    assert out["variant_name"] is None
+    assert out["product_type"] is None
+    assert out["units_per_box"] is None
+
+
+def test_serialize_product_preserves_real_quantities():
+    """Cantidades salen intactas de delivery_line_results (sin recalcular)."""
+    out = seg._serialize_product_line(
+        {
+            "id": 9,
+            "source_detail_id": 301,
+            "document_result_id": 7,
+            "variant_id": 900,
+            "product_name": "COCA COLA",
+            "planned_units": 24,
+            "delivered_units": 18,
+            "undelivered_units": 6,
+            "undelivered_reason": "partial_shortage",
+        },
+        {
+            "product_name": "COCA COLA",
+            "product_type": "BEBIDAS",
+            "variant_name": "1.5 L RETORNABLE",
+            "presentation": "1.5 L RETORNABLE",
+            "units_per_box": 12,
+            "variant_id": 900,
+            "sku_code": "SKU-CC",
+        },
+    )
+    assert out["planned_units"] == 24
+    assert out["delivered_units"] == 18
+    assert out["undelivered_units"] == 6
+    assert out["undelivered_reason"] == "partial_shortage"
+    assert out["source_detail_id"] == 301
+    assert out["variant_id"] == 900
+
+
+def test_identity_map_setdefault_does_not_duplicate_lines():
+    """El mapa de identidad es lookup; no multiplica líneas de visita."""
+    lines = [
+        {
+            "id": 1,
+            "source_detail_id": 10,
+            "document_result_id": 1,
+            "variant_id": 100,
+            "product_name": "HEINEKEN",
+            "planned_units": 36,
+            "delivered_units": 36,
+        },
+        {
+            "id": 2,
+            "source_detail_id": 11,
+            "document_result_id": 1,
+            "variant_id": 101,
+            "product_name": "HEINEKEN",
+            "planned_units": 24,
+            "delivered_units": 24,
+        },
+    ]
+    identity_map = {
+        "d:10": {
+            "product_name": "HEINEKEN",
+            "variant_name": "DESECHABLE 330 CC (SEC 24)",
+            "presentation": "DESECHABLE 330 CC (SEC 24)",
+            "product_type": "CERVEZAS",
+            "units_per_box": 24,
+            "variant_id": 100,
+            "sku_code": "A",
+        },
+        "d:11": {
+            "product_name": "HEINEKEN",
+            "variant_name": "LATA 350 CC (SEC 24)",
+            "presentation": "LATA 350 CC (SEC 24)",
+            "product_type": "CERVEZAS",
+            "units_per_box": 24,
+            "variant_id": 101,
+            "sku_code": "B",
+        },
+    }
+    products = [
+        seg._serialize_product_line(ln, seg._identity_for_line(ln, identity_map))
+        for ln in lines
+    ]
+    assert len(products) == 2
+    assert {p["source_detail_id"] for p in products} == {10, 11}
+    assert {p["variant_id"] for p in products} == {100, 101}
+    assert {p["presentation"] for p in products} == {
+        "DESECHABLE 330 CC (SEC 24)",
+        "LATA 350 CC (SEC 24)",
+    }
+    assert all(p["planned_units"] == ln["planned_units"] for p, ln in zip(products, lines))
+    assert all(
+        p["delivered_units"] == ln["delivered_units"] for p, ln in zip(products, lines)
+    )
+
+
 def test_plan_clients_lists_pending_without_visits(monkeypatch):
     """Clientes del despacho aparecen como pendientes aunque no haya gestiones."""
     from backend.services.distribuidora import delivery_seguimiento_service as seg

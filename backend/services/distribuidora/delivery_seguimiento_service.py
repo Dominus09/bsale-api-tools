@@ -6,6 +6,7 @@ No inventa visitas desde IndexedDB ni muta Bsale/stock/cuadratura.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -40,6 +41,255 @@ REASON_ES = {
     "absent_customer": "Cliente ausente",
     "other": "Otro motivo",
 }
+
+
+def _clean_sku_text(value: Any) -> str | None:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text or None
+
+
+def _load_sku_identity_for_lines(
+    cur, lines: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Identidad comercial real por source_detail_id / variant_id.
+
+    Fuentes: document_details + bsale.variants/products/product_types + products_master.
+    No parsea nombres ni inventa formato; no agrupa SKUs distintos.
+    """
+    from backend.utils.picking_sql import (
+        BARCODE_EXPR,
+        BSALE_PRODUCT_JOIN,
+        PM_JOIN,
+        VARIANTS_JOIN,
+    )
+
+    detail_ids = sorted(
+        {
+            int(ln["source_detail_id"])
+            for ln in lines
+            if ln.get("source_detail_id") is not None
+        }
+    )
+    variant_ids = sorted(
+        {int(ln["variant_id"]) for ln in lines if ln.get("variant_id") is not None}
+    )
+    out: dict[str, dict[str, Any]] = {}
+    if not detail_ids and not variant_ids:
+        return out
+
+    rows: list[dict[str, Any]] = []
+    if detail_ids:
+        try:
+            # DISTINCT ON (detail_id): evita fan-out si el JOIN de variantes
+            # matchea más de una fila; prioriza match exacto por variant_id.
+            cur.execute(
+                f"""
+                SELECT DISTINCT ON (dd.detail_id)
+                    dd.detail_id AS source_detail_id,
+                    COALESCE(dd.variant_id, v.bsale_id) AS variant_id,
+                    NULLIF(BTRIM(COALESCE(pm.product_name, p.name)), '') AS product_name,
+                    COALESCE(
+                        NULLIF(BTRIM(pm.product_type), ''),
+                        NULLIF(BTRIM(pt.name), '')
+                    ) AS product_type,
+                    COALESCE(
+                        NULLIF(BTRIM(pm.variant_name), ''),
+                        NULLIF(BTRIM(v.description), ''),
+                        NULLIF(BTRIM(dd.variant_description), '')
+                    ) AS variant_name,
+                    COALESCE(
+                        NULLIF(BTRIM(v.code), ''),
+                        NULLIF(BTRIM(pm.sku), ''),
+                        NULLIF(BTRIM(dd.variant_code), '')
+                    ) AS sku_code,
+                    ({BARCODE_EXPR}) AS barcode,
+                    COALESCE(
+                        NULLIF(v.units_per_box, 0),
+                        NULLIF(pm.units_per_box, 0)
+                    ) AS units_per_box,
+                    NULLIF(BTRIM(pm.sale_type), '') AS sale_type
+                FROM distribuidora.document_details dd
+                {VARIANTS_JOIN}
+                {BSALE_PRODUCT_JOIN}
+                {PM_JOIN}
+                WHERE dd.detail_id = ANY(%s)
+                ORDER BY
+                    dd.detail_id,
+                    CASE
+                        WHEN dd.variant_id IS NOT NULL AND v.bsale_id = dd.variant_id
+                        THEN 0 ELSE 1
+                    END,
+                    v.bsale_id NULLS LAST
+                """,
+                (detail_ids,),
+            )
+            cols = [d[0] for d in cur.description]
+            rows.extend(dict(zip(cols, r)) for r in (cur.fetchall() or []))
+        except Exception:
+            try:
+                cur.connection.rollback()
+            except Exception:
+                pass
+
+    missing_variants = [
+        vid
+        for vid in variant_ids
+        if not any(int(r.get("variant_id") or 0) == vid for r in rows)
+    ]
+    if missing_variants:
+        try:
+            # DISTINCT ON (variant): evita fan-out de products_master (barcode vs variant_id).
+            cur.execute(
+                """
+                SELECT DISTINCT ON (v.bsale_id)
+                    NULL::bigint AS source_detail_id,
+                    v.bsale_id AS variant_id,
+                    NULLIF(BTRIM(COALESCE(pm.product_name, p.name)), '') AS product_name,
+                    COALESCE(
+                        NULLIF(BTRIM(pm.product_type), ''),
+                        NULLIF(BTRIM(pt.name), '')
+                    ) AS product_type,
+                    COALESCE(
+                        NULLIF(BTRIM(pm.variant_name), ''),
+                        NULLIF(BTRIM(v.description), '')
+                    ) AS variant_name,
+                    COALESCE(
+                        NULLIF(BTRIM(v.code), ''),
+                        NULLIF(BTRIM(pm.sku), '')
+                    ) AS sku_code,
+                    COALESCE(
+                        NULLIF(BTRIM(v.bar_code), ''),
+                        NULLIF(BTRIM(pm.barcode), '')
+                    ) AS barcode,
+                    COALESCE(
+                        NULLIF(v.units_per_box, 0),
+                        NULLIF(pm.units_per_box, 0)
+                    ) AS units_per_box,
+                    NULLIF(BTRIM(pm.sale_type), '') AS sale_type
+                FROM bsale.variants v
+                LEFT JOIN bsale.products p
+                    ON p.company_id = v.company_id
+                   AND p.bsale_id = v.product_id
+                LEFT JOIN bsale.product_types pt
+                    ON pt.company_id = p.company_id
+                   AND pt.bsale_id = p.product_type_id
+                LEFT JOIN bsale.products_master pm
+                    ON pm.barcode = NULLIF(BTRIM(v.bar_code), '')
+                WHERE v.company_id = 3
+                  AND v.bsale_id = ANY(%s)
+                ORDER BY
+                    v.bsale_id,
+                    CASE
+                        WHEN pm.barcode IS NOT NULL
+                             AND pm.barcode = NULLIF(BTRIM(v.bar_code), '')
+                        THEN 0 ELSE 1
+                    END
+                """,
+                (missing_variants,),
+            )
+            cols = [d[0] for d in cur.description]
+            rows.extend(dict(zip(cols, r)) for r in (cur.fetchall() or []))
+        except Exception:
+            try:
+                cur.connection.rollback()
+            except Exception:
+                pass
+
+    for row in rows:
+        payload = {
+            "source_detail_id": (
+                int(row["source_detail_id"])
+                if row.get("source_detail_id") is not None
+                else None
+            ),
+            "variant_id": (
+                int(row["variant_id"]) if row.get("variant_id") is not None else None
+            ),
+            "product_name": _clean_sku_text(row.get("product_name")),
+            "product_type": _clean_sku_text(row.get("product_type")),
+            "variant_name": _clean_sku_text(row.get("variant_name")),
+            "sku_code": _clean_sku_text(row.get("sku_code")),
+            "barcode": _clean_sku_text(row.get("barcode")),
+            "units_per_box": (
+                int(row["units_per_box"])
+                if row.get("units_per_box") is not None
+                and float(row["units_per_box"]) > 0
+                else None
+            ),
+            "sale_type": _clean_sku_text(row.get("sale_type")),
+        }
+        # Formato/presentación = variante estructurada (no se deduce del nombre comercial).
+        payload["presentation"] = payload["variant_name"]
+        # Primera fila gana: DISTINCT ON + no sobrescribir claves existentes.
+        if payload["source_detail_id"] is not None:
+            out.setdefault(f"d:{payload['source_detail_id']}", payload)
+        if payload["variant_id"] is not None:
+            out.setdefault(f"v:{payload['variant_id']}", payload)
+    return out
+
+
+def _identity_for_line(
+    ln: dict[str, Any], identity_map: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    sid = ln.get("source_detail_id")
+    if sid is not None and f"d:{int(sid)}" in identity_map:
+        return identity_map[f"d:{int(sid)}"]
+    vid = ln.get("variant_id")
+    if vid is not None and f"v:{int(vid)}" in identity_map:
+        return identity_map[f"v:{int(vid)}"]
+    return {}
+
+
+def _serialize_product_line(
+    ln: dict[str, Any], identity: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Una fila por source_detail_id / línea de visita (no agrupa por marca)."""
+    identity = identity or {}
+    commercial = (
+        identity.get("product_name")
+        or _clean_sku_text(ln.get("product_name"))
+        or "Producto"
+    )
+    variant_name = identity.get("variant_name")
+    presentation = identity.get("presentation") or variant_name
+    product_type = identity.get("product_type")
+    units_per_box = identity.get("units_per_box")
+    sku_code = identity.get("sku_code") or _clean_sku_text(ln.get("sku_code"))
+    barcode = identity.get("barcode")
+    variant_id = identity.get("variant_id")
+    if variant_id is None and ln.get("variant_id") is not None:
+        variant_id = int(ln["variant_id"])
+    label_parts = [commercial]
+    if variant_name and variant_name.lower() not in commercial.lower():
+        label_parts.append(variant_name)
+    return {
+        "id": ln.get("id"),
+        "source_detail_id": (
+            int(ln["source_detail_id"])
+            if ln.get("source_detail_id") is not None
+            else None
+        ),
+        "document_result_id": (
+            int(ln["document_result_id"])
+            if ln.get("document_result_id") is not None
+            else None
+        ),
+        "variant_id": variant_id,
+        "sku_code": sku_code,
+        "barcode": barcode,
+        "commercial_name": commercial,
+        "product_name": commercial,
+        "product_type": product_type,
+        "variant_name": variant_name,
+        "presentation": presentation,
+        "units_per_box": units_per_box,
+        "sale_type": identity.get("sale_type"),
+        "label_es": " — ".join(label_parts),
+        "planned_units": ln.get("planned_units"),
+        "delivered_units": ln.get("delivered_units"),
+        "undelivered_units": ln.get("undelivered_units"),
+        "undelivered_reason": ln.get("undelivered_reason"),
+    }
 
 
 def _parse_date(value: str | date | None) -> date:
@@ -776,11 +1026,13 @@ def get_plan_clients(
     cols_by: dict[int, list] = {}
     evid_by: dict[int, list] = {}
     offline_by: dict[int, dict] = {}
+    sku_identity: dict[str, dict[str, Any]] = {}
 
     conn2 = get_connection()
     try:
         cur2 = conn2.cursor()
         offline_by = _offline_meta_by_visit(cur2, list(set(visit_ids)))
+        all_lines: list[dict[str, Any]] = []
         for vid in set(visit_ids):
             v = visit_repo.get_visit(cur2, int(vid))
             if not v:
@@ -796,6 +1048,11 @@ def get_plan_clients(
                 lines_by[int(vid)] = []
                 cols_by[int(vid)] = []
                 evid_by[int(vid)] = []
+            all_lines.extend(lines_by.get(int(vid)) or [])
+        try:
+            sku_identity = _load_sku_identity_for_lines(cur2, all_lines)
+        except Exception:
+            sku_identity = {}
         cur2.close()
     finally:
         conn2.close()
@@ -860,6 +1117,22 @@ def get_plan_clients(
             gps_status_es = "GPS verificado"
         else:
             gps_status_es = "GPS registrado"
+        products_out = [
+            _serialize_product_line(ln, _identity_for_line(ln, sku_identity))
+            for ln in lines
+        ]
+        # Detalle por documento: cada SKU permanece separado (source_detail_id).
+        products_by_doc: dict[int, list[dict[str, Any]]] = {}
+        for p in products_out:
+            doc_id = p.get("document_result_id")
+            if doc_id is None:
+                continue
+            products_by_doc.setdefault(int(doc_id), []).append(p)
+        for doc in documents_out:
+            did = doc.get("id")
+            doc["products"] = (
+                list(products_by_doc.get(int(did), [])) if did is not None else []
+            )
         rows.append(
             {
                 "customer_key": key,
@@ -872,17 +1145,7 @@ def get_plan_clients(
                     c.get("document_count") or len(documents_out) or len(docs) or 0
                 ),
                 "documents": documents_out,
-                "products": [
-                    {
-                        "id": ln.get("id"),
-                        "product_name": ln.get("product_name") or ln.get("variant_name"),
-                        "planned_units": ln.get("planned_units"),
-                        "delivered_units": ln.get("delivered_units"),
-                        "undelivered_units": ln.get("undelivered_units"),
-                        "undelivered_reason": ln.get("undelivered_reason"),
-                    }
-                    for ln in lines
-                ],
+                "products": products_out,
                 "result_status": st,
                 "result_reason": reason,
                 "result_reason_es": REASON_ES.get(str(reason or ""), reason),
