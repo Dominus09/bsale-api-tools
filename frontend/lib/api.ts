@@ -7901,6 +7901,7 @@ export type SeguimientoClientRow = {
   payment_declared?: string | null
   closure_review_status?: string | null
   requires_review?: boolean
+  gps_status_es?: string | null
   sync_confirmed?: boolean
   visit_id?: number | null
   evidence_count?: number

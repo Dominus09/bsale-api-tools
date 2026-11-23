@@ -96,7 +96,7 @@ function KpiCard({
   return (
     <div className="rounded-xl border border-white/10 bg-lq-graphite px-4 py-4 shadow-sm ring-1 ring-black/20 transition-colors hover:bg-lq-graphite-elev">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-lq-on-graphite-faint">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-lq-on-graphite-muted">
           {label}
         </p>
         <Icon className={cn("h-4 w-4 shrink-0", toneCls)} />
@@ -105,7 +105,7 @@ function KpiCard({
         {value ?? "—"}
       </div>
       {hint ? (
-        <p className="mt-2 text-xs text-lq-on-graphite-faint">{hint}</p>
+        <p className="mt-2 text-sm text-lq-on-graphite-muted">{hint}</p>
       ) : null}
     </div>
   )
@@ -124,7 +124,7 @@ function DispatchCard({ row, date }: { row: SeguimientoDriverRow; date: string }
             <h3 className="truncate text-lg font-semibold text-lq-on-graphite">
               {row.driver_name || "Chofer sin asignar"}
             </h3>
-            <span className="rounded-full border border-white/15 bg-white/5 px-2.5 py-0.5 text-[11px] font-medium text-lq-on-graphite-muted">
+            <span className="rounded-full border border-white/15 bg-white/5 px-2.5 py-0.5 text-xs font-medium text-lq-on-graphite-muted">
               {status}
             </span>
           </div>
@@ -133,7 +133,7 @@ function DispatchCard({ row, date }: { row: SeguimientoDriverRow; date: string }
               .filter(Boolean)
               .join(" · ")}
           </p>
-          <p className="text-xs text-lq-on-graphite-faint">Fecha operativa {date}</p>
+          <p className="text-sm text-lq-on-graphite-muted">Fecha operativa {date}</p>
         </div>
         <Link
           href={`/distribuidora/seguimiento-entregas/planes/${row.dispatch_plan_id}`}
@@ -178,7 +178,7 @@ function DispatchCard({ row, date }: { row: SeguimientoDriverRow; date: string }
             key={m.label}
             className="rounded-lg border border-white/8 bg-black/20 px-3 py-2"
           >
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-lq-on-graphite-faint">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-lq-on-graphite-muted">
               {m.label}
             </p>
             <p
@@ -196,22 +196,22 @@ function DispatchCard({ row, date }: { row: SeguimientoDriverRow; date: string }
         ))}
       </div>
 
-      <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 border-t border-white/10 pt-3 text-xs text-lq-on-graphite-muted">
+      <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 border-t border-white/10 pt-3 text-sm text-lq-on-graphite-muted">
         <span>
           1ª entrega{" "}
-          <strong className="text-lq-on-graphite">
+          <strong className="tabular-nums text-lq-on-graphite">
             {row.first_delivery_at_local || "—"}
           </strong>
         </span>
         <span>
           Últ. entrega{" "}
-          <strong className="text-lq-on-graphite">
+          <strong className="tabular-nums text-lq-on-graphite">
             {row.last_delivery_at_local || "—"}
           </strong>
         </span>
         <span>
           Últ. gestión{" "}
-          <strong className="text-lq-on-graphite">
+          <strong className="tabular-nums text-lq-on-graphite">
             {row.last_management_at_local || "—"}
           </strong>
         </span>
@@ -380,13 +380,13 @@ export default function SeguimientoEntregasPage() {
         {/* Header */}
         <header className="flex flex-wrap items-start justify-between gap-4 border-b border-white/10 pb-5">
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[var(--lq-brand)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--lq-brand)]">
               Distribuidora · Logística
             </p>
             <h1 className="mt-1 text-3xl font-semibold tracking-[-0.03em] text-lq-on-graphite sm:text-4xl">
               Centro de control de entregas
             </h1>
-            <p className="mt-2 max-w-2xl text-sm text-lq-on-graphite-muted sm:text-base">
+            <p className="mt-2 max-w-2xl text-base text-lq-on-graphite-muted">
               Monitorea despachos, entregas e incidencias de tus choferes.
             </p>
           </div>
@@ -405,9 +405,9 @@ export default function SeguimientoEntregasPage() {
               )}
               <span className="ml-2">Actualizar</span>
             </Button>
-            <p className="text-right text-xs text-lq-on-graphite-faint">
+            <p className="text-right text-sm text-lq-on-graphite-muted">
               Última actualización{" "}
-              <span className="tabular-nums text-lq-on-graphite-muted">
+              <span className="tabular-nums text-lq-on-graphite">
                 {data?.panel_updated_at_local || "—"}
               </span>
               <span className="mx-1.5 text-white/20">·</span>
@@ -676,23 +676,23 @@ export default function SeguimientoEntregasPage() {
                           <p className="truncate font-medium text-lq-on-graphite">
                             {item.commercial_name}
                           </p>
-                          <p className="text-xs text-lq-on-graphite-muted">
+                          <p className="text-sm text-lq-on-graphite-muted">
                             {item.driver_name} · {item.planning_code} ·{" "}
                             {item.managed_at_local || "—"}
                           </p>
-                          <p className="mt-1 text-xs text-red-200">
+                          <p className="mt-1 text-sm text-red-200">
                             {item.result_reason_es || "Incidencia"}
                           </p>
                           {item.observation ? (
-                            <p className="mt-0.5 line-clamp-2 text-xs text-lq-on-graphite-faint">
+                            <p className="mt-0.5 line-clamp-2 text-sm text-lq-on-graphite-muted">
                               {item.observation}
                             </p>
                           ) : null}
-                          <div className="mt-1.5 flex flex-wrap gap-2 text-[11px]">
+                          <div className="mt-1.5 flex flex-wrap gap-2 text-xs">
                             {item.requires_review ? (
-                              <span className="text-sky-300">GPS pending_review</span>
+                              <span className="text-sky-300">GPS pendiente de revisión</span>
                             ) : (
-                              <span className="text-lq-on-graphite-faint">
+                              <span className="text-lq-on-graphite-muted">
                                 GPS {item.closure_review_status || "—"}
                               </span>
                             )}

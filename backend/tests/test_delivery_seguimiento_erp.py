@@ -174,6 +174,124 @@ def test_http_endpoints_require_auth_direct():
         assert res.status_code in (401, 403), (path, res.status_code, res.text)
 
 
+def test_plan_clients_lists_pending_without_visits(monkeypatch):
+    """Clientes del despacho aparecen como pendientes aunque no haya gestiones."""
+    from backend.services.distribuidora import delivery_seguimiento_service as seg
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+        def close(self):
+            return None
+
+    class _Cur:
+        description = [
+            ("id",),
+            ("planning_code",),
+            ("planning_date",),
+            ("route_name",),
+            ("planning_name",),
+            ("driver_user_id",),
+            ("driver_name",),
+            ("vehicle_label",),
+        ]
+
+        def execute(self, *_a, **_k):
+            return None
+
+        def fetchone(self):
+            return (
+                79,
+                "PLAN-00079",
+                "2026-11-21",
+                "Ruta Norte",
+                "Ruta Norte",
+                10,
+                "Chofer Demo",
+                "Camión 1",
+            )
+
+        def fetchall(self):
+            return []
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(seg, "get_connection", lambda: _Conn())
+    monkeypatch.setattr(seg.visit_repo, "tables_ready", lambda _c: True)
+    monkeypatch.setattr(seg, "_plan_company_id", lambda *_a, **_k: 1)
+    monkeypatch.setattr(seg, "_scope_company_ids", lambda _u: None)
+    monkeypatch.setattr(seg, "_offline_meta_by_visit", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        seg.read_svc,
+        "_build_client_index",
+        lambda _plan_id: {
+            "clients": [
+                {
+                    "customer_key": "c1",
+                    "client_id": 1,
+                    "client_name": "Cliente Uno",
+                    "fantasy_name": "Uno Market",
+                    "route_order": 1,
+                    "document_count": 2,
+                    "documents": [
+                        {
+                            "related_document_id": 11,
+                            "document_type": "FACTURA",
+                            "document_number": "1001",
+                        },
+                        {
+                            "related_document_id": 12,
+                            "document_type": "FACTURA",
+                            "document_number": "1002",
+                        },
+                    ],
+                },
+                {
+                    "customer_key": "c2",
+                    "client_id": 2,
+                    "client_name": "Cliente Dos",
+                    "fantasy_name": "Dos SpA",
+                    "route_order": 2,
+                    "document_count": 1,
+                    "documents": [
+                        {
+                            "related_document_id": 21,
+                            "document_type": "OC",
+                            "document_number": "OC-9",
+                        }
+                    ],
+                },
+                {
+                    "customer_key": "c3",
+                    "client_id": 3,
+                    "client_name": "Cliente Tres",
+                    "fantasy_name": "",
+                    "route_order": 3,
+                    "document_count": 0,
+                    "documents": [],
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr(seg.read_svc, "_visit_attention_by_customer", lambda _plan_id: {})
+
+    out = seg.get_plan_clients(user={"id": 1, "email": "ops@test.local"}, plan_id=79)
+    assert out["count"] == 3
+    assert [c["result_status"] for c in out["clients"]] == [
+        "pending",
+        "pending",
+        "pending",
+    ]
+    assert out["clients"][0]["commercial_name"] == "Uno Market"
+    assert out["clients"][0]["document_count"] == 2
+    assert len(out["clients"][0]["documents"]) == 2
+    assert out["clients"][0]["visit_id"] is None
+    assert out["clients"][0]["gps_status_es"] == "Sin gestión"
+    assert out["clients"][2]["commercial_name"] == "Cliente Tres"
+
+
 def test_capability_only_denied_for_seguimiento(monkeypatch):
     def _fake_staff(*_a, **_k):
         return {

@@ -826,6 +826,40 @@ def get_plan_clients(
             if e.get("upload_confirmed") or e.get("validation_status") == "exception"
         ]
         needs_photo = st == "not_delivered" and str(reason or "") in EVIDENCE_REQUIRED_REASONS
+        # Documentos de visita si existen; si no, documentos planificados del índice
+        # (clientes pendientes sin gestión deben listar sus facturas/OC).
+        if docs:
+            documents_out = [
+                {
+                    "id": d.get("id"),
+                    "document_type": d.get("document_type"),
+                    "document_number": d.get("document_number"),
+                    "result_status": d.get("result_status"),
+                    "document_total": d.get("document_total"),
+                }
+                for d in docs
+            ]
+        else:
+            documents_out = [
+                {
+                    "id": d.get("related_document_id") or d.get("id"),
+                    "document_type": d.get("document_type"),
+                    "document_number": d.get("document_number") or d.get("oc_number"),
+                    "result_status": "pending" if st in ("pending", "in_progress", "") else st,
+                    "document_total": d.get("document_total"),
+                }
+                for d in (c.get("documents") or [])
+            ]
+        review = bool(timing.get("requires_review"))
+        closure = str(timing.get("closure_review_status") or "")
+        if not visit:
+            gps_status_es = "Sin gestión"
+        elif review or closure == "pending_review":
+            gps_status_es = "GPS pendiente de revisión"
+        elif closure == "verified":
+            gps_status_es = "GPS verificado"
+        else:
+            gps_status_es = "GPS registrado"
         rows.append(
             {
                 "customer_key": key,
@@ -834,17 +868,10 @@ def get_plan_clients(
                 "commercial_name": name,
                 "client_name": c.get("client_name"),
                 "fantasy_name": c.get("fantasy_name") or "",
-                "document_count": int(c.get("document_count") or len(docs) or 0),
-                "documents": [
-                    {
-                        "id": d.get("id"),
-                        "document_type": d.get("document_type"),
-                        "document_number": d.get("document_number"),
-                        "result_status": d.get("result_status"),
-                        "document_total": d.get("document_total"),
-                    }
-                    for d in docs
-                ],
+                "document_count": int(
+                    c.get("document_count") or len(documents_out) or len(docs) or 0
+                ),
+                "documents": documents_out,
                 "products": [
                     {
                         "id": ln.get("id"),
@@ -868,6 +895,7 @@ def get_plan_clients(
                 "payment_declared": _payment_label(collections),
                 "closure_review_status": timing.get("closure_review_status"),
                 "requires_review": timing.get("requires_review"),
+                "gps_status_es": gps_status_es,
                 "sync_confirmed": bool(visit and visit.get("ended_at")),
                 "visit_id": int(vid) if vid else None,
                 "evidence_count": len(evid_ok),

@@ -34,9 +34,9 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import {
-  RESULT_LABEL,
   TONE_BADGE,
   TONE_DOT,
+  clientResultLabel,
   resultTone,
 } from "@/components/distribuidora/seguimiento-entregas/status"
 
@@ -153,13 +153,13 @@ export default function SeguimientoPlanClientesPage() {
         <header className="rounded-2xl border border-white/10 bg-lq-graphite p-5 ring-1 ring-black/25">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--lq-brand)]">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--lq-brand)]">
                 Despacho
               </p>
               <h1 className="mt-1 text-3xl font-semibold tracking-[-0.03em]">
                 {plan?.planning_code || `Despacho ${planId}`}
               </h1>
-              <p className="mt-2 text-sm text-lq-on-graphite-muted">
+              <p className="mt-2 text-base text-lq-on-graphite-muted">
                 {[plan?.driver_name, plan?.vehicle_label, plan?.route_name, plan?.planning_date]
                   .filter(Boolean)
                   .join(" · ") || "Cargando…"}
@@ -183,7 +183,7 @@ export default function SeguimientoPlanClientesPage() {
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-lq-on-graphite-faint">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-lq-on-graphite-muted">
                 Avance
               </p>
               <p className="mt-1 text-3xl font-semibold tabular-nums">{summary.pct}%</p>
@@ -193,12 +193,12 @@ export default function SeguimientoPlanClientesPage() {
                   style={{ width: `${Math.min(100, summary.pct)}%` }}
                 />
               </div>
-              <p className="mt-2 text-xs text-lq-on-graphite-muted">
+              <p className="mt-2 text-sm text-lq-on-graphite-muted">
                 {summary.managed}/{summary.total} gestionados
               </p>
             </div>
             <div className="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-lq-on-graphite-faint">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-lq-on-graphite-muted">
                 Resultados
               </p>
               <div className="mt-2 grid grid-cols-3 gap-2 text-center">
@@ -206,43 +206,43 @@ export default function SeguimientoPlanClientesPage() {
                   <p className="text-xl font-semibold text-emerald-300 tabular-nums">
                     {summary.completed}
                   </p>
-                  <p className="text-[10px] text-lq-on-graphite-faint">Completas</p>
+                  <p className="text-[11px] text-lq-on-graphite-muted">Completas</p>
                 </div>
                 <div>
                   <p className="text-xl font-semibold text-amber-300 tabular-nums">
                     {summary.partial}
                   </p>
-                  <p className="text-[10px] text-lq-on-graphite-faint">Parciales</p>
+                  <p className="text-[11px] text-lq-on-graphite-muted">Parciales</p>
                 </div>
                 <div>
                   <p className="text-xl font-semibold text-red-300 tabular-nums">
                     {summary.notDel}
                   </p>
-                  <p className="text-[10px] text-lq-on-graphite-faint">No ent.</p>
+                  <p className="text-[11px] text-lq-on-graphite-muted">No ent.</p>
                 </div>
               </div>
             </div>
             <div className="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-lq-on-graphite-faint">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-lq-on-graphite-muted">
                 Primera entrega
               </p>
-              <p className="mt-2 text-2xl font-semibold tabular-nums">
+              <p className="mt-2 text-[1.65rem] font-semibold leading-none tabular-nums tracking-tight">
                 {summary.first || "—"}
               </p>
-              <p className="mt-1 text-xs text-lq-on-graphite-muted">
+              <p className="mt-2 text-sm text-lq-on-graphite-muted">
                 {summary.first
                   ? "Hora de gestión confirmada"
                   : "Sin entregas registradas aún"}
               </p>
             </div>
             <div className="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-lq-on-graphite-faint">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-lq-on-graphite-muted">
                 Última gestión
               </p>
-              <p className="mt-2 text-2xl font-semibold tabular-nums">
+              <p className="mt-2 text-[1.65rem] font-semibold leading-none tabular-nums tracking-tight">
                 {summary.last || "—"}
               </p>
-              <p className="mt-1 text-xs text-lq-on-graphite-muted">
+              <p className="mt-2 text-sm text-lq-on-graphite-muted">
                 Pendientes: {summary.pending}
               </p>
             </div>
@@ -298,9 +298,15 @@ export default function SeguimientoPlanClientesPage() {
           </div>
         ) : clients.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/15 bg-lq-graphite px-6 py-12 text-center">
-            <p className="text-base font-medium">Este despacho aún no registra entregas.</p>
+            <p className="text-base font-medium">
+              {status || clientQ
+                ? "No hay clientes con ese filtro."
+                : "Este despacho no tiene clientes en el plan de carga."}
+            </p>
             <p className="mt-1 text-sm text-lq-on-graphite-muted">
-              Las gestiones aparecerán aquí cuando el chofer las confirme.
+              {status || clientQ
+                ? "Prueba con otro estado o limpia la búsqueda."
+                : "Cuando el plan tenga clientes asignados, aparecerán aquí incluso sin gestiones."}
             </p>
           </div>
         ) : (
@@ -314,7 +320,7 @@ export default function SeguimientoPlanClientesPage() {
                     <div className="flex flex-wrap items-center gap-3">
                       <button
                         type="button"
-                        className="text-lq-on-graphite-faint"
+                        className="text-lq-on-graphite-muted"
                         onClick={() =>
                           setExpanded((prev) => ({
                             ...prev,
@@ -329,44 +335,56 @@ export default function SeguimientoPlanClientesPage() {
                           <ChevronRight className="h-4 w-4" />
                         )}
                       </button>
-                      <span className="w-8 text-center text-sm tabular-nums text-lq-on-graphite-faint">
+                      <span className="w-8 text-center text-sm tabular-nums text-lq-on-graphite-muted">
                         {c.route_order ?? "—"}
                       </span>
                       <span className={cn("h-2.5 w-2.5 rounded-full", TONE_DOT[tone])} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate font-medium text-lq-on-graphite">
+                        <p className="truncate text-[15px] font-medium text-lq-on-graphite">
                           {c.commercial_name || "—"}
                         </p>
-                        <p className="text-xs text-lq-on-graphite-muted">
+                        <p className="text-sm text-lq-on-graphite-muted">
                           {c.document_count ?? 0} doc.
                           {c.observation || c.result_reason_es
                             ? ` · ${c.observation || c.result_reason_es}`
-                            : ""}
+                            : !c.visit_id
+                              ? " · Sin gestión aún"
+                              : ""}
                         </p>
                       </div>
                       <span
                         className={cn(
-                          "rounded-full border px-2.5 py-0.5 text-[11px] font-medium",
+                          "rounded-full border px-2.5 py-0.5 text-xs font-medium",
                           TONE_BADGE[tone],
                         )}
                       >
-                        {RESULT_LABEL[c.result_status || ""] || c.result_status || "Pendiente"}
+                        {clientResultLabel(c.result_status, c.result_reason_es)}
                       </span>
-                      <div className="text-right text-xs text-lq-on-graphite-muted">
+                      <div className="min-w-[7.5rem] text-right text-sm text-lq-on-graphite-muted">
                         <p className="tabular-nums text-lq-on-graphite">
                           {c.managed_at_local || "—"}
                         </p>
-                        <p>
+                        <p className="text-[13px]">
                           {c.device_capture
                             ? "dispositivo"
                             : c.managed_at_source === "server"
                               ? "servidor"
-                              : ""}
+                              : "—"}
                           {c.synced_at_local ? ` · sync ${c.synced_at_local}` : ""}
                         </p>
-                        {c.requires_review ? (
-                          <p className="text-sky-300">pending_review</p>
-                        ) : null}
+                        <p
+                          className={cn(
+                            "text-[13px]",
+                            c.requires_review ? "text-sky-300" : "text-lq-on-graphite-muted",
+                          )}
+                        >
+                          {c.gps_status_es ||
+                            (c.requires_review
+                              ? "GPS pendiente de revisión"
+                              : c.visit_id
+                                ? "GPS registrado"
+                                : "Sin gestión")}
+                        </p>
                       </div>
                       {c.visit_id ? (
                         <Button
@@ -381,13 +399,13 @@ export default function SeguimientoPlanClientesPage() {
                       ) : null}
                     </div>
                     {open ? (
-                      <div className="mt-3 grid gap-3 border-t border-white/10 pt-3 text-xs sm:grid-cols-2">
+                      <div className="mt-3 grid gap-3 border-t border-white/10 pt-3 text-sm sm:grid-cols-2">
                         <div>
                           <p className="mb-1 font-medium text-lq-on-graphite-muted">
                             Documentos
                           </p>
                           {(c.documents || []).length === 0 ? (
-                            <p className="text-lq-on-graphite-faint">Sin documentos en visita</p>
+                            <p className="text-lq-on-graphite-muted">Sin documentos asociados</p>
                           ) : (
                             <ul className="space-y-1 text-lq-on-graphite-muted">
                               {(c.documents || []).map((d) => (
@@ -404,7 +422,11 @@ export default function SeguimientoPlanClientesPage() {
                             Productos
                           </p>
                           {(c.products || []).length === 0 ? (
-                            <p className="text-lq-on-graphite-faint">Sin líneas de resultado</p>
+                            <p className="text-lq-on-graphite-muted">
+                              {c.visit_id
+                                ? "Sin líneas de resultado"
+                                : "Sin gestiones: se mostrarán al confirmar la visita"}
+                            </p>
                           ) : (
                             <ul className="space-y-1 text-lq-on-graphite-muted">
                               {(c.products || []).map((p) => (
@@ -416,10 +438,11 @@ export default function SeguimientoPlanClientesPage() {
                             </ul>
                           )}
                         </div>
-                        <p className="sm:col-span-2 text-lq-on-graphite-faint">
+                        <p className="sm:col-span-2 text-sm text-lq-on-graphite-muted">
                           Evidencia: {c.evidence_label_es || "—"}
                           {c.payment_declared ? ` · Pago: ${c.payment_declared}` : ""}
                           {c.sync_confirmed ? " · Sync confirmado" : ""}
+                          {c.observation ? ` · Obs.: ${c.observation}` : ""}
                         </p>
                       </div>
                     ) : null}

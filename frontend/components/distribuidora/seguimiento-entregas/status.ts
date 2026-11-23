@@ -22,6 +22,17 @@ export const RESULT_LABEL: Record<string, string> = {
   in_progress: "En atención",
 }
 
+/** Etiqueta de fila: prioriza motivo de incidencia (p. ej. Local cerrado). */
+export function clientResultLabel(
+  status?: string | null,
+  reasonEs?: string | null,
+): string {
+  const s = (status || "").trim()
+  const reason = (reasonEs || "").trim()
+  if (s === "not_delivered" && reason) return reason
+  return RESULT_LABEL[s] || s || "Pendiente"
+}
+
 export const TONE_DOT: Record<ResultTone, string> = {
   completed: "bg-emerald-500",
   partial: "bg-amber-400",
