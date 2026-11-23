@@ -7780,8 +7780,10 @@ export type SeguimientoKpis = {
   partial?: number
   closed_store?: number
   other_not_delivered?: number
+  not_delivered_total?: number
   pending_clients?: number
   pending_gps_review?: number
+  progress_percent?: number
   first_delivery_at_local?: string | null
   last_delivery_at_local?: string | null
 }
@@ -7808,13 +7810,42 @@ export type SeguimientoDriverRow = {
   last_management_at_local?: string | null
 }
 
+export type SeguimientoActivityItem = {
+  visit_id?: number | null
+  dispatch_plan_id?: number
+  planning_code?: string
+  driver_name?: string | null
+  commercial_name?: string
+  result_status?: string
+  result_reason?: string | null
+  result_reason_es?: string | null
+  observation?: string | null
+  managed_at_local?: string | null
+  synced_at_local?: string | null
+  device_capture?: boolean
+  requires_review?: boolean
+  closure_review_status?: string | null
+  evidence_count?: number
+  evidence_thumbnail?: {
+    url?: string | null
+    expires_in_sec?: number
+    evidence_id?: number
+    captured_at_local?: string | null
+    has_gps?: boolean
+  } | null
+}
+
 export type SeguimientoDashboard = {
   tables_ready?: boolean
   date: string
   timezone?: string
   panel_updated_at_local?: string
+  panel_updated_at_full_local?: string
+  auto_refresh_sec?: number
   kpis: SeguimientoKpis
   by_driver: SeguimientoDriverRow[]
+  recent_activity?: SeguimientoActivityItem[]
+  recent_incidents?: SeguimientoActivityItem[]
   evidence_policy?: { required_for_reasons?: string[]; note_es?: string }
   note_es?: string
   message_es?: string

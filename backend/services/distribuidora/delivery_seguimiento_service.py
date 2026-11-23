@@ -327,12 +327,14 @@ def get_dashboard(
         "other_not_delivered": 0,
         "pending_clients": 0,
         "pending_gps_review": 0,
+        "progress_percent": 0.0,
         "first_delivery_at_local": None,
         "last_delivery_at_local": None,
     }
     first_ts: datetime | None = None
     last_ts: datetime | None = None
     by_driver: list[dict[str, Any]] = []
+    activity_events: list[dict[str, Any]] = []
 
     all_visit_ids: list[int] = []
     plan_bundles: list[tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict]]] = []
@@ -429,6 +431,34 @@ def get_dashboard(
                     last_ts = managed_at
             if managed_at and (last_any is None or managed_at > last_any):
                 last_any = managed_at
+
+            if st in MANAGED:
+                name = (
+                    (c.get("fantasy_name") or c.get("client_name") or "—").strip()
+                    or "—"
+                )
+                activity_events.append(
+                    {
+                        "visit_id": int(vid) if vid else None,
+                        "dispatch_plan_id": int(plan["id"]),
+                        "planning_code": plan.get("planning_code"),
+                        "driver_user_id": plan.get("driver_user_id"),
+                        "driver_name": plan.get("driver_name") or "—",
+                        "customer_key": key,
+                        "commercial_name": name,
+                        "result_status": st,
+                        "result_reason": reason or None,
+                        "result_reason_es": REASON_ES.get(reason, reason or None),
+                        "observation": (visit or {}).get("result_note"),
+                        "managed_at": managed_at,
+                        "managed_at_local": timing.get("managed_at_local"),
+                        "synced_at_local": timing.get("synced_at_local"),
+                        "device_capture": timing.get("device_capture"),
+                        "requires_review": timing.get("requires_review"),
+                        "closure_review_status": timing.get("closure_review_status"),
+                        "evidence_count": 0,
+                    }
+                )
 
         # Si hay filtro de estado, recalcular totales filtrados
         if status_f:
@@ -540,6 +570,101 @@ def get_dashboard(
 
     kpis["first_delivery_at_local"] = _fmt_local(first_ts)
     kpis["last_delivery_at_local"] = _fmt_local(last_ts)
+    planned = int(kpis["planned_clients"] or 0)
+    managed = int(kpis["managed_clients"] or 0)
+    kpis["progress_percent"] = (
+        0.0 if planned <= 0 else round(100.0 * managed / planned, 1)
+    )
+    kpis["not_delivered_total"] = int(kpis["closed_store"] or 0) + int(
+        kpis["other_not_delivered"] or 0
+    )
+
+    # Actividad / incidencias desde el mismo recorrido (sin N+1 adicional de planes).
+    def _sort_key(ev: dict[str, Any]):
+        ts = ev.get("managed_at")
+        if isinstance(ts, datetime):
+            return ts
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+    activity_events.sort(key=_sort_key, reverse=True)
+
+    # Contar evidencias en batch para eventos recientes con visita.
+    recent_for_evidence = [
+        ev for ev in activity_events if ev.get("visit_id") and ev.get("result_status")
+    ][:40]
+    evid_counts: dict[int, int] = {}
+    thumb_by_visit: dict[int, dict[str, Any]] = {}
+    if recent_for_evidence:
+        from backend.services import object_storage_service as storage
+
+        conn3 = get_connection()
+        try:
+            cur3 = conn3.cursor()
+            for ev in recent_for_evidence:
+                vid = int(ev["visit_id"])
+                if vid in evid_counts:
+                    continue
+                try:
+                    rows = visit_repo.list_evidence(cur3, vid)
+                except Exception:
+                    rows = []
+                ok = [
+                    e
+                    for e in rows
+                    if e.get("upload_confirmed")
+                    or e.get("validation_status") == "exception"
+                ]
+                evid_counts[vid] = len(ok)
+                # Miniatura firmada solo para incidencias con foto (tope 8).
+                if (
+                    ev.get("result_status") == "not_delivered"
+                    and ok
+                    and len(thumb_by_visit) < 8
+                ):
+                    photo = next(
+                        (
+                            e
+                            for e in ok
+                            if e.get("upload_confirmed") and e.get("object_key")
+                        ),
+                        None,
+                    )
+                    if photo:
+                        try:
+                            url = storage.presign_get(
+                                object_key=str(photo["object_key"]), expires_in=300
+                            )
+                        except Exception:
+                            url = None
+                        if url:
+                            thumb_by_visit[vid] = {
+                                "url": url,
+                                "expires_in_sec": 300,
+                                "evidence_id": int(photo["id"]),
+                                "captured_at_local": _fmt_local(
+                                    photo.get("captured_at")
+                                ),
+                                "has_gps": photo.get("capture_lat") is not None
+                                and photo.get("capture_lng") is not None,
+                            }
+            cur3.close()
+        finally:
+            conn3.close()
+
+    for ev in activity_events:
+        vid = ev.get("visit_id")
+        if vid:
+            ev["evidence_count"] = int(evid_counts.get(int(vid), 0))
+            thumb = thumb_by_visit.get(int(vid))
+            if thumb:
+                ev["evidence_thumbnail"] = thumb
+        # No serializar datetime crudo; serialize_value lo maneja, pero limpiamos clave interna.
+        ev.pop("managed_at", None)
+
+    recent_activity = activity_events[:20]
+    recent_incidents = [
+        ev for ev in activity_events if ev.get("result_status") == "not_delivered"
+    ][:12]
 
     return serialize_value(
         {
@@ -547,7 +672,9 @@ def get_dashboard(
             "date": day_d.isoformat(),
             "timezone": "America/Santiago",
             "panel_updated_at": now_santiago.isoformat(),
-            "panel_updated_at_local": now_santiago.strftime("%Y-%m-%d %H:%M:%S"),
+            "panel_updated_at_local": now_santiago.strftime("%H:%M:%S"),
+            "panel_updated_at_full_local": now_santiago.strftime("%Y-%m-%d %H:%M:%S"),
+            "auto_refresh_sec": 45,
             "filters": {
                 "driver_user_id": driver_user_id,
                 "plan_id": plan_id,
@@ -556,16 +683,15 @@ def get_dashboard(
             },
             "kpis": kpis,
             "by_driver": by_driver,
+            "recent_activity": recent_activity,
+            "recent_incidents": recent_incidents,
             "evidence_policy": {
                 "required_for_reasons": sorted(EVIDENCE_REQUIRED_REASONS),
                 "signature_required_for_delivery": False,
                 "receptor_name_required_for_delivery": False,
                 "note_es": (
-                    "Incidencias (local cerrado, no encontrado, rechazo, ausente u "
-                    "otro) requieren fotografía o excepción auditable. Entrega "
-                    "completa/parcial: documentos, cantidades y observaciones "
-                    "según reglas vigentes; sin firma ni receptor obligatorios. "
-                    "Firmas históricas en delivery_conformity se conservan si existen."
+                    "Incidencias requieren fotografía o excepción auditable. "
+                    "Entrega completa/parcial sin firma ni receptor obligatorios."
                 ),
             },
             "mode": "online_only",

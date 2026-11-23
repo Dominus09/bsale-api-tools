@@ -1,31 +1,30 @@
 "use client"
 
 /**
- * Clientes de un despacho — seguimiento (solo lectura).
+ * Detalle de despacho — Centro de control (solo lectura).
  */
 
-import { Fragment, useCallback, useEffect, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { ChevronDown, ChevronRight, Eye, Loader2, RefreshCw } from "lucide-react"
+import {
+  ArrowLeft,
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  Loader2,
+  RefreshCw,
+} from "lucide-react"
 
 import {
   getSeguimientoPlanClientes,
   getSeguimientoVisitDetail,
   type DeliveryVisitErpDetail,
-  type DeliveryVisitErpMediaItem,
   type SeguimientoClientRow,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Dialog,
   DialogContent,
@@ -33,54 +32,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { cn } from "@/lib/utils"
+import {
+  RESULT_LABEL,
+  TONE_BADGE,
+  TONE_DOT,
+  resultTone,
+} from "@/components/distribuidora/seguimiento-entregas/status"
 
-const RESULT_ES: Record<string, string> = {
-  completed: "Completa",
-  partial: "Parcial",
-  not_delivered: "No entregada",
-  pending: "Pendiente",
-  in_progress: "En atención",
-}
-
-function MediaBlock({
-  title,
-  item,
-}: {
-  title: string
-  item: DeliveryVisitErpMediaItem | null | undefined
-}) {
-  if (!item) {
-    return (
-      <div className="rounded border p-3 text-sm text-muted-foreground">
-        {title}: Sin evidencia fotográfica
-      </div>
-    )
-  }
-  return (
-    <div className="space-y-2 rounded border p-3">
-      <div className="text-sm font-medium">{item.label_es || title}</div>
-      <div className="text-xs text-muted-foreground">
-        Estado: {item.validation_status || "—"}
-        {item.has_gps != null ? ` · GPS: ${item.has_gps ? "sí" : "no"}` : ""}
-        {item.captured_at ? ` · Captura: ${item.captured_at}` : ""}
-      </div>
-      {item.note_es ? (
-        <p className="text-xs text-amber-700 dark:text-amber-400">{item.note_es}</p>
-      ) : null}
-      {item.url ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={item.url}
-          alt={item.label_es || title}
-          className="max-h-[50vh] w-full rounded object-contain bg-muted/30"
-        />
-      ) : (
-        <p className="text-sm text-muted-foreground">Sin evidencia fotográfica</p>
-      )}
-    </div>
-  )
-}
+const FILTERS = [
+  { value: "", label: "Todos" },
+  { value: "completed", label: "Entregados" },
+  { value: "partial", label: "Parciales" },
+  { value: "not_delivered", label: "No entregados" },
+  { value: "pending", label: "Pendientes" },
+]
 
 export default function SeguimientoPlanClientesPage() {
   const params = useParams()
@@ -106,6 +72,7 @@ export default function SeguimientoPlanClientesPage() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [detail, setDetail] = useState<DeliveryVisitErpDetail | null>(null)
+  const [selected, setSelected] = useState<SeguimientoClientRow | null>(null)
 
   const load = useCallback(async () => {
     if (!Number.isFinite(planId) || planId <= 0) return
@@ -129,13 +96,42 @@ export default function SeguimientoPlanClientesPage() {
     void load()
   }, [load])
 
-  async function openEvidence(visitId: number) {
+  const summary = useMemo(() => {
+    const total = clients.length
+    const completed = clients.filter((c) => c.result_status === "completed").length
+    const partial = clients.filter((c) => c.result_status === "partial").length
+    const notDel = clients.filter((c) => c.result_status === "not_delivered").length
+    const pending = clients.filter(
+      (c) => !c.result_status || c.result_status === "pending" || c.result_status === "in_progress",
+    ).length
+    const managed = completed + partial + notDel
+    const pct = total <= 0 ? 0 : Math.round((1000 * managed) / total) / 10
+    const times = clients
+      .map((c) => c.managed_at_local)
+      .filter((t): t is string => !!t)
+      .sort()
+    return {
+      total,
+      completed,
+      partial,
+      notDel,
+      pending,
+      managed,
+      pct,
+      first: times[0] || null,
+      last: times.length ? times[times.length - 1] : null,
+    }
+  }, [clients])
+
+  async function openEvidence(c: SeguimientoClientRow) {
+    if (!c.visit_id) return
+    setSelected(c)
     setDetailOpen(true)
     setDetail(null)
     setDetailError(null)
     setDetailLoading(true)
     try {
-      const res = await getSeguimientoVisitDetail(visitId)
+      const res = await getSeguimientoVisitDetail(c.visit_id)
       setDetail(res)
     } catch (e) {
       setDetailError(e instanceof Error ? e.message : "Error al cargar evidencia")
@@ -145,248 +141,339 @@ export default function SeguimientoPlanClientesPage() {
   }
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <Link
-            href="/distribuidora/seguimiento-entregas"
-            className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-          >
-            ← Seguimiento de entregas
-          </Link>
-          <h1 className="mt-1 text-2xl font-semibold text-lq-ink">
-            {plan?.planning_code || `Despacho ${planId}`}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {[plan?.driver_name, plan?.vehicle_label, plan?.route_name, plan?.planning_date]
-              .filter(Boolean)
-              .join(" · ") || "Clientes del despacho (consulta)"}
-          </p>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          <span className="ml-2">Actualizar</span>
-        </Button>
-      </div>
-
-      <div className="flex flex-wrap gap-3">
-        <select
-          className="flex h-10 rounded-md border border-input bg-background px-3 text-sm"
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
+    <div className="-mx-4 min-h-[calc(100vh-4rem)] bg-lq-graphite-deep px-4 py-5 text-lq-on-graphite sm:-mx-6 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-[1400px] space-y-5">
+        <Link
+          href="/distribuidora/seguimiento-entregas"
+          className="inline-flex items-center gap-1.5 text-sm text-lq-on-graphite-muted transition-colors hover:text-lq-on-graphite"
         >
-          <option value="">Todos los estados</option>
-          <option value="completed">Completas</option>
-          <option value="partial">Parciales</option>
-          <option value="not_delivered">No entregadas</option>
-          <option value="pending">Pendientes</option>
-        </select>
-        <Input
-          value={clientInput}
-          onChange={(e) => setClientInput(e.target.value)}
-          placeholder="Filtrar cliente"
-          className="w-[200px]"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") setClientQ(clientInput.trim())
-          }}
-        />
-        <Button variant="secondary" size="sm" onClick={() => setClientQ(clientInput.trim())}>
-          Filtrar
-        </Button>
-      </div>
+          <ArrowLeft className="h-4 w-4" /> Centro de control
+        </Link>
 
-      {error ? (
-        <Alert variant="destructive">
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription className="text-xs whitespace-pre-wrap">{error}</AlertDescription>
-        </Alert>
-      ) : null}
+        <header className="rounded-2xl border border-white/10 bg-lq-graphite p-5 ring-1 ring-black/25">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--lq-brand)]">
+                Despacho
+              </p>
+              <h1 className="mt-1 text-3xl font-semibold tracking-[-0.03em]">
+                {plan?.planning_code || `Despacho ${planId}`}
+              </h1>
+              <p className="mt-2 text-sm text-lq-on-graphite-muted">
+                {[plan?.driver_name, plan?.vehicle_label, plan?.route_name, plan?.planning_date]
+                  .filter(Boolean)
+                  .join(" · ") || "Cargando…"}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void load()}
+              disabled={loading}
+              className="border-white/20 bg-white/5 text-lq-on-graphite hover:bg-white/10"
+            >
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              <span className="ml-2">Actualizar</span>
+            </Button>
+          </div>
 
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-8" />
-              <TableHead>#</TableHead>
-              <TableHead>Cliente</TableHead>
-              <TableHead>Docs</TableHead>
-              <TableHead>Resultado</TableHead>
-              <TableHead>Motivo</TableHead>
-              <TableHead>Obs.</TableHead>
-              <TableHead>Gestión</TableHead>
-              <TableHead>Pago</TableHead>
-              <TableHead>GPS</TableHead>
-              <TableHead>Sync</TableHead>
-              <TableHead>Evidencia</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {clients.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={12} className="text-muted-foreground">
-                  {loading ? "Cargando…" : "Sin clientes"}
-                </TableCell>
-              </TableRow>
-            ) : (
-              clients.map((c) => {
-                const open = !!expanded[c.customer_key]
-                return (
-                  <Fragment key={c.customer_key}>
-                    <TableRow>
-                      <TableCell>
-                        <button
-                          type="button"
-                          className="text-muted-foreground"
-                          onClick={() =>
-                            setExpanded((prev) => ({
-                              ...prev,
-                              [c.customer_key]: !prev[c.customer_key],
-                            }))
-                          }
-                          aria-label="Expandir documentos"
-                        >
-                          {open ? (
-                            <ChevronDown className="h-4 w-4" />
-                          ) : (
-                            <ChevronRight className="h-4 w-4" />
-                          )}
-                        </button>
-                      </TableCell>
-                      <TableCell className="tabular-nums">{c.route_order ?? "—"}</TableCell>
-                      <TableCell className="font-medium">{c.commercial_name || "—"}</TableCell>
-                      <TableCell className="tabular-nums">{c.document_count ?? 0}</TableCell>
-                      <TableCell>
-                        {RESULT_ES[c.result_status || ""] || c.result_status || "—"}
-                      </TableCell>
-                      <TableCell className="max-w-[140px] truncate">
-                        {c.result_reason_es || c.result_reason || "—"}
-                      </TableCell>
-                      <TableCell className="max-w-[160px] truncate">
-                        {c.observation || "—"}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs">
-                        <div className="tabular-nums">{c.managed_at_local || "—"}</div>
-                        <div className="text-muted-foreground">
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-lq-on-graphite-faint">
+                Avance
+              </p>
+              <p className="mt-1 text-3xl font-semibold tabular-nums">{summary.pct}%</p>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-black/40">
+                <div
+                  className="h-full rounded-full bg-[var(--lq-brand)]"
+                  style={{ width: `${Math.min(100, summary.pct)}%` }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-lq-on-graphite-muted">
+                {summary.managed}/{summary.total} gestionados
+              </p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-lq-on-graphite-faint">
+                Resultados
+              </p>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                <div>
+                  <p className="text-xl font-semibold text-emerald-300 tabular-nums">
+                    {summary.completed}
+                  </p>
+                  <p className="text-[10px] text-lq-on-graphite-faint">Completas</p>
+                </div>
+                <div>
+                  <p className="text-xl font-semibold text-amber-300 tabular-nums">
+                    {summary.partial}
+                  </p>
+                  <p className="text-[10px] text-lq-on-graphite-faint">Parciales</p>
+                </div>
+                <div>
+                  <p className="text-xl font-semibold text-red-300 tabular-nums">
+                    {summary.notDel}
+                  </p>
+                  <p className="text-[10px] text-lq-on-graphite-faint">No ent.</p>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-lq-on-graphite-faint">
+                Primera entrega
+              </p>
+              <p className="mt-2 text-2xl font-semibold tabular-nums">
+                {summary.first || "—"}
+              </p>
+              <p className="mt-1 text-xs text-lq-on-graphite-muted">
+                {summary.first
+                  ? "Hora de gestión confirmada"
+                  : "Sin entregas registradas aún"}
+              </p>
+            </div>
+            <div className="rounded-xl border border-white/10 bg-black/25 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-lq-on-graphite-faint">
+                Última gestión
+              </p>
+              <p className="mt-2 text-2xl font-semibold tabular-nums">
+                {summary.last || "—"}
+              </p>
+              <p className="mt-1 text-xs text-lq-on-graphite-muted">
+                Pendientes: {summary.pending}
+              </p>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {FILTERS.map((f) => (
+            <button
+              key={f.value || "all"}
+              type="button"
+              onClick={() => setStatus(f.value)}
+              className={cn(
+                "rounded-full border px-3 py-1.5 text-sm transition-colors",
+                status === f.value
+                  ? "border-[var(--lq-brand)] bg-[var(--lq-brand)]/20 text-white"
+                  : "border-white/15 bg-white/5 text-lq-on-graphite-muted hover:bg-white/10",
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+          <div className="ml-auto flex gap-2">
+            <Input
+              value={clientInput}
+              onChange={(e) => setClientInput(e.target.value)}
+              placeholder="Buscar cliente"
+              className="w-[200px] border-white/15 bg-black/30 text-lq-on-graphite"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") setClientQ(clientInput.trim())
+              }}
+            />
+            <Button
+              className="bg-[var(--lq-brand)] text-white hover:bg-[var(--lq-brand-strong)]"
+              onClick={() => setClientQ(clientInput.trim())}
+            >
+              Filtrar
+            </Button>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            {error}
+          </div>
+        ) : null}
+
+        {loading && clients.length === 0 ? (
+          <div className="space-y-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-20 rounded-xl bg-white/5" />
+            ))}
+          </div>
+        ) : clients.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-white/15 bg-lq-graphite px-6 py-12 text-center">
+            <p className="text-base font-medium">Este despacho aún no registra entregas.</p>
+            <p className="mt-1 text-sm text-lq-on-graphite-muted">
+              Las gestiones aparecerán aquí cuando el chofer las confirme.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {clients.map((c) => {
+              const open = !!expanded[c.customer_key]
+              const tone = resultTone(c.result_status, c.requires_review)
+              return (
+                <Fragment key={c.customer_key}>
+                  <article className="rounded-xl border border-white/10 bg-lq-graphite px-4 py-3 transition-colors hover:bg-lq-graphite-elev">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        className="text-lq-on-graphite-faint"
+                        onClick={() =>
+                          setExpanded((prev) => ({
+                            ...prev,
+                            [c.customer_key]: !prev[c.customer_key],
+                          }))
+                        }
+                        aria-label="Expandir documentos"
+                      >
+                        {open ? (
+                          <ChevronDown className="h-4 w-4" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4" />
+                        )}
+                      </button>
+                      <span className="w-8 text-center text-sm tabular-nums text-lq-on-graphite-faint">
+                        {c.route_order ?? "—"}
+                      </span>
+                      <span className={cn("h-2.5 w-2.5 rounded-full", TONE_DOT[tone])} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-lq-on-graphite">
+                          {c.commercial_name || "—"}
+                        </p>
+                        <p className="text-xs text-lq-on-graphite-muted">
+                          {c.document_count ?? 0} doc.
+                          {c.observation || c.result_reason_es
+                            ? ` · ${c.observation || c.result_reason_es}`
+                            : ""}
+                        </p>
+                      </div>
+                      <span
+                        className={cn(
+                          "rounded-full border px-2.5 py-0.5 text-[11px] font-medium",
+                          TONE_BADGE[tone],
+                        )}
+                      >
+                        {RESULT_LABEL[c.result_status || ""] || c.result_status || "Pendiente"}
+                      </span>
+                      <div className="text-right text-xs text-lq-on-graphite-muted">
+                        <p className="tabular-nums text-lq-on-graphite">
+                          {c.managed_at_local || "—"}
+                        </p>
+                        <p>
                           {c.device_capture
                             ? "dispositivo"
                             : c.managed_at_source === "server"
                               ? "servidor"
                               : ""}
                           {c.synced_at_local ? ` · sync ${c.synced_at_local}` : ""}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-xs">{c.payment_declared || "—"}</TableCell>
-                      <TableCell className="text-xs">
-                        {c.requires_review
-                          ? "pending_review"
-                          : c.closure_review_status || "—"}
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {c.sync_confirmed ? "Confirmado" : "—"}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs">{c.evidence_label_es || "—"}</span>
-                          {c.visit_id ? (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 px-2"
-                              onClick={() => void openEvidence(c.visit_id!)}
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                            </Button>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                        </p>
+                        {c.requires_review ? (
+                          <p className="text-sky-300">pending_review</p>
+                        ) : null}
+                      </div>
+                      {c.visit_id ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-lq-on-graphite hover:bg-white/10"
+                          onClick={() => void openEvidence(c)}
+                        >
+                          <Eye className="mr-1.5 h-3.5 w-3.5" />
+                          Evidencia
+                        </Button>
+                      ) : null}
+                    </div>
                     {open ? (
-                      <TableRow>
-                        <TableCell colSpan={12} className="bg-muted/20 text-xs">
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <div>
-                              <div className="mb-1 font-medium">Documentos</div>
-                              {(c.documents || []).length === 0 ? (
-                                <p className="text-muted-foreground">Sin documentos en visita</p>
-                              ) : (
-                                <ul className="list-inside list-disc">
-                                  {(c.documents || []).map((d) => (
-                                    <li key={d.id ?? `${d.document_type}-${d.document_number}`}>
-                                      {d.document_type || "Doc"} {d.document_number ?? "—"} ·{" "}
-                                      {d.result_status || "—"}
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </div>
-                            <div>
-                              <div className="mb-1 font-medium">Productos</div>
-                              {(c.products || []).length === 0 ? (
-                                <p className="text-muted-foreground">Sin líneas de resultado</p>
-                              ) : (
-                                <ul className="list-inside list-disc">
-                                  {(c.products || []).map((p) => (
-                                    <li key={p.id ?? p.product_name}>
-                                      {p.product_name || "Producto"}: {p.delivered_units ?? 0}/
-                                      {p.planned_units ?? "—"}
-                                      {p.undelivered_units
-                                        ? ` (no ent. ${p.undelivered_units})`
-                                        : ""}
-                                    </li>
-                                  ))}
-                                </ul>
-                              )}
-                            </div>
-                          </div>
-                        </TableCell>
-                      </TableRow>
+                      <div className="mt-3 grid gap-3 border-t border-white/10 pt-3 text-xs sm:grid-cols-2">
+                        <div>
+                          <p className="mb-1 font-medium text-lq-on-graphite-muted">
+                            Documentos
+                          </p>
+                          {(c.documents || []).length === 0 ? (
+                            <p className="text-lq-on-graphite-faint">Sin documentos en visita</p>
+                          ) : (
+                            <ul className="space-y-1 text-lq-on-graphite-muted">
+                              {(c.documents || []).map((d) => (
+                                <li key={d.id ?? `${d.document_type}-${d.document_number}`}>
+                                  {d.document_type || "Doc"} {d.document_number ?? "—"} ·{" "}
+                                  {d.result_status || "—"}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                        <div>
+                          <p className="mb-1 font-medium text-lq-on-graphite-muted">
+                            Productos
+                          </p>
+                          {(c.products || []).length === 0 ? (
+                            <p className="text-lq-on-graphite-faint">Sin líneas de resultado</p>
+                          ) : (
+                            <ul className="space-y-1 text-lq-on-graphite-muted">
+                              {(c.products || []).map((p) => (
+                                <li key={p.id ?? p.product_name}>
+                                  {p.product_name || "Producto"}: {p.delivered_units ?? 0}/
+                                  {p.planned_units ?? "—"}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                        <p className="sm:col-span-2 text-lq-on-graphite-faint">
+                          Evidencia: {c.evidence_label_es || "—"}
+                          {c.payment_declared ? ` · Pago: ${c.payment_declared}` : ""}
+                          {c.sync_confirmed ? " · Sync confirmado" : ""}
+                        </p>
+                      </div>
                     ) : null}
-                  </Fragment>
-                )
-              })
-            )}
-          </TableBody>
-        </Table>
+                  </article>
+                </Fragment>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto border-white/10 bg-lq-graphite text-lq-on-graphite">
           <DialogHeader>
-            <DialogTitle>Evidencia de visita</DialogTitle>
-            <DialogDescription>
-              URL firmada de corta duración. Bucket privado — sin enlaces públicos.
+            <DialogTitle>{selected?.commercial_name || "Evidencia"}</DialogTitle>
+            <DialogDescription className="text-lq-on-graphite-muted">
+              URL firmada de corta duración. Bucket privado.
             </DialogDescription>
           </DialogHeader>
           {detailLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2 text-sm text-lq-on-graphite-muted">
               <Loader2 className="h-4 w-4 animate-spin" /> Cargando…
             </div>
           ) : null}
           {detailError ? (
-            <p className="text-sm text-destructive whitespace-pre-wrap">{detailError}</p>
+            <p className="text-sm text-red-300 whitespace-pre-wrap">{detailError}</p>
           ) : null}
           {detail ? (
             <div className="space-y-3">
               {(detail.incident_evidence || []).length === 0 ? (
-                <p className="text-sm text-muted-foreground">Sin evidencia fotográfica</p>
+                <p className="text-sm text-lq-on-graphite-muted">Sin evidencia fotográfica</p>
               ) : (
-                (detail.incident_evidence || []).map((item, idx) => (
-                  <MediaBlock
-                    key={item.id ?? idx}
-                    title={`Evidencia ${idx + 1}`}
-                    item={item}
-                  />
-                ))
+                (detail.incident_evidence || []).map((item, idx) =>
+                  item.url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={item.id ?? idx}
+                      src={item.url}
+                      alt={item.label_es || `Evidencia ${idx + 1}`}
+                      className="max-h-[60vh] w-full rounded-lg object-contain bg-black/40"
+                    />
+                  ) : (
+                    <p key={item.id ?? idx} className="text-sm text-lq-on-graphite-muted">
+                      Sin evidencia fotográfica
+                    </p>
+                  ),
+                )
               )}
               {detail.conformity?.signature_url ? (
-                <MediaBlock
-                  title="Firma histórica"
-                  item={{
-                    kind: "signature",
-                    label_es: "Firma histórica (no requerida para cierre V1)",
-                    url: detail.conformity.signature_url,
-                    expires_in_sec: detail.conformity.expires_in_sec,
-                  }}
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={detail.conformity.signature_url}
+                  alt="Firma histórica (no requerida para cierre V1)"
+                  className="max-h-[40vh] w-full rounded-lg object-contain bg-black/40"
                 />
               ) : null}
             </div>

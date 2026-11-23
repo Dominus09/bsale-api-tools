@@ -79,6 +79,51 @@ def test_evidence_policy_no_mandatory_signature():
     assert "firma" not in note.lower() or "sin firma" in note.lower()
 
 
+def test_dashboard_payload_includes_activity_keys_when_empty_tables(monkeypatch):
+    """Contrato UI premium: activity/incidents/progress sin inventar gestiones."""
+
+    class _Scope:
+        load_failed = False
+        companies_unverified = False
+        company_ids = None
+
+    monkeypatch.setattr(
+        "backend.auth.multiapp.get_scope", lambda _u: _Scope()
+    )
+
+    class _Conn:
+        def cursor(self):
+            return self
+
+        def close(self):
+            return None
+
+        def execute(self, *_a, **_k):
+            return None
+
+        def fetchone(self):
+            return None
+
+        def fetchall(self):
+            return []
+
+        @property
+        def description(self):
+            return []
+
+    monkeypatch.setattr(seg, "get_connection", lambda: _Conn())
+    monkeypatch.setattr(seg.visit_repo, "tables_ready", lambda _c: True)
+    monkeypatch.setattr(seg, "_list_plans_for_date", lambda *_a, **_k: [])
+
+    out = seg.get_dashboard(user={"id": 1, "email": "ops@test.local"}, day="2026-11-21")
+    assert out["tables_ready"] is True
+    assert "recent_activity" in out and out["recent_activity"] == []
+    assert "recent_incidents" in out and out["recent_incidents"] == []
+    assert out["kpis"]["progress_percent"] == 0.0
+    assert out["kpis"]["first_delivery_at_local"] is None
+    assert out["auto_refresh_sec"] == 45
+
+
 def test_route_progress_dedupes_clients_not_documents():
     """Un cliente con 3 docs cuenta una sola vez."""
     clients = [
