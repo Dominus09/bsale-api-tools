@@ -1081,6 +1081,25 @@ def add_supplemental_orders_to_plan(
         already = [i for i in oc_ids if i in existing_ids]
         novel = [i for i in oc_ids if i not in existing_ids]
 
+        # Soft-exclude admin: no reincorporar sin restauración explícita.
+        if plan_repo.order_exclude_columns_ready(cur):
+            excluded_block: list[int] = []
+            for oid in novel:
+                row = plan_repo.get_plan_order(cur, plan_id, int(oid))
+                if row and row.get("excluded_at") is not None:
+                    excluded_block.append(int(oid))
+            if excluded_block:
+                raise SupplementalOrderError(
+                    (
+                        "OC excluida(s) administrativamente de este plan; "
+                        "no se reincorporan automáticamente: "
+                        f"{excluded_block}"
+                    ),
+                    code="oc_admin_excluded",
+                    http_status=409,
+                    details={"oc_document_ids": excluded_block},
+                )
+
         # Idempotencia: todas ya en el mismo supplemental → unchanged.
         if not novel and already:
             reused = _find_existing_assignment_batch(cur, plan_id, already)

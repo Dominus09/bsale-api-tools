@@ -2816,6 +2816,79 @@ export type DispatchPlanInvoicedRow = {
   related_document_type_label?: string | null
   probable_document_number?: number | null
   probable_score?: number | null
+  document_total?: number | null
+  billing_status?: string | null
+  fulfillment_status?: string | null
+  excluded_reason?: string | null
+}
+
+export type DispatchPlanExcludePreview = {
+  plan_id: number
+  planning_code?: string | null
+  plan_status?: string | null
+  oc_document_id: number
+  oc_number?: number | null
+  oc_total_amount?: number | null
+  client_name?: string | null
+  already_excluded?: boolean
+  can_exclude?: boolean
+  blockers?: Array<{ code?: string; message?: string }>
+  requires_reason?: boolean
+  note_es?: string
+}
+
+export async function previewDispatchPlanOrderExclude(
+  planId: number,
+  ocDocumentId: number,
+): Promise<DispatchPlanExcludePreview> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/${ocDocumentId}/exclude-preview`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo evaluar la exclusión")
+  }
+  return res.json()
+}
+
+export async function excludeDispatchPlanOrder(
+  planId: number,
+  ocDocumentId: number,
+  reason: string,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/${ocDocumentId}/exclude`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ reason }),
+    },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo excluir la OC")
+  }
+  return res.json()
+}
+
+export async function getDispatchPlanOrderExclusions(
+  planId: number,
+): Promise<{
+  plan_id: number
+  excluded_orders: Array<Record<string, unknown>>
+  events: Array<Record<string, unknown>>
+  count: number
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/exclusions`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo cargar exclusiones")
+  }
+  return res.json()
 }
 
 export async function getDispatchPlansBySession(

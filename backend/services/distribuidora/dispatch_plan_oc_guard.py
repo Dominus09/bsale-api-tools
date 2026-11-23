@@ -148,8 +148,31 @@ def find_blocking_oc_assignments(
     ids = _unique_ids(document_ids)
     if not ids:
         return []
-    cur.execute(
+    params = (
+        ids,
+        list(CONFIRM_BLOCKING_PLAN_STATUSES),
+        exclude_plan_id,
+        exclude_plan_id,
+    )
+    sql_active = """
+        SELECT
+            dpo.oc_document_id,
+            p.id AS dispatch_plan_id,
+            p.planning_code,
+            p.status,
+            p.planning_date,
+            p.truck_id,
+            p.plan_session_id,
+            'plan_status'::text AS block_reason
+        FROM distribuidora.dispatch_plan_orders dpo
+        INNER JOIN distribuidora.dispatch_plan p ON p.id = dpo.dispatch_plan_id
+        WHERE dpo.oc_document_id = ANY(%s)
+          AND p.status = ANY(%s)
+          AND (%s::bigint IS NULL OR p.id <> %s::bigint)
+          AND dpo.excluded_at IS NULL
+        ORDER BY dpo.oc_document_id, p.id DESC
         """
+    sql_legacy = """
         SELECT
             dpo.oc_document_id,
             p.id AS dispatch_plan_id,
@@ -165,14 +188,15 @@ def find_blocking_oc_assignments(
           AND p.status = ANY(%s)
           AND (%s::bigint IS NULL OR p.id <> %s::bigint)
         ORDER BY dpo.oc_document_id, p.id DESC
-        """,
-        (
-            ids,
-            list(CONFIRM_BLOCKING_PLAN_STATUSES),
-            exclude_plan_id,
-            exclude_plan_id,
-        ),
-    )
+        """
+    try:
+        cur.execute(sql_active, params)
+    except Exception:
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
+        cur.execute(sql_legacy, params)
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row)) for row in cur.fetchall()]
 

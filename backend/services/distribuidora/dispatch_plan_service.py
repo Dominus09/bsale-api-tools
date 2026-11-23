@@ -1469,6 +1469,15 @@ def _invoicing_payload_from_rows(
                         if st.evidence_source == "direct_related"
                         else "indirect_related"
                     )
+            # Venta facturada: list_invoiced_* no trae document_total; usar
+            # total_amount real del documento vinculado (cadena operacional).
+            if x.get("document_total") is None and st.confirmed_invoice:
+                amt = st.confirmed_invoice.get("total_amount")
+                if amt is not None:
+                    try:
+                        x["document_total"] = float(amt)
+                    except (TypeError, ValueError):
+                        pass
             if st.completion_source == "invoice_preexisting" or (
                 st.fulfillment_status == FULFILL_EXCLUDED_PREEXISTING
             ):

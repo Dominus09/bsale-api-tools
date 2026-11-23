@@ -38,6 +38,9 @@ NOT_IN_RUNNER = {
     "061_delivery_offline_ops_AWAITING_APPROVAL.sql": "DDL Offline V2 pendiente de aprobación",
     "061_r2_orphan_dry_run.sql": "dry-run R2; no DDL de runner",
     "061_read_only_status_check.sql": "chequeo read-only; no DDL de runner",
+    "062_dispatch_plan_order_admin_exclude_AWAITING_APPROVAL.sql": (
+        "DDL exclusión admin OC pendiente de aprobación"
+    ),
     "PROPOSED_058_visit_admin_classification_DESIGN_ONLY.sql": "diseño propuesto; no aplicar",
     "audit_plan00082_visit3_romeo_alfa_SELECT_ONLY.sql": "auditoría SELECT-only",
     "audit_romeo_alfa_visits_1_and_3_SELECT_ONLY.sql": "auditoría SELECT-only",

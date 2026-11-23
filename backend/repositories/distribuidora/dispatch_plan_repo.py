@@ -33,8 +33,11 @@ def get_plan_by_id(cur, plan_id: int) -> dict[str, Any] | None:
 
 def list_plans_by_session(cur, plan_session_id: str) -> list[dict[str, Any]]:
     """Listado liviano por sesión (sin route_geometry ni joins pesados)."""
+    active_pred = (
+        "AND o.excluded_at IS NULL" if order_exclude_columns_ready(cur) else ""
+    )
     cur.execute(
-        """
+        f"""
         SELECT
             dp.id,
             dp.plan_session_id,
@@ -53,10 +56,12 @@ def list_plans_by_session(cur, plan_session_id: str) -> list[dict[str, Any]]:
             dp.assistant_count,
             (SELECT COUNT(*)::int
              FROM distribuidora.dispatch_plan_orders o
-             WHERE o.dispatch_plan_id = dp.id) AS order_count,
+             WHERE o.dispatch_plan_id = dp.id
+               {active_pred}) AS order_count,
             (SELECT COALESCE(SUM(o.oc_total_amount), 0)
              FROM distribuidora.dispatch_plan_orders o
-             WHERE o.dispatch_plan_id = dp.id) AS total_oc_amount
+             WHERE o.dispatch_plan_id = dp.id
+               {active_pred}) AS total_oc_amount
         FROM distribuidora.dispatch_plan dp
         LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
         WHERE dp.plan_session_id = %s
@@ -88,14 +93,19 @@ def get_plan_header(cur, plan_id: int) -> dict[str, Any] | None:
             dp.final_margin_clp,
             dp.margin_computation_source,
         """
+    active_pred = (
+        "AND o.excluded_at IS NULL" if order_exclude_columns_ready(cur) else ""
+    )
     order_sub = (
-        """
+        f"""
             (SELECT COUNT(*)::int
              FROM distribuidora.dispatch_plan_orders o
-             WHERE o.dispatch_plan_id = dp.id) AS order_count,
+             WHERE o.dispatch_plan_id = dp.id
+               {active_pred}) AS order_count,
             (SELECT COALESCE(SUM(o.oc_total_amount), 0)
              FROM distribuidora.dispatch_plan_orders o
-             WHERE o.dispatch_plan_id = dp.id) AS total_oc_amount
+             WHERE o.dispatch_plan_id = dp.id
+               {active_pred}) AS total_oc_amount
         """
         if caps["has_orders_table"]
         else "0::int AS order_count, 0::numeric AS total_oc_amount"
@@ -802,15 +812,127 @@ def insert_plan_weight_audit(
     )
 
 
-def list_plan_orders(cur, plan_id: int) -> list[dict[str, Any]]:
+_EXCLUDE_COLS_READY: bool | None = None
+
+
+def order_exclude_columns_ready(cur) -> bool:
+    """True si 062 (soft-exclude admin) está aplicado."""
+    global _EXCLUDE_COLS_READY
+    if _EXCLUDE_COLS_READY is True:
+        return True
+    try:
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'distribuidora'
+              AND table_name = 'dispatch_plan_orders'
+              AND column_name = 'excluded_at'
+            LIMIT 1
+            """
+        )
+        ready = cur.fetchone() is not None
+    except Exception:
+        ready = False
+    if ready:
+        _EXCLUDE_COLS_READY = True
+    return ready
+
+
+def _active_orders_predicate(cur, alias: str = "dispatch_plan_orders") -> str:
+    if order_exclude_columns_ready(cur):
+        return f" AND {alias}.excluded_at IS NULL"
+    return ""
+
+
+def list_plan_orders(
+    cur, plan_id: int, *, include_excluded: bool = False
+) -> list[dict[str, Any]]:
+    pred = ""
+    if not include_excluded:
+        pred = _active_orders_predicate(cur, "o")
+    cur.execute(
+        f"""
+        SELECT o.*
+        FROM distribuidora.dispatch_plan_orders o
+        WHERE o.dispatch_plan_id = %s
+        {pred}
+        ORDER BY o.route_order ASC, o.oc_document_id ASC
+        """,
+        (plan_id,),
+    )
+    return [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+
+
+def get_plan_order(
+    cur, plan_id: int, oc_document_id: int
+) -> dict[str, Any] | None:
+    cur.execute(
+        """
+        SELECT *
+        FROM distribuidora.dispatch_plan_orders
+        WHERE dispatch_plan_id = %s AND oc_document_id = %s
+        LIMIT 1
+        """,
+        (int(plan_id), int(oc_document_id)),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return dict(zip(_cols(cur), row))
+
+
+def mark_plan_order_excluded(
+    cur,
+    *,
+    plan_id: int,
+    oc_document_id: int,
+    user_id: int,
+    user_name: str | None,
+    reason: str,
+    exclusion_kind: str = "admin",
+) -> dict[str, Any]:
+    if not order_exclude_columns_ready(cur):
+        raise RuntimeError("Migración 062 pendiente (excluded_at)")
+    cur.execute(
+        """
+        UPDATE distribuidora.dispatch_plan_orders
+        SET excluded_at = COALESCE(excluded_at, NOW()),
+            excluded_by_user_id = COALESCE(excluded_by_user_id, %s),
+            excluded_by_user_name = COALESCE(excluded_by_user_name, %s),
+            exclude_reason = COALESCE(exclude_reason, %s),
+            exclusion_kind = COALESCE(exclusion_kind, %s)
+        WHERE dispatch_plan_id = %s
+          AND oc_document_id = %s
+        RETURNING *
+        """,
+        (
+            int(user_id),
+            (user_name or "").strip() or None,
+            (reason or "").strip(),
+            exclusion_kind,
+            int(plan_id),
+            int(oc_document_id),
+        ),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise LookupError("OC no encontrada en el plan")
+    return dict(zip(_cols(cur), row))
+
+
+def list_excluded_plan_orders(cur, plan_id: int) -> list[dict[str, Any]]:
+    if not order_exclude_columns_ready(cur):
+        return []
     cur.execute(
         """
         SELECT *
         FROM distribuidora.dispatch_plan_orders
         WHERE dispatch_plan_id = %s
-        ORDER BY route_order ASC, oc_document_id ASC
+          AND excluded_at IS NOT NULL
+        ORDER BY excluded_at DESC, oc_document_id ASC
         """,
-        (plan_id,),
+        (int(plan_id),),
     )
     return [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
 
@@ -853,7 +975,19 @@ def list_invoiced_documents(cur, plan_id: int) -> list[dict[str, Any]]:
         """,
         (plan_id,),
     )
-    return [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+    rows = [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+    if not order_exclude_columns_ready(cur):
+        return rows
+    active_ids = {
+        int(o["oc_document_id"])
+        for o in list_plan_orders(cur, plan_id, include_excluded=False)
+        if o.get("oc_document_id") is not None
+    }
+    return [
+        r
+        for r in rows
+        if r.get("oc_document_id") is not None and int(r["oc_document_id"]) in active_ids
+    ]
 
 
 def list_invoiced_documents_lite(cur, plan_id: int) -> list[dict[str, Any]]:
@@ -861,8 +995,11 @@ def list_invoiced_documents_lite(cur, plan_id: int) -> list[dict[str, Any]]:
     Facturación por document_related (v_orders_purchase_status).
     Sin v_purchase_document_status_full — más rápido que la vista completa.
     """
+    active_pred = (
+        "AND dpo.excluded_at IS NULL" if order_exclude_columns_ready(cur) else ""
+    )
     cur.execute(
-        """
+        f"""
         SELECT
             dpo.dispatch_plan_id,
             dpo.oc_document_id,
@@ -894,6 +1031,7 @@ def list_invoiced_documents_lite(cur, plan_id: int) -> list[dict[str, Any]]:
         LEFT JOIN distribuidora.v_orders_purchase_status st
             ON st.document_id = dpo.oc_document_id
         WHERE dpo.dispatch_plan_id = %s
+          {active_pred}
         ORDER BY dpo.route_order ASC, dpo.oc_document_id ASC
         """,
         (plan_id,),

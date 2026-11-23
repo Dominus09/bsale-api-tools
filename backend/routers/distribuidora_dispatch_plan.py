@@ -1095,6 +1095,71 @@ def add_order_to_plan(
         raise HTTPException(status_code=status, detail=detail) from e
 
 
+class ExcludeOrderBody(BaseModel):
+    reason: str = Field(..., min_length=5, max_length=2000)
+
+
+@router.get("/{plan_id}/orders/{oc_document_id}/exclude-preview")
+def preview_exclude_order(
+    plan_id: int,
+    oc_document_id: int,
+    user: dict = Depends(require_erp_ops_staff),
+):
+    from backend.services.distribuidora.dispatch_plan_order_exclude_service import (
+        OrderExcludeError,
+        preview_exclude_order as preview_fn,
+    )
+
+    _deny_plan_if_out_of_scope(user, plan_id)
+    try:
+        return preview_fn(user=user, plan_id=plan_id, oc_document_id=oc_document_id)
+    except OrderExcludeError as e:
+        raise HTTPException(
+            status_code=int(e.http_status or 400),
+            detail={"message": str(e), "code": e.code, **(e.details or {})},
+        ) from e
+
+
+@router.post("/{plan_id}/orders/{oc_document_id}/exclude")
+def exclude_order_from_plan(
+    plan_id: int,
+    oc_document_id: int,
+    body: ExcludeOrderBody,
+    user: dict = Depends(require_erp_ops_staff),
+):
+    from backend.services.distribuidora.dispatch_plan_order_exclude_service import (
+        OrderExcludeError,
+        exclude_order as exclude_fn,
+    )
+
+    _deny_plan_if_out_of_scope(user, plan_id)
+    try:
+        return exclude_fn(
+            user=user,
+            plan_id=plan_id,
+            oc_document_id=oc_document_id,
+            reason=body.reason,
+        )
+    except OrderExcludeError as e:
+        raise HTTPException(
+            status_code=int(e.http_status or 400),
+            detail={"message": str(e), "code": e.code, **(e.details or {})},
+        ) from e
+
+
+@router.get("/{plan_id}/orders/exclusions")
+def list_order_exclusions(
+    plan_id: int,
+    user: dict = Depends(require_erp_ops_staff),
+):
+    from backend.services.distribuidora.dispatch_plan_order_exclude_service import (
+        list_admin_exclusions,
+    )
+
+    _deny_plan_if_out_of_scope(user, plan_id)
+    return list_admin_exclusions(plan_id=plan_id)
+
+
 @router.get("/{plan_id}/picking-regeneration-log")
 def get_picking_regeneration_log(
     plan_id: int,

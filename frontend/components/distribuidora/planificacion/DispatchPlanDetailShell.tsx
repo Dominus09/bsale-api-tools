@@ -29,6 +29,7 @@ import {
   downloadDispatchPlanBillingExcel,
   generateDispatchPlanPicking,
   getDispatchPlanInvoicedDocuments,
+  getDispatchPlanOrderExclusions,
   getDispatchPlanPickingCliente,
   getDispatchPlanPickingProducto,
   repairDispatchPlanSnapshot,
@@ -38,6 +39,8 @@ import {
   type DispatchPlanPickingProductResponse,
   type DocumentLoadReconciliationResponse,
 } from "@/lib/api"
+import { useAuthMe } from "@/lib/use-auth-me"
+import { hasManagementAccess } from "@/lib/permissions"
 import { DispatchPlanInvoicingDashboard } from "@/components/distribuidora/planificacion/DispatchPlanInvoicingDashboard"
 import { DispatchPlanCuadraturaPanel } from "@/components/distribuidora/planificacion/DispatchPlanCuadraturaPanel"
 import { DispatchPlanPickingAssignmentPanel } from "@/components/distribuidora/planificacion/DispatchPlanPickingAssignmentPanel"
@@ -179,6 +182,11 @@ export function DispatchPlanDetailShell({
   const [pickingProductLoading, setPickingProductLoading] = useState(false)
   const [pickingClientLoaded, setPickingClientLoaded] = useState(false)
   const [reviewItems, setReviewItems] = useState<DispatchPlanInvoicedRow[] | null>(null)
+  const [exclusionHistory, setExclusionHistory] = useState<
+    Array<Record<string, unknown>>
+  >([])
+  const { staff } = useAuthMe()
+  const canExcludeOrders = hasManagementAccess(staff)
   const [orgRefreshToken, setOrgRefreshToken] = useState(0)
   const [docConflictBanner, setDocConflictBanner] = useState<{
     count: number
@@ -660,7 +668,39 @@ export function DispatchPlanDetailShell({
             {reviewItems?.length ? (
               <div className="space-y-2">
                 <p className="text-sm font-medium">Detalle documental</p>
-                <DispatchPlanInvoicedItemsTable items={reviewItems} />
+                <DispatchPlanInvoicedItemsTable
+                  items={reviewItems}
+                  planId={planId}
+                  staff={staff}
+                  onExcluded={async () => {
+                    const [r, excl] = await Promise.all([
+                      getDispatchPlanInvoicedDocuments(planId),
+                      canExcludeOrders
+                        ? getDispatchPlanOrderExclusions(planId).catch(() => null)
+                        : Promise.resolve(null),
+                    ])
+                    setReviewItems(r.items)
+                    if (excl) setExclusionHistory(excl.events || [])
+                    await onReloadDashboard()
+                    onMessage(
+                      `Facturación actualizada: ${r.summary.confirmed} confirmadas, ${r.summary.missing} pendientes.`,
+                    )
+                  }}
+                />
+              </div>
+            ) : null}
+            {canExcludeOrders && exclusionHistory.length > 0 ? (
+              <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
+                <p className="text-sm font-medium">Exclusiones administrativas</p>
+                <ul className="space-y-1.5 text-xs text-muted-foreground">
+                  {exclusionHistory.slice(0, 10).map((ev) => (
+                    <li key={String(ev.id ?? `${ev.oc_document_id}-${ev.created_at}`)}>
+                      OC {String(ev.oc_number ?? ev.oc_document_id)} ·{" "}
+                      {String(ev.user_name || "—")} · {String(ev.reason || "—")} ·{" "}
+                      {ev.created_at ? String(ev.created_at) : ""}
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : null}
             <div className="border-t border-border/50 pt-3">
