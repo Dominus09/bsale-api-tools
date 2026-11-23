@@ -2,10 +2,14 @@
 -- 062 — Exclusión administrativa de OC en dispatch_plan_orders
 -- ESTADO: LISTA PARA REVISIÓN — NO APLICAR EN PRODUCCIÓN SIN AUTORIZACIÓN
 -- =============================================================================
+-- Namespace: backend/sql/distribuidora/062_* (NO confundir con
+-- backend/sql/062_auth_audit_events.sql del esquema app/analytics).
 -- Soft-exclude: no DELETE de la fila; no muta Bsale / stock / visitas.
+-- Aditiva: ADD COLUMN IF NOT EXISTS + CHECK + índice parcial.
 -- Impide que la OC siga contando en KPIs del plan y libera el guard de OC
 -- para otras planificaciones (ver filtros excluded_at IS NULL en código).
 -- Auditoría operativa: columnas + evento en dispatch_plan_order_events.
+-- Verificación read-only: ver 062_dispatch_plan_order_admin_exclude_VERIFY_SELECT_ONLY.sql
 -- =============================================================================
 
 ALTER TABLE distribuidora.dispatch_plan_orders

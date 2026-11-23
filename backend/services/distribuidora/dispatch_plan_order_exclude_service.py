@@ -79,7 +79,9 @@ def _collect_blockers(
     blockers: list[dict[str, Any]] = []
     status = str(plan.get("status") or "")
 
-    # Factura/boleta vigente en cadena operacional
+    # Factura/boleta vigente: cadena operacional + chequeo fresco document_related.
+    # Si no se puede resolver el estado, bloquear (fail-closed ante sync incompleta).
+    st = None
     try:
         statuses = resolve_operational_statuses_batch(
             cur, [oc_document_id], in_plan=True
@@ -87,7 +89,26 @@ def _collect_blockers(
         st = statuses.get(oc_document_id)
     except Exception as exc:
         logger.warning("[EXCLUDE_OC] operational status failed: %s", exc)
-        st = None
+        blockers.append(
+            {
+                "code": "billing_status_unavailable",
+                "message": (
+                    "No se pudo verificar el estado de facturación de la OC "
+                    "(posible sync incompleta). Reintente tras sincronizar "
+                    "documentos relacionados; no se excluye con información incierta."
+                ),
+            }
+        )
+    if st is None and not any(b.get("code") == "billing_status_unavailable" for b in blockers):
+        blockers.append(
+            {
+                "code": "billing_status_unavailable",
+                "message": (
+                    "Sin estado operacional de facturación para la OC. "
+                    "Sincronice relaciones Bsale y reintente."
+                ),
+            }
+        )
     if st is not None:
         if st.billing_status in (BILLING_INVOICED, BILLING_INVOICED_FULL_CN) or (
             st.confirmed_invoice and st.billing_status != "cancelled"
@@ -117,6 +138,42 @@ def _collect_blockers(
                     "billing_status": st.billing_status,
                 }
             )
+
+    # Chequeo fresco independiente (details → document_related → factura/boleta state=0).
+    try:
+        cur.execute(
+            """
+            SELECT dr.related_document_id, d.number, d.document_type_id, d.state
+            FROM distribuidora.document_details dd
+            INNER JOIN distribuidora.document_related dr
+                ON dr.detail_id = dd.detail_id
+            INNER JOIN distribuidora.documents d
+                ON d.document_id = dr.related_document_id
+            WHERE dd.document_id = %s
+              AND COALESCE(d.state, 0) = 0
+              AND d.document_type_id IN (1, 6)
+            LIMIT 5
+            """,
+            (oc_document_id,),
+        )
+        fresh_inv = cur.fetchall() or []
+        if fresh_inv and not any(b.get("code") == "has_confirmed_invoice" for b in blockers):
+            blockers.append(
+                {
+                    "code": "has_confirmed_invoice",
+                    "message": (
+                        "Hay factura/boleta vigente recién vinculada en document_related. "
+                        "No se excluye; actualice el panel de facturación y reevalúe."
+                    ),
+                    "invoice_document_id": int(fresh_inv[0][0]) if fresh_inv[0][0] else None,
+                    "invoice_number": fresh_inv[0][1],
+                }
+            )
+    except Exception:
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
 
     # Visitas de entrega no anuladas
     try:
@@ -460,6 +517,11 @@ def exclude_order(
                 plan_id,
             )
 
+        oc_amt = order.get("oc_total_amount")
+        try:
+            oc_amt_f = float(oc_amt) if oc_amt is not None else None
+        except (TypeError, ValueError):
+            oc_amt_f = None
         event_id = batch_repo.insert_order_event(
             cur,
             plan_id=plan_id,
@@ -471,12 +533,12 @@ def exclude_order(
             payload={
                 "exclusion_kind": "admin",
                 "actor_user_id": user_id,
-                "oc_total_amount": float(order.get("oc_total_amount") or 0),
+                "oc_total_amount": oc_amt_f if oc_amt_f is not None else 0.0,
                 "client_name": order.get("client_name"),
                 "plan_status": plan.get("status"),
                 "before": {
                     "route_order": order.get("route_order"),
-                    "oc_total_amount": order.get("oc_total_amount"),
+                    "oc_total_amount": oc_amt_f,
                 },
                 "flags": {
                     "needs_recalculation": True,

@@ -41,6 +41,9 @@ NOT_IN_RUNNER = {
     "062_dispatch_plan_order_admin_exclude_AWAITING_APPROVAL.sql": (
         "DDL exclusión admin OC pendiente de aprobación"
     ),
+    "062_dispatch_plan_order_admin_exclude_VERIFY_SELECT_ONLY.sql": (
+        "verificación SELECT-only exclusión admin OC"
+    ),
     "PROPOSED_058_visit_admin_classification_DESIGN_ONLY.sql": "diseño propuesto; no aplicar",
     "audit_plan00082_visit3_romeo_alfa_SELECT_ONLY.sql": "auditoría SELECT-only",
     "audit_romeo_alfa_visits_1_and_3_SELECT_ONLY.sql": "auditoría SELECT-only",
