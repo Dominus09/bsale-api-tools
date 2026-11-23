@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { fetchMe } from "@/lib/api"
 import { clearSession, getSessionUserId, getToken } from "@/lib/auth"
+import { hasAnyPwaModule } from "@/lib/modules"
 import { getOfflineMeta, isLikelyOfflineError, saveOfflineMeta } from "@/lib/offline-store"
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
@@ -48,9 +49,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           router.replace("/login?denied=pwa")
           return
         }
-        if (!me.profiles.includes("chofer")) {
+        // Autorización por perfiles de /auth/me (backend). No solo frontend.
+        if (!hasAnyPwaModule(me.profiles)) {
           clearSession()
-          setError("Se requiere perfil chofer.")
+          setError("Sin módulo operativo asignado (chofer, vendedor, bodega o supervisor).")
           router.replace("/login?denied=profile")
           return
         }

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import { ApiError, fetchMe, login } from "@/lib/api"
 import { clearSession, setSession } from "@/lib/auth"
 import { BRAND, QUILLOTANA_LOGO_GRUPO_URL } from "@/lib/brand"
+import { hasAnyPwaModule, resolvePostLoginPath } from "@/lib/modules"
 
 function IconMail() {
   return (
@@ -68,7 +69,7 @@ function LoginForm() {
       return "Esta cuenta no tiene acceso a la app operativa."
     }
     if (params.get("denied") === "profile") {
-      return "Se requiere perfil chofer para continuar."
+      return "Se requiere un módulo operativo asignado (chofer, vendedor, bodega o supervisor)."
     }
     return null
   }, [params])
@@ -87,12 +88,15 @@ function LoginForm() {
         setError("Cuenta sin acceso PWA. El ERP administrativo no se otorga aquí.")
         return
       }
-      if (!me.profiles.includes("chofer")) {
+      if (!hasAnyPwaModule(me.profiles)) {
         clearSession()
-        setError("Tu usuario no tiene perfil chofer activo.")
+        setError(
+          "Tu usuario no tiene un módulo operativo asignado (chofer, vendedor, bodega o supervisor).",
+        )
         return
       }
-      router.replace("/despachos")
+      // Chofer único → /despachos (sin fricción). Varios perfiles → selector.
+      router.replace(resolvePostLoginPath(me.profiles || []))
     } catch (err) {
       clearSession()
       if (err instanceof ApiError) {

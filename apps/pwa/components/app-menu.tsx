@@ -3,7 +3,9 @@
 import Link from "next/link"
 import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
+import { usePathname } from "next/navigation"
 import { getSessionEmail, logoutAndRedirect } from "@/lib/auth"
+import { getActiveModuleId, moduleLabel, setActiveModuleId } from "@/lib/modules"
 import { useLocalTools } from "@/components/local-tools-context"
 import { OfflineStatusIndicator } from "@/components/offline-status-indicator"
 
@@ -27,10 +29,13 @@ function IconLogout() {
 }
 
 export function AppMenu() {
+  const pathname = usePathname()
   const [open, setOpen] = useState(false)
   const [email, setEmail] = useState("—")
+  const [moduleName, setModuleName] = useState("Operativa")
   const [mounted, setMounted] = useState(false)
   const { tools, requestAction } = useLocalTools()
+  const inChofer = pathname?.startsWith("/despachos")
 
   useEffect(() => {
     setMounted(true)
@@ -38,7 +43,18 @@ export function AppMenu() {
 
   useEffect(() => {
     setEmail(getSessionEmail() || "—")
-  }, [open])
+    const id =
+      pathname?.startsWith("/despachos")
+        ? "choferes"
+        : pathname?.startsWith("/vendedores")
+          ? "vendedores"
+          : pathname?.startsWith("/bodega")
+            ? "bodega"
+            : pathname?.startsWith("/supervision")
+              ? "supervision"
+              : getActiveModuleId()
+    setModuleName(moduleLabel(id))
+  }, [open, pathname])
 
   useEffect(() => {
     if (!open) return
@@ -94,7 +110,7 @@ export function AppMenu() {
                 <section className="drawer-section">
                   <h3>Cuenta</h3>
                   <p className="drawer-user">{email}</p>
-                  <p className="drawer-profile">Perfil activo · Chofer</p>
+                  <p className="drawer-profile">Módulo activo · {moduleName}</p>
                 </section>
 
                 <section className="drawer-section">
@@ -102,12 +118,24 @@ export function AppMenu() {
                   <div className="drawer-actions">
                     <Link
                       className="drawer-item"
-                      href="/despachos"
-                      onClick={() => setOpen(false)}
+                      href="/modulos"
+                      onClick={() => {
+                        setActiveModuleId(null)
+                        setOpen(false)
+                      }}
                     >
-                      Mis despachos
+                      Cambiar módulo
                     </Link>
-                    {tools?.available && tools.backHref ? (
+                    {inChofer ? (
+                      <Link
+                        className="drawer-item"
+                        href="/despachos"
+                        onClick={() => setOpen(false)}
+                      >
+                        Mis despachos
+                      </Link>
+                    ) : null}
+                    {inChofer && tools?.available && tools.backHref ? (
                       <Link
                         className="drawer-item"
                         href={tools.backHref}
@@ -117,64 +145,67 @@ export function AppMenu() {
                       </Link>
                     ) : null}
                   </div>
-                  {/* Reserva multimódulo: "Cambiar módulo" (Chofer / Bodega) — no implementar aún. */}
                 </section>
 
-                <section className="drawer-section">
-                  <h3>Herramientas del local</h3>
-                  {tools?.available ? (
+                {inChofer ? (
+                  <section className="drawer-section">
+                    <h3>Herramientas del local</h3>
+                    {tools?.available ? (
+                      <div className="drawer-actions">
+                        <button type="button" className="drawer-item" onClick={() => runLocal("gps")}>
+                          Registrar / corregir GPS
+                        </button>
+                        <button
+                          type="button"
+                          className="drawer-item"
+                          onClick={() => runLocal("photo")}
+                        >
+                          Tomar / cambiar fotografía
+                        </button>
+                        <button
+                          type="button"
+                          className="drawer-item"
+                          disabled={!tools.canNavigate}
+                          onClick={() => runLocal("navigate")}
+                        >
+                          Cómo llegar
+                        </button>
+                        <button
+                          type="button"
+                          className="drawer-item"
+                          onClick={() => runLocal("history")}
+                        >
+                          Historial de ubicación
+                        </button>
+                        {tools.locationLabel ? (
+                          <p className="muted drawer-note">{tools.locationLabel}</p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="muted drawer-note">
+                        Abra la ficha de un cliente para usar GPS, fachada y navegación.
+                      </p>
+                    )}
+                  </section>
+                ) : null}
+
+                {inChofer ? (
+                  <section className="drawer-section">
+                    <h3>Pruebas</h3>
                     <div className="drawer-actions">
-                      <button type="button" className="drawer-item" onClick={() => runLocal("gps")}>
-                        Registrar / corregir GPS
-                      </button>
-                      <button
-                        type="button"
+                      <Link
                         className="drawer-item"
-                        onClick={() => runLocal("photo")}
+                        href="/pruebas/reportes-whatsapp"
+                        onClick={() => setOpen(false)}
                       >
-                        Tomar / cambiar fotografía
-                      </button>
-                      <button
-                        type="button"
-                        className="drawer-item"
-                        disabled={!tools.canNavigate}
-                        onClick={() => runLocal("navigate")}
-                      >
-                        Cómo llegar
-                      </button>
-                      <button
-                        type="button"
-                        className="drawer-item"
-                        onClick={() => runLocal("history")}
-                      >
-                        Historial de ubicación
-                      </button>
-                      {tools.locationLabel ? (
-                        <p className="muted drawer-note">{tools.locationLabel}</p>
-                      ) : null}
+                        Reportes WhatsApp (ficticios)
+                      </Link>
                     </div>
-                  ) : (
                     <p className="muted drawer-note">
-                      Abra la ficha de un cliente para usar GPS, fachada y navegación.
+                      Solo demostración. No escribe entregas reales ni usa enlaces de grupo.
                     </p>
-                  )}
-                </section>
-
-                <section className="drawer-section">
-                  <h3>Pruebas</h3>
-                  <div className="drawer-actions">
-                    <Link
-                      className="drawer-item"
-                      href="/pruebas/reportes-whatsapp"
-                      onClick={() => setOpen(false)}
-                    >
-                      Reportes WhatsApp (ficticios)
-                    </Link>
-                  </div>
-                  <p className="muted drawer-note">
-                    Solo demostración. No escribe entregas reales ni usa enlaces de grupo.
-                  </p>
-                </section>
+                  </section>
+                ) : null}
               </div>
 
               <div className="drawer-footer">

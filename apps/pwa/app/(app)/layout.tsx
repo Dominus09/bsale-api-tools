@@ -7,6 +7,7 @@ import { OfflineSyncBanner } from "@/components/offline-sync-banner"
 import { OfflineSyncProvider } from "@/components/offline-sync-provider"
 import { LocalToolsProvider } from "@/components/local-tools-context"
 import { BRAND } from "@/lib/brand"
+import { ModuleSubtitle } from "@/components/module-subtitle"
 
 function UserAvatar() {
   return (
@@ -29,11 +30,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <UserAvatar />
               <div className="topbar-title">
                 <h1>
-                  <Link href="/despachos">{BRAND.name}</Link>
+                  <Link href="/modulos">{BRAND.name}</Link>
                 </h1>
-                <div className="muted topbar-sub">
-                  {BRAND.subtitle} · Chofer
-                </div>
+                <ModuleSubtitle />
               </div>
             </div>
             <AppMenu />
