@@ -110,6 +110,7 @@ def get_catalog(
 
     # Feature flag reversible por consumidor. Default legacy.
     # Picking/OC/order_pricing NUNCA pasan por este handler con V2 global.
+    # Si V2 está activo y falla: NO caer a legacy (evitar stock/precio obsoleto).
     source = resolve_catalog_source(consumer="public_web")
     if source == "v2":
         try:
@@ -123,9 +124,28 @@ def get_catalog(
             )
             return items
         except Exception as e:
-            logger.exception("catalog_v2_failed_fallback_legacy: %s", e)
-            # Rollback silencioso a legacy ante falla temporal de RAW.
-            source = "legacy"
+            logger.exception(
+                "catalog_v2_unavailable_no_legacy_fallback price_list=%s err=%s",
+                key,
+                e,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "message": (
+                        "Catálogo temporalmente no disponible. "
+                        "Stock y precios no confirmados; intente más tarde."
+                    ),
+                    "code": "catalog_v2_unavailable",
+                    "commercial_status": "unavailable",
+                    "price_status": "unconfirmed",
+                    "stock_status": "unconfirmed",
+                    "rollback_es": (
+                        "Rollback manual: CATALOG_SOURCE_PUBLIC=legacy "
+                        "(no hay fallback silencioso a catalog_view)."
+                    ),
+                },
+            ) from e
 
     query = _CATALOG_QUERY.strip()
 

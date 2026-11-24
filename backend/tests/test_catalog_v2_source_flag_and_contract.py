@@ -115,9 +115,13 @@ def test_upb_inherited_sec_not_from_x18_name():
         "stock_office_payload": {},
     }
     item = proj._row_to_public_item(row, price_list_key="factura")
-    # SEC 1 → UPB 1 vía reglas vigentes; NO 18 desde el nombre.
+    # SEC 1 = factor vendible del pack; NO 18 desde el nombre.
     assert item["units_per_box"] == 1
-    assert item["v2"]["upb_status"] == "inherited_sec"
+    assert item["v2"]["sellable_unit_factor"] == 1
+    assert item["v2"]["logistics_units_per_box"] is None
+    assert item["v2"]["upb_status"] == "pending_validation"
+    assert item["v2"]["missing_upb"] is True
+    assert item["v2"]["presentation_pack_hint_not_authoritative"] == "x18"
     assert item["v2"]["upb_source"] == "variant_description_SEC"
 
 
@@ -155,7 +159,8 @@ def test_upb_missing_when_no_pm_no_sec():
     assert item["stock"] == 0
     assert item["image"] is None
     assert item["v2"]["missing_upb"] is True
-    assert item["v2"]["upb_status"] == "missing"
+    assert item["v2"]["upb_status"] == "pending_validation"
+    assert item["v2"]["logistics_units_per_box"] is None
 
 
 def test_get_catalog_stays_legacy_by_default(monkeypatch):
@@ -192,7 +197,7 @@ def test_get_catalog_stays_legacy_by_default(monkeypatch):
     assert called["legacy"] is True
 
 
-def test_get_catalog_v2_flag_and_rollback_on_error(monkeypatch):
+def test_get_catalog_v2_failure_does_not_serve_stale_legacy(monkeypatch):
     from backend.routers import catalog as cat
 
     monkeypatch.setenv("CATALOG_SOURCE_PUBLIC", "v2")
@@ -205,12 +210,15 @@ def test_get_catalog_v2_flag_and_rollback_on_error(monkeypatch):
         _boom,
     )
 
+    legacy_called = {"n": 0}
+
     class _Cur:
         def execute(self, *_a, **_k):
+            legacy_called["n"] += 1
             return None
 
         def fetchall(self):
-            return []
+            return [(28216, "STALE", "T", "P", "V", "x", 9999, None, 1.0, None, 1, None, None)]
 
         def close(self):
             return None
@@ -223,8 +231,14 @@ def test_get_catalog_v2_flag_and_rollback_on_error(monkeypatch):
             return None
 
     monkeypatch.setattr(cat, "get_connection", lambda: _Conn())
-    # Fallback a legacy ante falla V2
-    assert cat.get_catalog(price_list="factura", in_stock=None) == []
+    with pytest.raises(HTTPException) as ei:
+        cat.get_catalog(price_list="factura", in_stock=None)
+    assert ei.value.status_code == 503
+    detail = ei.value.detail
+    assert detail["code"] == "catalog_v2_unavailable"
+    assert detail["stock_status"] == "unconfirmed"
+    assert detail["price_status"] == "unconfirmed"
+    assert legacy_called["n"] == 0
 
 
 def test_get_catalog_v2_returns_public_contract(monkeypatch):

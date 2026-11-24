@@ -144,45 +144,81 @@ ORDER BY
 """
 
 
-def _upb_provenance(row: dict[str, Any], resolved_upb: int | None) -> dict[str, Any]:
-    """Clasifica UPB: verified (PM/legacy col), inherited_sec, o missing.
+def _presentation_pack_hint(text: str | None) -> str | None:
+    """Hint informativo x12/x18/x24 desde el nombre. NUNCA se usa como UPB."""
+    if not text:
+        return None
+    compact = text.lower().replace(" ", "").replace("×", "x")
+    for label in ("x24", "x18", "x12"):
+        if label in compact:
+            return label
+    return None
 
-    No deduce desde 'x18'/'x12' en el nombre de presentación.
+
+def _upb_provenance(row: dict[str, Any], resolved_upb: int | None) -> dict[str, Any]:
+    """Clasifica factor comercial vs logística.
+
+    Capas (no intercambiables):
+    - sellable_unit_factor: factor de venta catálogo (columna / SEC).
+    - logistics_units_per_box: solo PM o variants.units_per_box verificado.
+    - presentation_pack_hint: envases en el nombre (x18); nunca autoritativo.
+
+    No inventa conversiones (p. ej. Sol x18 → 18).
     """
+    blob = f"{row.get('product_name') or ''} {row.get('variant_description') or ''}"
+    hint = _presentation_pack_hint(blob)
+    base = {
+        "presentation_pack_hint_not_authoritative": hint,
+        "logistics_units_per_box": None,
+        "sellable_unit_factor": int(resolved_upb) if resolved_upb and int(resolved_upb) > 0 else None,
+    }
     pm_upb = row.get("pm_units_per_box")
     try:
         if pm_upb is not None and int(pm_upb) > 0:
+            n = int(pm_upb)
             return {
+                **base,
                 "upb_status": "verified",
                 "upb_source": "products_master",
                 "missing_upb": False,
+                "logistics_units_per_box": n,
+                "note_es": "UPB logístico verificado en Products Master.",
             }
     except (TypeError, ValueError):
         pass
     col = row.get("units_per_box_source")
-    # units_per_box_source = COALESCE(legacy, pm); si pm vacío y col>0 → legacy col
     try:
         if col is not None and int(col) > 0 and (
             pm_upb is None or int(pm_upb or 0) <= 0
         ):
+            n = int(col)
             return {
+                **base,
                 "upb_status": "verified",
                 "upb_source": "bsale.variants.units_per_box",
                 "missing_upb": False,
+                "logistics_units_per_box": n,
+                "note_es": "UPB logístico desde columna variants (picking usa esta columna).",
             }
     except (TypeError, ValueError):
         pass
     if resolved_upb is not None and int(resolved_upb) > 0:
         return {
-            "upb_status": "inherited_sec",
+            **base,
+            "upb_status": "pending_validation",
             "upb_source": "variant_description_SEC",
-            "missing_upb": False,
-            "note_es": "UPB heredado de SEC en descripción; no verificado en PM.",
+            "missing_upb": True,
+            "note_es": (
+                "Solo SEC en descripción: factor de venta catálogo, no UPB logístico "
+                "verificado. No se deduce xN del nombre. Pendiente validación en PM."
+            ),
         }
     return {
-        "upb_status": "missing",
+        **base,
+        "upb_status": "pending_validation",
         "upb_source": None,
         "missing_upb": True,
+        "note_es": "Sin UPB verificado (PM/columna). Pendiente validación; no inventar.",
     }
 
 
@@ -649,8 +685,10 @@ def upb_missing_priority_report(*, limit: int = 100) -> dict[str, Any]:
         "priority_rows": rows,
         "note_es": (
             "No se asigna UPB desde x12/x18/x24 del nombre. "
-            "Sol x18 (31199) sin fila PM: SEC 1 en descripción es sospechoso para pack x18; "
-            "corregir manualmente en ERP/PM a 18."
+            "Sol pack 31199: sin PM; SEC 1 = factor vendible del pack completo; "
+            "'X 18 UND' = envases en presentación (no UPB logístico). "
+            "Picking hoy: sin variants.units_per_box → sin_unidad_caja. "
+            "Validar manualmente en ERP/PM sin inventar conversión."
         ),
     }
 

@@ -79,11 +79,10 @@ V2 preview corregido a `stock = quantity_available`.
 |---|---:|
 | PM activos sin UPB | ~998 |
 | Con stock RAW o1 y sin UPB PM (prioridad) | **baja** (p.ej. 30931 con 114 u) |
-| Sol x18 (31199) | **Sin fila PM**; variant.units_per_box NULL; descripción `(SEC 1)` |
+| Sol pack 31199 | Sin PM; `variants.units_per_box` NULL; `… X 18 UND (SEC 1)` |
 
-**Política V2:** `upb_status` ∈ `verified` | `inherited_sec` | `missing`.  
-**No** se asigna 18 desde “x18” del nombre.  
-Sol x18 → prioridad ERP: crear/actualizar PM `units_per_box=18` manual.
+**Capas:** SEC 1 = factor vendible del pack; “x18” = envases (hint); UPB logístico picking = columna/PM (ausente → `sin_unidad_caja`).  
+**Política V2:** `verified` | `pending_validation`. **No** inventar UPB=18.
 
 Endpoint: `GET /api/catalog-v2/coverage/upb-missing` (gerencia).
 
@@ -112,7 +111,7 @@ Regla: no bloquear por residual histórico; no marcar saludable si `RUNNING` o `
 
 **Hard-deny V2:** `picking`, `dispatch`, `purchase_orders`, `order_pricing` → siempre legacy.
 
-Fallback: si V2 falla en `get_catalog`, vuelve a SQL legacy automáticamente.
+Fallo V2 con flag público activo: **HTTP 503** (`catalog_v2_unavailable`) — sin fallback silencioso a legacy.
 
 ---
 
@@ -144,7 +143,7 @@ Cobertura añadida: sin UPB, sin foto, sin precio, stock0, available≠quantity,
 ## 8. Rollback
 
 1. `CATALOG_SOURCE_PUBLIC=legacy` (o unset) → público vuelve a `catalog_view` inmediato.  
-2. Si V2 error → fallback automático a legacy en el handler.  
+2. Si V2 error con flag activo → 503 (stock/precio unconfirmed); no servir legacy stale.  
 3. Picking/OC no requieren rollback (nunca leyeron V2).  
 4. No hay migraciones ni DROP.
 
@@ -165,7 +164,7 @@ Cobertura añadida: sin UPB, sin foto, sin precio, stock0, available≠quantity,
 
 - `backend/services/catalog_v2/source_flag.py` (nuevo)
 - `backend/services/catalog_v2/projection.py` (available + UPB provenance + missing report)
-- `backend/routers/catalog.py` (flag + fallback; default legacy)
+- `backend/routers/catalog.py` (flag; 503 si V2 cae; default legacy)
 - `backend/routers/catalog_v2_preview.py` (upb-missing, source-flag)
 - `backend/scripts/catalog_v2_bsale_point_check.py`
 - tests + `.env.example`

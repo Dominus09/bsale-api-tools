@@ -92,6 +92,7 @@ def catalog_source_status() -> dict:
         "hard_legacy_consumers": sorted(_HARD_LEGACY_CONSUMERS),
         "note_es": (
             "Activar V2 público requiere CATALOG_SOURCE_PUBLIC=v2 explícito. "
-            "Picking/OC/order_pricing permanecen en legacy aunque CATALOG_SOURCE=v2."
+            "Picking/OC/order_pricing permanecen en legacy aunque CATALOG_SOURCE=v2. "
+            "Si V2 falla con flag público activo → HTTP 503 (sin fallback a legacy)."
         ),
     }
