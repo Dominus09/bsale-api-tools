@@ -16,6 +16,7 @@ from backend.routers import admin_users
 from backend.routers import orders
 from backend.routers.catalog import router as catalog_router
 from backend.routers.catalog_admin import router as catalog_admin_router
+from backend.routers.catalog_v2_preview import router as catalog_v2_preview_router
 
 # Panel / analytics (rutas legacy usadas por el frontend admin)
 from backend.routers import alerts
@@ -125,6 +126,8 @@ app.include_router(orders.router)
 # --- Catálogo público + panel admin catálogo (RUT en CATALOG_ADMIN_RUTS) ---
 app.include_router(catalog_router, prefix="/api")
 app.include_router(catalog_admin_router, prefix="/api")
+# Preview V2 (RAW+PM): no reemplaza /api/catalog; solo gerencia.
+app.include_router(catalog_v2_preview_router, prefix="/api")
 
 # --- Analytics / empresas (no mezclar con /erp: URLs distintas) ---
 app.include_router(companies.router)
