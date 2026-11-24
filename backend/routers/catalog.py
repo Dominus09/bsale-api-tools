@@ -1,9 +1,13 @@
 from decimal import Decimal
+import logging
 
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.db import get_connection
+from backend.services.catalog_v2.source_flag import resolve_catalog_source
 from backend.utils.sale_quantity import build_commercial_rules
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -103,6 +107,25 @@ def get_catalog(
             status_code=400,
             detail="price_list debe ser factura o melinka",
         )
+
+    # Feature flag reversible por consumidor. Default legacy.
+    # Picking/OC/order_pricing NUNCA pasan por este handler con V2 global.
+    source = resolve_catalog_source(consumer="public_web")
+    if source == "v2":
+        try:
+            from backend.services.catalog_v2.projection import public_items_from_v2
+
+            items = public_items_from_v2(key, in_stock=in_stock)
+            logger.info(
+                "catalog_source=v2 consumer=public_web price_list=%s count=%s",
+                key,
+                len(items),
+            )
+            return items
+        except Exception as e:
+            logger.exception("catalog_v2_failed_fallback_legacy: %s", e)
+            # Rollback silencioso a legacy ante falla temporal de RAW.
+            source = "legacy"
 
     query = _CATALOG_QUERY.strip()
 

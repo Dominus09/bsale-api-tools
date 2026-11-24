@@ -7,10 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from backend.auth.permissions import require_management_access
 from backend.services.catalog_v2 import (
     CatalogV2ProjectionError,
+    catalog_source_status,
     compare_catalog_sample,
     list_catalog_v2,
     raw_sync_integrity_report,
     upb_coverage_report,
+    upb_missing_priority_report,
 )
 
 router = APIRouter(prefix="/catalog-v2", tags=["catalog-v2-preview"])
@@ -111,3 +113,24 @@ def catalog_v2_upb_coverage(_user: dict = Depends(require_management_access)):
             status_code=503,
             detail={"message": str(e), "code": "upb_coverage_unavailable"},
         ) from e
+
+
+@router.get("/coverage/upb-missing")
+def catalog_v2_upb_missing(
+    limit: int = Query(default=100, ge=1, le=500),
+    _user: dict = Depends(require_management_access),
+):
+    """Faltantes UPB prioritarios (no deduce xN desde el nombre)."""
+    try:
+        return upb_missing_priority_report(limit=limit)
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail={"message": str(e), "code": "upb_missing_unavailable"},
+        ) from e
+
+
+@router.get("/source-flag")
+def catalog_v2_source_flag(_user: dict = Depends(require_management_access)):
+    """Estado del feature flag reversible (no activa nada por sí solo)."""
+    return catalog_source_status()

@@ -29,9 +29,11 @@ def test_row_to_public_item_contract_no_cost():
         "barcode": "780123",
         "price_gross": 15990,
         "price_net": 13437,
-        "stock_office": 12,
+        "stock_office_quantity": 12,
         "stock_office_available": 10,
+        "stock_office_reserved": 2,
         "stock_all_offices": 40,
+        "stock_office_payload": {"quantity": 12, "quantityAvailable": 10, "quantityReserved": 2},
         "image_raw": None,
         "units_per_box_source": 1,
         "variant_description": "Harina 25 kg SEC 1",
@@ -52,12 +54,15 @@ def test_row_to_public_item_contract_no_cost():
     assert "Harina" in item["name"]
     assert item["barcode"] == "780123"
     assert item["price"] == 15990.0
-    assert item["stock"] == 12
+    assert item["stock"] == 10  # quantity_available (paridad catalog_view)
     assert item["units_per_box"] == 1
     assert "cost" not in item
     assert "margin" not in item
     assert item["v2"]["missing_upb"] is False
+    assert item["v2"]["upb_status"] == "verified"
     assert item["v2"]["price_list_id"] == 13
+    assert item["v2"]["stock_quantity"] == 12.0
+
 
 
 def test_compare_flags_price_diff(monkeypatch):
