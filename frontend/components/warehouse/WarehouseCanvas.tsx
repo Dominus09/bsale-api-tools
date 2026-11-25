@@ -166,39 +166,40 @@ export function WarehouseCanvas({
     ]
   }, [vp, floorLengthM, floorWidthM, viewOrientationDeg, scale])
 
-  const canvasLabels = useMemo(() => placeCanvasLabels(
-    sorted.filter((el) => el.clientKey !== interactingKey).map((el) => {
-      const meta = { ...el.physical.meta_json, ...el.geometry.constraints_json, ...el.geometry.meta_json }
-      return {
-        key: el.clientKey,
-        code: el.physical.code,
-        type: el.physical.element_type,
-        rect: metricToScreen({ ...el.geometry, rotation_deg: el.geometry.rotation_deg || 0 }, vp),
-        dimensions: `${el.geometry.width_m.toFixed(2).replace(".", ",")} × ${el.geometry.depth_m.toFixed(2).replace(".", ",")} m`,
-        underStair: el.physical.element_type === "position" && meta.under_stair === true,
-        sectorWithAisles: el.physical.element_type === "sector" && sorted.some(
-          (child) => child.physical.parent_id === el.physical.id && child.physical.element_type === "aisle",
-        ),
-        parentKey: sorted.find(parent => parent.physical.id === el.physical.parent_id)?.clientKey,
-        entryPoint: (() => {
-          // Local +X = largo métrico, +Y = profundidad métrica.
-          // ESC: acceso por X bajo; pasillos: acceso por Y bajo.
-          const scr = metricToScreen({ ...el.geometry, rotation_deg: el.geometry.rotation_deg || 0 }, vp)
-          const rad = scr.rotation * Math.PI / 180
-          const cx = scr.x + scr.width / 2
-          const cy = scr.y + scr.height / 2
-          if (el.physical.element_type === "stair") {
-            return { x: cx - Math.cos(rad) * scr.width / 2, y: cy - Math.sin(rad) * scr.width / 2 }
-          }
-          if (el.physical.element_type === "aisle") {
-            return { x: cx + Math.sin(rad) * scr.height / 2, y: cy - Math.cos(rad) * scr.height / 2 }
-          }
-          return undefined
-        })(),
-        selected: el.clientKey === selectedKey,
-      }
-    }), scale, markers ?? [],
-  ), [sorted, interactingKey, vp, selectedKey, scale, markers])
+  const canvasLabels = useMemo(() => {
+    const parentById = new Map(sorted.map(el => [el.physical.id, el]))
+    const aisleParents = new Set(sorted.filter(el => el.physical.element_type === "aisle")
+      .map(el => el.physical.parent_id))
+    return placeCanvasLabels(
+      sorted.filter(el => el.clientKey !== interactingKey).map(el => {
+        const meta = { ...el.physical.meta_json, ...el.geometry.constraints_json, ...el.geometry.meta_json }
+        const parent = el.physical.parent_id == null ? undefined : parentById.get(el.physical.parent_id)
+        const type = el.physical.element_type
+        const rect = metricToScreen({ ...el.geometry, rotation_deg: el.geometry.rotation_deg || 0 }, vp)
+        const rad = rect.rotation * Math.PI / 180
+        const cx = rect.x + rect.width / 2
+        const cy = rect.y + rect.height / 2
+        // Local +X = largo métrico; +Y = profundidad métrica.
+        const entryPoint = type === "stair"
+          ? { x: cx - Math.cos(rad) * rect.width / 2, y: cy - Math.sin(rad) * rect.width / 2 }
+          : type === "aisle"
+            ? { x: cx + Math.sin(rad) * rect.height / 2, y: cy - Math.cos(rad) * rect.height / 2 }
+            : undefined
+        return {
+          key: el.clientKey,
+          code: el.physical.code,
+          type,
+          rect,
+          dimensions: `${el.geometry.width_m.toFixed(2).replace(".", ",")} × ${el.geometry.depth_m.toFixed(2).replace(".", ",")} m`,
+          underStair: type === "position" && (meta.under_stair === true || parent?.physical.element_type === "stair"),
+          sectorWithAisles: type === "sector" && aisleParents.has(el.physical.id),
+          parentKey: parent?.clientKey,
+          entryPoint,
+          selected: el.clientKey === selectedKey,
+        }
+      }), scale, markers ?? [],
+    )
+  }, [sorted, interactingKey, vp, selectedKey, scale, markers])
 
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault()
@@ -324,7 +325,8 @@ export function WarehouseCanvas({
             const cx = scr.x + scr.width / 2
             const cy = scr.y + scr.height / 2
             const type = el.physical.element_type
-            const underStair = type === "position" && mergedMeta.under_stair === true
+            const underStair = type === "position" && (mergedMeta.under_stair === true ||
+              sorted.some(parent => parent.physical.id === el.physical.parent_id && parent.physical.element_type === "stair"))
             const isStair = type === "stair"
             const isLoose = type === "loose_storage"
             // Los colores semánticos de la simbología se mantienen. Sólo se
@@ -471,6 +473,12 @@ export function WarehouseCanvas({
                     fill="#f8fafc" stroke="#cbd5e1" strokeWidth={0.7 / scale}
                     cornerRadius={3 / scale} listening={false} />
                 </>
+              ) : null}
+              {label.special && !label.callout ? (
+                // El fondo compacto evita que los peldaños reduzcan legibilidad;
+                // pertenece a la capa de etiquetas, no al área seleccionable.
+                <Rect x={label.x} y={label.y} width={label.width} height={label.height}
+                  fill="#fff7ed" opacity={0.92} cornerRadius={2 / scale} listening={false} />
               ) : null}
               <Text x={label.x} y={label.y + label.paddingY} width={label.width}
                 height={label.fontSize * 1.3} text={label.text} align="center" verticalAlign="middle"

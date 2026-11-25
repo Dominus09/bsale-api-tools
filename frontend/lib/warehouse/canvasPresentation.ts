@@ -183,7 +183,7 @@ export function placeCanvasLabels(
     const populated = childBoxes.length > 0
     const isSectorWithPositions = item.type === "sector" && populated
     const fullText = stair ? item.code + " · 2° piso" : item.code
-    const compactText = position ? compactPositionCode(item.code) : stair ? item.code : item.code
+    const compactText = position ? compactPositionCode(item.code) : item.code
     const defaultFont = position ? 10 : stair ? 11 : aisle ? 14 : 12
     const subtitleSize = (stair ? 9 : 10) * unit
     // Las cajas físicas son reserva sólo para etiquetas de contenedores y llamadas;
@@ -253,11 +253,8 @@ export function placeCanvasLabels(
         if (tryOutside(fullText, undefined, defaultFont, 3, sides, bounds)) continue
       }
       if (compactText !== fullText && tryLabel(center, compactText, undefined, special ? 9 : 8.5, 1.5)) continue
-      if (special && !item.selected) {
-        // A escala extremadamente reducida no crear llamadas individuales
-        // que puedan asociarse al BAE incorrecto. La etiqueta de ESC conserva el contexto.
-        continue
-      }
+      // A escala extremadamente reducida no crear llamadas individuales
+      // que puedan asociarse al BAE incorrecto. La etiqueta de ESC conserva el contexto.
       continue
     }
 
