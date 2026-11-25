@@ -38,7 +38,9 @@ function overlaps(
   a: { minX: number; minY: number; maxX: number; maxY: number },
   b: { minX: number; minY: number; maxX: number; maxY: number },
 ): boolean {
-  return !(a.maxX <= b.minX || b.maxX <= a.minX || a.maxY <= b.minY || b.maxY <= a.minY)
+  // Igual tolerancia numérica que SAT del backend (metros); un borde compartido no solapa.
+  const eps = 1e-9
+  return !(a.maxX <= b.minX + eps || b.maxX <= a.minX + eps || a.maxY <= b.minY + eps || b.maxY <= a.minY + eps)
 }
 
 function isAncestor(child: WarehouseElement, ancestorId: number, all: WarehouseElement[]): boolean {
