@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "auth": "jwt_create_staff_token+require_management_access+require_erp_app",
+  "steps": [
+    {
+      "deny_non_mgmt": 403
+    },
+    {
+      "deny_anon": 401
+    },
+    {
+      "facilities": 200
+    },
+    {
+      "draft": 1,
+      "status": "draft"
+    },
+    {
+      "seed_can_publish": false,
+      "blockers": 2
+    },
+    {
+      "seed_publish_rejected": 400
+    },
+    {
+      "get_revision": 200,
+      "elements": 17
+    },
+    {
+      "audit": 200,
+      "items": 2
+    },
+    {
+      "batch_409": 409
+    }
+  ]
+}

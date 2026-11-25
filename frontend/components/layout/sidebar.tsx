@@ -160,6 +160,16 @@ const navSections: { title: string; items: NavItem[] }[] = [
     ],
   },
   {
+    title: "Inteligencia de Bodega",
+    items: [
+      {
+        href: "/inteligencia-bodega",
+        label: "Editor Maestro de Bodegas",
+        icon: Warehouse,
+      },
+    ],
+  },
+  {
     title: "Operaciones",
     items: [
       { href: "/operaciones/dashboard", label: "Panel operaciones", icon: LayoutDashboard },
@@ -282,6 +292,10 @@ function buildNavSectionsForRole(
         return true
       })
       return [{ ...section, items }]
+    }
+    if (section.title === "Inteligencia de Bodega") {
+      if (!management) return []
+      return [section]
     }
     return [section]
   })

@@ -22,6 +22,7 @@ from backend.routers.catalog_v2_preview import router as catalog_v2_preview_rout
 from backend.routers import alerts
 from backend.routers import analytics_v2
 from backend.routers import gondolas
+from backend.routers import warehouse
 from backend.routers import companies
 from backend.routers import dashboard
 from backend.routers import distribuidora
@@ -154,6 +155,8 @@ app.include_router(margin_export.router)
 # --- Analítica V2 (BSALE RAW, solo lectura; en paralelo a los módulos legacy) ---
 app.include_router(analytics_v2.router)
 app.include_router(gondolas.router)
+# Inteligencia de Bodega (layout físico; schema warehouse; sin stock Bsale).
+app.include_router(warehouse.router)
 
 # --- Distribuidora ---
 app.include_router(distribuidora.router)

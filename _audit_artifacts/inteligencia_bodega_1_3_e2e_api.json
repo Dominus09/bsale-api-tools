@@ -1,0 +1,40 @@
+{
+  "steps": [
+    {
+      "health": 200
+    },
+    {
+      "deny_403": true
+    },
+    {
+      "loaded_bc": true,
+      "rev": 1,
+      "p2": 8
+    },
+    {
+      "preview_4_5": 9
+    },
+    {
+      "saved": true,
+      "version": 2
+    },
+    {
+      "persisted_reload": true
+    },
+    {
+      "audit": true
+    },
+    {
+      "validate": {
+        "integrity_error": 0,
+        "geom_conflict": 3,
+        "warning": 0,
+        "pending_validation": 19
+      }
+    },
+    {
+      "conflict_409": true
+    }
+  ],
+  "ok": true
+}
