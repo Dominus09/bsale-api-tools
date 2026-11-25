@@ -539,18 +539,23 @@ export function WarehouseEditor() {
   }
 
   const applyGeneratorPreview = (preview: GeneratePreviewResult) => {
-    if (!selected || !editable) return
-    const parentId = selected.physical.id > 0 ? selected.physical.id : selected.physical.parent_id
+    if (!selected || !editable || selected.physical.id <= 0 || preview.can_incorporate !== true) return
+    const parentId = selected.physical.id
+    if (preview.positions.some((p) => p.parent_code !== selected.physical.code)) {
+      setError("La vista previa pertenece a otro sector. Genere una nueva.")
+      return
+    }
     let nextTmp = tmpId
     const existingCodes = new Set(
       elements.filter((e) => !e.pendingRetire).map((e) => e.physical.code.toLowerCase()),
     )
+    const proposedCodes = preview.positions.map((p) => p.code.toLowerCase())
+    if (new Set(proposedCodes).size !== proposedCodes.length || proposedCodes.some((code) => existingCodes.has(code))) {
+      setError("Existen códigos duplicados. No se incorporó ninguna posición.")
+      return
+    }
     const created: WarehouseElement[] = []
     for (const p of preview.positions) {
-      if (existingCodes.has(p.code.toLowerCase())) {
-        // No sustituir posiciones ya registradas
-        continue
-      }
       const id = nextTmp
       nextTmp -= 1
       const g = p.geometry as WarehouseElement["geometry"]

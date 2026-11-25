@@ -13,6 +13,7 @@ from backend.services.warehouse.coordinates import (
     VALIDATION_STATUSES,
 )
 from backend.services.warehouse.generator import PRESETS, generate_positions, verify_reference_calcs
+from backend.services.warehouse.geometry import rects_overlap
 from backend.services.warehouse.validation import validate_layout
 from backend.services.warehouse.errors import (
     WarehouseConflictError,
@@ -83,9 +84,26 @@ class WarehouseLayoutService:
         floor_length = config.get("floor_length_m")
         floor_width = config.get("floor_width_m")
 
-        # Validar preview contra contexto
+        # existing_elements ya incluye normalmente las estructuras enviadas en
+        # obstacles. Deduplicar sólo la misma identidad (o el mismo registro sin ID).
+        context = []
+        seen = set()
+        for el in [*existing, *obstacles]:
+            if el.get("pendingRetire") or el.get("pendingRemoveGeometry"):
+                continue
+            physical = el.get("physical") or el
+            pid = physical.get("id")
+            key = ("id", pid) if pid is not None else ("anonymous", repr(el))
+            if key in seen:
+                continue
+            seen.add(key)
+            context.append(el)
+
         synthetic = []
-        for p in preview["positions"]:
+        refs = {}
+        for index, p in enumerate(preview["positions"]):
+            ref = f"generator-preview:{index}"
+            refs[ref] = p["code"]
             synthetic.append(
                 {
                     "physical": {
@@ -95,21 +113,73 @@ class WarehouseLayoutService:
                         "parent_id": config.get("parent_physical_id"),
                     },
                     "geometry": p["geometry"],
-                    "clientKey": p["code"],
+                    "clientKey": ref,
                 }
             )
-        ctx = list(existing) + list(obstacles) + synthetic
         report = validate_layout(
-            ctx,
+            context + synthetic,
             floor_length_m=float(floor_length) if floor_length is not None else None,
             floor_width_m=float(floor_width) if floor_width is not None else None,
         )
-        # Filtrar issues solo relevantes a posiciones nuevas cuando sea posible
+        new_codes = set(refs.values())
+        relevant = []
+        for issue in report["issues"]:
+            codes = set()
+            ref = str(issue.get("element_ref"))
+            if ref in refs:
+                codes.add(refs[ref])
+            if issue.get("other_code") in new_codes:
+                codes.add(issue["other_code"])
+            if issue.get("code") == "duplicate_code" and issue.get("element_code") in new_codes:
+                codes.add(issue["element_code"])
+            if not codes:
+                continue
+            relevant.append({**issue, "generated_codes": sorted(codes)})
+
+        for code in preview["margin_conflict_codes"]:
+            relevant.append({
+                "severity": "geom_conflict",
+                "code": "reserved_margin",
+                "message": f"{code} invade un margen reservado de la propuesta.",
+                "generated_codes": [code],
+            })
+        # Un pasillo puede proponer extensión hacia circulación, pero no colocar
+        # candidatos dentro de otro pasillo de almacenamiento.
+        if (config.get("parent") or {}).get("element_type") == "aisle":
+            for el in context:
+                physical = el.get("physical") or el
+                if physical.get("element_type") != "aisle" or physical.get("id") == config.get("parent_physical_id"):
+                    continue
+                for p in preview["positions"]:
+                    if rects_overlap(p["geometry"], el.get("geometry") or el):
+                        relevant.append({
+                            "severity": "geom_conflict",
+                            "code": "other_aisle_collision",
+                            "message": f'{p["code"]} invade el pasillo {physical.get("code")}.',
+                            "generated_codes": [p["code"]],
+                            "other_code": physical.get("code"),
+                        })
+
+        # Conservar el informe completo como diagnóstico, pero no atribuir a la
+        # generación los conflictos previos de BAE/ESC u otros sectores.
         preview["validation"] = report
-        circ = [i for i in report["issues"] if i.get("code") == "circulation_invasion"]
-        obst = [i for i in report["issues"] if i.get("code") in ("structure_collision", "storage_overlap")]
+        preview["position_issues"] = relevant
+        circ = [i for i in relevant if i.get("code") == "circulation_invasion"]
+        obst = [i for i in relevant if i.get("code") in ("structure_collision", "storage_overlap")]
+        blockers = [i for i in relevant if i.get("severity") in ("geom_conflict", "integrity_error")]
+        extension = preview["extension_outside_parent_m"] > 1e-6
+        if (extension or circ) and not config.get("allow_outside_parent"):
+            blockers.append({
+                "severity": "geom_conflict",
+                "code": "outside_not_allowed",
+                "message": "La propuesta invade circulación o sale del límite del sector. Ajuste las filas/márgenes.",
+                "generated_codes": sorted(set(preview["outside_parent_codes"]) | {c for i in circ for c in i["generated_codes"]}),
+            })
         preview["obstacle_conflicts"] = obst
         preview["circulation_warnings"] = circ
+        preview["blocking_issues"] = blockers
+        preview["can_incorporate"] = bool(preview["positions"]) and not blockers
+        preview["requires_extension_ack"] = bool(extension or circ)
         return preview
 
     def validate_revision_elements(

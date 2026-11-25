@@ -97,10 +97,24 @@ export async function saveWarehouseBatch(
   })
 }
 
+export type GeneratePositionIssue = {
+  severity: string
+  code: string
+  message: string
+  generated_codes?: string[]
+  element_code?: string
+  other_code?: string
+}
+
 export type GeneratePreviewResult = {
   preview: boolean
   persists: boolean
   preset: string
+  row_axis?: "x" | "y"
+  can_incorporate?: boolean
+  requires_extension_ack?: boolean
+  position_issues?: GeneratePositionIssue[]
+  blocking_issues?: GeneratePositionIssue[]
   position_count: number
   occupied_area_m2: number
   interior_gap_m: number | null
