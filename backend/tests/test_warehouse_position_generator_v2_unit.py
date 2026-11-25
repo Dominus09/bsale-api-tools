@@ -144,3 +144,27 @@ def test_proposal_geometry_does_not_mutate_context():
     for i, a in enumerate(out["positions"]):
         for b in out["positions"][i+1:]:
             assert not rects_overlap(a["geometry"], b["geometry"])
+
+
+def test_margin_reserved_even_if_extension_is_allowed():
+    iz = element(1, "IZ", "sector", IZ)
+    result = service().preview_generate_positions(config(
+        row_counts=[17, 17], existing_elements=[iz], allow_outside_parent=True,
+    ))
+    # 17×1.26 + 16×.05 + .05 = 22.27, within the floor, but
+    # not within the reserved 1.26 m rear margin.
+    assert result["extension_outside_parent_m"] == 0
+    assert result["can_incorporate"] is False
+    assert any(i["code"] == "reserved_margin" for i in result["blocking_issues"])
+
+
+def test_extension_into_another_aisle_is_blocked():
+    p = {**rect(2.8, 7.35, 2.8, 6), "code": "P1", "element_type": "aisle"}
+    adjacent = element(12, "P2", "aisle", rect(5.6, 7.35, 2.8, 6))
+    result = service().preview_generate_positions(dict(
+        parent=p, parent_physical_id=11, row_axis="y", row_counts=[1, 1, 1],
+        anchor="end", existing_elements=[element(11, "P1", "aisle", p), adjacent],
+        floor_length_m=23.1, floor_width_m=13.7, allow_outside_parent=True,
+    ))
+    assert result["can_incorporate"] is False
+    assert any(i["code"] == "other_aisle_collision" for i in result["blocking_issues"])

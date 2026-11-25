@@ -86,6 +86,9 @@ function metricRequest(form: FormState, parent: WarehouseElement, existing: Ware
   const rowCounts = form.rows.split(/[,\s+]+/).filter(Boolean).map(Number)
   const rowOrientations = form.rowOrientations.split(/[,\s]+/).filter(Boolean)
   const paired = parent.physical.code === "IZ" && form.axis === "x"
+  if (paired && !(Number(form.rows.split(",")[0]) > 0)) {
+    throw new Error("Indique al menos la cantidad de la fila delantera D; puede dejar A vacía.")
+  }
   if (!rowCounts.length || rowCounts.some(n => !Number.isInteger(n) || n <= 0) ||
       rowCounts.length > 50 || rowCounts.reduce((s, n) => s + n, 0) > 500 ||
       (paired && rowCounts.length > 2)) {
@@ -284,7 +287,7 @@ export function GeneratePositionsDialog({ open, onOpenChange, parent, floorLengt
                     <>
                       <div className="grid grid-cols-2 gap-2">
                         <Field label="Fila delantera (D)" value={rows[0] ?? ""} onChange={v => setPair(0, v)} integer />
-                        <Field label="Fila trasera (A)" value={rows[1] ?? ""} onChange={v => setPair(1, v)} integer />
+                        <Field label="Fila trasera (A, opcional)" value={rows[1] ?? ""} onChange={v => setPair(1, v)} integer />
                       </div>
                       <p className="text-xs text-slate-500">D junto a circulación; A junto al muro izquierdo. Numeración emparejada desde la entrada. IZ-SU se conserva como zona de sueltos.</p>
                     </>

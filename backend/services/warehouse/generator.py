@@ -82,13 +82,10 @@ def _pallet_dims_for_row(
     base_width: float,
     orientation: str,
 ) -> tuple[float, float]:
-    """Devuelve (along_longitudinal / Y del padre, along_transverse / X del padre).
+    """Devuelve (dimensión sobre eje de fila, dimensión entre filas).
 
-    Convención generador sobre un sector/pasillo alineado a ejes:
-    - Eje longitudinal del padre = +Y (depth_m del padre) → posiciones en fila crecen en Y.
-    - Eje transversal = +X (width_m del padre) → filas paralelas crecen en X.
-    orientation 'standard': pallet length (1.26) en Y, width (1.06) en X.
-    orientation 'rotated': pallet width (1.06) en Y, length (1.26) en X.
+    El mapeo a X/Y se realiza en generate_positions. 'standard' pone el
+    lado largo en el eje de fila; 'rotated' intercambia largo y ancho.
     """
     if orientation == "rotated":
         return base_width, base_length  # along Y, along X
@@ -280,6 +277,25 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
     extension_y_m = max(0.0, max_y - (py + depth_y), py - min_y)
     extension_x_m = max(0.0, max_x - (px + width_x), px - min_x)
     extension_m = max(extension_y_m, extension_x_m)
+    outside_parent_codes = []
+    margin_conflict_codes = []
+    # Evaluar cada posición, no sólo el tamaño agregado de la propuesta.
+    # Usar la precisión de la geometría generada (4 decimales).
+    eps = 0.0001
+    for p in positions:
+        geom = p["geometry"]
+        x0, y0 = geom["x_m"] - px, geom["y_m"] - py
+        x1, y1 = x0 + geom["width_m"], y0 + geom["depth_m"]
+        along0, along1, across0, across1 = (x0, x1, y0, y1) if axis == "x" else (y0, y1, x0, x1)
+        if along0 < -eps or along1 > pd + eps or across0 < -eps or across1 > pw + eps:
+            outside_parent_codes.append(p["code"])
+        if (
+            (m_start > 0 and along0 < m_start - eps)
+            or (m_end > 0 and along1 > pd - m_end + eps)
+            or (m_near > 0 and across0 < m_near - eps)
+            or (m_far > 0 and across1 > pw - m_far + eps)
+        ):
+            margin_conflict_codes.append(p["code"])
 
     # Separación interior entre filas (si 2+) y holgura transversal residual en el padre
     interior_gap_m = None
@@ -319,6 +335,8 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
         "interior_gap_m": interior_gap_m,
         "remaining_transverse_m": remaining_transverse_m,
         "extension_outside_parent_m": round(extension_m, 4),
+        "outside_parent_codes": outside_parent_codes,
+        "margin_conflict_codes": margin_conflict_codes,
         "positions": positions,
         "warnings": warnings,
         "reference_calcs": REFERENCE_CALCS,

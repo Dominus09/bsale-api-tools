@@ -13,6 +13,7 @@ from backend.services.warehouse.coordinates import (
     VALIDATION_STATUSES,
 )
 from backend.services.warehouse.generator import PRESETS, generate_positions, verify_reference_calcs
+from backend.services.warehouse.geometry import rects_overlap
 from backend.services.warehouse.validation import validate_layout
 from backend.services.warehouse.errors import (
     WarehouseConflictError,
@@ -135,6 +136,30 @@ class WarehouseLayoutService:
                 continue
             relevant.append({**issue, "generated_codes": sorted(codes)})
 
+        for code in preview["margin_conflict_codes"]:
+            relevant.append({
+                "severity": "geom_conflict",
+                "code": "reserved_margin",
+                "message": f"{code} invade un margen reservado de la propuesta.",
+                "generated_codes": [code],
+            })
+        # Un pasillo puede proponer extensión hacia circulación, pero no colocar
+        # candidatos dentro de otro pasillo de almacenamiento.
+        if (config.get("parent") or {}).get("element_type") == "aisle":
+            for el in context:
+                physical = el.get("physical") or el
+                if physical.get("element_type") != "aisle" or physical.get("id") == config.get("parent_physical_id"):
+                    continue
+                for p in preview["positions"]:
+                    if rects_overlap(p["geometry"], el.get("geometry") or el):
+                        relevant.append({
+                            "severity": "geom_conflict",
+                            "code": "other_aisle_collision",
+                            "message": f'{p["code"]} invade el pasillo {physical.get("code")}.',
+                            "generated_codes": [p["code"]],
+                            "other_code": physical.get("code"),
+                        })
+
         # Conservar el informe completo como diagnóstico, pero no atribuir a la
         # generación los conflictos previos de BAE/ESC u otros sectores.
         preview["validation"] = report
@@ -148,7 +173,7 @@ class WarehouseLayoutService:
                 "severity": "geom_conflict",
                 "code": "outside_not_allowed",
                 "message": "La propuesta invade circulación o sale del límite del sector. Ajuste las filas/márgenes.",
-                "generated_codes": sorted({c for i in circ for c in i["generated_codes"]}),
+                "generated_codes": sorted(set(preview["outside_parent_codes"]) | {c for i in circ for c in i["generated_codes"]}),
             })
         preview["obstacle_conflicts"] = obst
         preview["circulation_warnings"] = circ
