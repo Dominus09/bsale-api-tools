@@ -39,6 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { PropertiesPanel } from "@/components/warehouse/PropertiesPanel"
 import { SymbologyDialog } from "@/components/warehouse/SymbologyDialog"
 import { GeneratePositionsDialog } from "@/components/warehouse/GeneratePositionsDialog"
+import { AisleSpacingDialog } from "@/components/warehouse/AisleSpacingDialog"
 import { PublishDialog } from "@/components/warehouse/PublishDialog"
 import { VersionHistoryDialog } from "@/components/warehouse/VersionHistoryDialog"
 import { PrintLayoutSheet } from "@/components/warehouse/PrintLayoutSheet"
@@ -148,6 +149,7 @@ export function WarehouseEditor() {
   const [conflictMsg, setConflictMsg] = useState<string | null>(null)
   const [symbologyOpen, setSymbologyOpen] = useState(false)
   const [generatorOpen, setGeneratorOpen] = useState(false)
+  const [spacingOpen, setSpacingOpen] = useState(false)
   const [catalog, setCatalog] = useState<SymbologyCatalog | null>(null)
   const [fitRequest, setFitRequest] = useState(0)
   const [viewOrientationDeg, setViewOrientationDeg] = useState<ViewOrientationDeg>(0)
@@ -174,6 +176,9 @@ export function WarehouseEditor() {
   const floorWidthM = Number(floor?.width_m) || 13.7
   const isDraft = revision?.status === "draft" && !readOnly
   const editable = isDraft
+  const spacingSector = facility?.code === "BC" && floor?.code === "PISO1"
+    ? elements.find(e => e.physical.code === "DER" && e.physical.element_type === "sector" && !e.pendingRetire && !e.pendingRemoveGeometry)
+    : undefined
 
   const issues = useMemo(
     () => validateElements(elements, { length_m: floorLengthM, width_m: floorWidthM }),
@@ -826,6 +831,13 @@ export function WarehouseEditor() {
             <Grid2x2 className="mr-1.5 h-4 w-4" />
             Generar posiciones
           </Button>
+          {spacingSector ? (
+            <Button type="button" variant="outline" size="sm" disabled={!editable || saving || loading}
+              title="Ajustar separación B entre filas de pasillos vecinos sin regenerar posiciones"
+              onClick={() => setSpacingOpen(true)}>
+              <Ruler className="mr-1.5 h-4 w-4" /> Separación pasillos
+            </Button>
+          ) : null}
           <Button type="button" variant="outline" size="sm" onClick={() => setSymbologyOpen(true)}>
             <BookOpen className="mr-1.5 h-4 w-4" />
             Simbología
@@ -1052,6 +1064,28 @@ export function WarehouseEditor() {
         existing={visibleElements}
         onConfirm={applyGeneratorPreview}
       />
+      {spacingOpen && spacingSector && revision && editable ? (
+        <AisleSpacingDialog
+          key={revision.id + ":" + revision.row_version + ":" + spacingSector.physical.id}
+          revisionId={revision.id}
+          sectorId={spacingSector.physical.id}
+          elements={elements}
+          floorLengthM={floorLengthM}
+          floorWidthM={floorWidthM}
+          onClose={() => setSpacingOpen(false)}
+          onApply={(next, source, revisionId) => {
+            if (!editable || saving || elements !== source || revision.id !== revisionId) {
+              setError("El borrador cambió durante la validación. Abra nuevamente la herramienta.")
+              setSpacingOpen(false)
+              return
+            }
+            pushHistory(next)
+            setError(null)
+            setServerIssues([])
+            setSpacingOpen(false)
+          }}
+        />
+      ) : null}
       <PublishDialog
         open={publishOpen}
         evaluating={evaluatingPublish}
