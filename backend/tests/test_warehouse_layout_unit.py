@@ -15,7 +15,9 @@ from backend.services.warehouse.coordinates import (
 def test_coordinate_convention_meters_not_pixels():
     assert COORDINATE_CONVENTION["units"] == "meters"
     assert COORDINATE_CONVENTION["pixels"] == "never_source_of_truth"
-    assert "southwest" in COORDINATE_CONVENTION["origin"]
+    assert "entrance" in COORDINATE_CONVENTION["origin"]
+    assert "longitudinal" in COORDINATE_CONVENTION["screen_default"]
+    assert "display_only" in COORDINATE_CONVENTION["view_orientation"]
 
 
 def test_symbology_catalog_prepared_for_1_2():

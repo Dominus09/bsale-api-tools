@@ -2,25 +2,29 @@
 
 import type { WarehouseElementType } from "@/lib/warehouse/types"
 
+/** Saturación reducida para sectores grandes; estructuras/posiciones más definidas. */
 export const LAYOUT_COLORS = {
-  facility_boundary: { fill: "rgba(15,23,42,0.04)", stroke: "#0f172a" },
-  sector: { fill: "rgba(37,99,235,0.12)", stroke: "#2563eb" },
-  position: { fill: "rgba(14,165,233,0.35)", stroke: "#0284c7" },
-  loose_storage: { fill: "rgba(234,179,8,0.35)", stroke: "#a16207" },
-  special_storage: { fill: "rgba(249,115,22,0.28)", stroke: "#c2410c" },
-  aisle: { fill: "rgba(99,102,241,0.16)", stroke: "#4f46e5" },
-  circulation: { fill: "rgba(148,163,184,0.22)", stroke: "#64748b" },
-  structure: { fill: "rgba(100,116,139,0.35)", stroke: "#475569" },
-  office: { fill: "rgba(245,158,11,0.25)", stroke: "#d97706" },
-  stair: { fill: "rgba(168,85,247,0.22)", stroke: "#7c3aed" },
-  gate: { fill: "rgba(34,197,94,0.35)", stroke: "#16a34a" },
-  door: { fill: "rgba(34,197,94,0.28)", stroke: "#15803d" },
+  facility_boundary: { fill: "rgba(15,23,42,0.02)", stroke: "#334155" },
+  sector: { fill: "rgba(37,99,235,0.06)", stroke: "#3b82f6" },
+  position: { fill: "rgba(14,165,233,0.22)", stroke: "#0284c7" },
+  loose_storage: { fill: "rgba(202,138,4,0.18)", stroke: "#a16207" },
+  special_storage: { fill: "rgba(234,88,12,0.16)", stroke: "#c2410c" },
+  aisle: { fill: "rgba(99,102,241,0.10)", stroke: "#6366f1" },
+  circulation: { fill: "rgba(148,163,184,0.12)", stroke: "#64748b" },
+  structure: { fill: "rgba(100,116,139,0.28)", stroke: "#475569" },
+  office: { fill: "rgba(217,119,6,0.16)", stroke: "#b45309" },
+  stair: { fill: "rgba(126,34,206,0.14)", stroke: "#7c3aed" },
+  gate: { fill: "rgba(22,163,74,0.28)", stroke: "#15803d" },
+  door: { fill: "rgba(22,163,74,0.20)", stroke: "#166534" },
   selection: { stroke: "#ea580c", strokeWidth: 2.5 },
   pending_validation: { dash: [6, 4] as number[], badge: "#f59e0b" },
   extends_outside: { stroke: "#db2777", dash: [2, 3] as number[] },
-  geom_conflict: { stroke: "#dc2626", fill: "rgba(220,38,38,0.18)" },
+  geom_conflict: { stroke: "#dc2626", fill: "rgba(220,38,38,0.14)" },
   grid: "#e2e8f0",
-  background: "#f8fafc",
+  background: "#f1f5f9",
+  label: "#0f172a",
+  labelMuted: "#475569",
+  marker: "#1e293b",
 } as const
 
 const STRUCTURE_TYPES = new Set<WarehouseElementType>([
@@ -57,6 +61,29 @@ export function colorsForType(
   if (type === "door") return LAYOUT_COLORS.door
   if (STRUCTURE_TYPES.has(type)) return LAYOUT_COLORS.structure
   return LAYOUT_COLORS.structure
+}
+
+/** Prioridad de etiqueta: evita que sectores grandes tapen códigos de pasillos/estructuras. */
+export function labelPriority(type: WarehouseElementType): number {
+  if (type === "facility_boundary") return 0
+  if (type === "sector" || type === "circulation") return 1
+  if (type === "aisle") return 2
+  if (type === "office" || type === "stair" || type === "gate" || type === "door") return 3
+  if (type === "loose_storage" || type === "position") return 4
+  return 3
+}
+
+export function shouldShowDimensions(
+  type: WarehouseElementType,
+  screenW: number,
+  screenH: number,
+): boolean {
+  if (type === "facility_boundary") return false
+  if (type === "sector" || type === "circulation") {
+    return screenW > 56 && screenH > 40
+  }
+  if (type === "aisle") return screenW > 36 && screenH > 48
+  return screenW > 44 && screenH > 32
 }
 
 export const ELEMENT_TYPE_LABELS_ES: Record<WarehouseElementType, string> = {

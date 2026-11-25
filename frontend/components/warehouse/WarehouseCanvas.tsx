@@ -7,12 +7,23 @@ import type { WarehouseElement, EditorTool } from "@/lib/warehouse/types"
 import {
   fitOffsets,
   fitScale,
+  metricPointToScreen,
   metricToScreen,
+  nextViewOrientation,
+  screenPointToMetric,
   screenToMetric,
   snapToGrid,
+  viewContentSize,
+  viewOrientationLabel,
+  type ViewOrientationDeg,
   type ViewportTransform,
 } from "@/lib/warehouse/coords"
-import { LAYOUT_COLORS, colorsForType } from "@/lib/warehouse/style"
+import {
+  LAYOUT_COLORS,
+  colorsForType,
+  labelPriority,
+  shouldShowDimensions,
+} from "@/lib/warehouse/style"
 
 type Props = {
   elements: WarehouseElement[]
@@ -26,6 +37,8 @@ type Props = {
   onChangeElement: (key: string, patch: Partial<WarehouseElement["geometry"]>) => void
   onCreateAt: (x_m: number, y_m: number) => void
   fitRequest?: number
+  viewOrientationDeg?: ViewOrientationDeg
+  onViewOrientationChange?: (deg: ViewOrientationDeg) => void
 }
 
 export function WarehouseCanvas({
@@ -40,6 +53,8 @@ export function WarehouseCanvas({
   onChangeElement,
   onCreateAt,
   fitRequest = 0,
+  viewOrientationDeg = 0,
+  onViewOrientationChange,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
@@ -69,8 +84,8 @@ export function WarehouseCanvas({
   }, [])
 
   const recomputeFit = () => {
-    const s = fitScale(floorLengthM, floorWidthM, size.w, size.h, 40)
-    const off = fitOffsets(floorLengthM, floorWidthM, size.w, size.h, s)
+    const s = fitScale(floorLengthM, floorWidthM, size.w, size.h, 48, viewOrientationDeg)
+    const off = fitOffsets(floorLengthM, floorWidthM, size.w, size.h, s, viewOrientationDeg)
     setBase({ scale: s, offsetX: off.offsetX, offsetY: off.offsetY })
     setScale(1)
     setStagePos({ x: 0, y: 0 })
@@ -79,17 +94,21 @@ export function WarehouseCanvas({
   useEffect(() => {
     recomputeFit()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [floorLengthM, floorWidthM, size.w, size.h, fitRequest])
+  }, [floorLengthM, floorWidthM, size.w, size.h, fitRequest, viewOrientationDeg])
 
   const vp: ViewportTransform = useMemo(
     () => ({
       scale: base.scale,
       offsetX: base.offsetX,
       offsetY: base.offsetY,
+      floorLengthM,
       floorWidthM,
+      viewOrientationDeg,
     }),
-    [base, floorWidthM],
+    [base, floorLengthM, floorWidthM, viewOrientationDeg],
   )
+
+  const content = viewContentSize(floorLengthM, floorWidthM, viewOrientationDeg)
 
   useEffect(() => {
     const tr = trRef.current
@@ -106,36 +125,41 @@ export function WarehouseCanvas({
       tr.nodes([node])
       tr.getLayer()?.batchDraw()
     }
-  }, [selectedKey, elements, tool])
+  }, [selectedKey, elements, tool, viewOrientationDeg])
 
   const gridLines = useMemo(() => {
     const lines: Array<{ points: number[] }> = []
     if (!gridM || gridM <= 0) return lines
     for (let x = 0; x <= floorLengthM + 1e-6; x += gridM) {
-      const a = metricToScreen({ x_m: x, y_m: 0, width_m: 0, depth_m: floorWidthM, rotation_deg: 0 }, vp)
-      lines.push({
-        points: [a.x, a.y + a.height, a.x, a.y],
-      })
+      const a = metricPointToScreen(x, 0, vp)
+      const b = metricPointToScreen(x, floorWidthM, vp)
+      lines.push({ points: [a.x, a.y, b.x, b.y] })
     }
     for (let y = 0; y <= floorWidthM + 1e-6; y += gridM) {
-      const a = metricToScreen({ x_m: 0, y_m: y, width_m: floorLengthM, depth_m: 0, rotation_deg: 0 }, vp)
-      lines.push({ points: [a.x, a.y, a.x + a.width, a.y] })
+      const a = metricPointToScreen(0, y, vp)
+      const b = metricPointToScreen(floorLengthM, y, vp)
+      lines.push({ points: [a.x, a.y, b.x, b.y] })
     }
     return lines
   }, [gridM, floorLengthM, floorWidthM, vp])
 
   const sorted = useMemo(() => {
-    const order = (t: string) => {
-      if (t === "facility_boundary") return 0
-      if (t === "sector" || t === "circulation") return 1
-      if (t === "aisle") return 2
-      if (t === "position") return 4
-      return 3
-    }
     return [...elements]
       .filter((e) => !e.pendingRetire && !e.pendingRemoveGeometry)
-      .sort((a, b) => order(a.physical.element_type) - order(b.physical.element_type))
+      .sort(
+        (a, b) =>
+          labelPriority(a.physical.element_type) - labelPriority(b.physical.element_type),
+      )
   }, [elements])
+
+  const markers = useMemo(() => {
+    if (viewOrientationDeg !== 0) return null
+    const front = metricPointToScreen(0.15, floorWidthM / 2, vp)
+    const back = metricPointToScreen(floorLengthM - 0.15, floorWidthM / 2, vp)
+    const left = metricPointToScreen(floorLengthM / 2, 0.2, vp)
+    const right = metricPointToScreen(floorLengthM / 2, floorWidthM - 0.2, vp)
+    return { front, back, left, right }
+  }, [vp, floorLengthM, floorWidthM, viewOrientationDeg])
 
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault()
@@ -158,15 +182,18 @@ export function WarehouseCanvas({
     })
   }
 
-  const screenToMetricPoint = (sx: number, sy: number) => {
-    const x_m = (sx - vp.offsetX) / vp.scale
-    const y_from_top = (sy - vp.offsetY) / vp.scale
-    const y_m = floorWidthM - y_from_top
-    return { x_m, y_m }
+  const localPointer = () => {
+    const stage = stageRef.current
+    const p = stage?.getPointerPosition()
+    if (!p || !stage) return null
+    return {
+      x: (p.x - stage.x()) / stage.scaleX(),
+      y: (p.y - stage.y()) / stage.scaleY(),
+    }
   }
 
   return (
-    <div ref={wrapRef} className="relative h-full w-full overflow-hidden bg-slate-50">
+    <div ref={wrapRef} className="relative h-full w-full overflow-hidden bg-slate-100">
       <Stage
         ref={stageRef}
         width={size.w}
@@ -189,32 +216,22 @@ export function WarehouseCanvas({
               tool === "create_position" ||
               tool === "create_structure"
             ) {
-              const stage = stageRef.current
-              const p = stage?.getPointerPosition()
-              if (!p || !stage) return
-              const local = {
-                x: (p.x - stage.x()) / stage.scaleX(),
-                y: (p.y - stage.y()) / stage.scaleY(),
-              }
-              const m = screenToMetricPoint(local.x, local.y)
+              const local = localPointer()
+              if (!local) return
+              const m = screenPointToMetric(local.x, local.y, vp)
               onCreateAt(snapToGrid(m.x_m, gridM), snapToGrid(m.y_m, gridM))
               return
             }
             if (tool === "measure") {
-              const stage = stageRef.current
-              const p = stage?.getPointerPosition()
-              if (!p || !stage) return
-              const local = {
-                x: (p.x - stage.x()) / stage.scaleX(),
-                y: (p.y - stage.y()) / stage.scaleY(),
-              }
+              const local = localPointer()
+              if (!local) return
               if (!measureRef.current) {
                 measureRef.current = local
                 setMeasureLine(null)
               } else {
                 const a = measureRef.current
-                const m1 = screenToMetricPoint(a.x, a.y)
-                const m2 = screenToMetricPoint(local.x, local.y)
+                const m1 = screenPointToMetric(a.x, a.y, vp)
+                const m2 = screenPointToMetric(local.x, local.y, vp)
                 const dist = Math.hypot(m2.x_m - m1.x_m, m2.y_m - m1.y_m)
                 setMeasureLine({
                   x1: a.x,
@@ -235,15 +252,61 @@ export function WarehouseCanvas({
           <Rect
             x={vp.offsetX}
             y={vp.offsetY}
-            width={floorLengthM * vp.scale}
-            height={floorWidthM * vp.scale}
+            width={content.contentW * vp.scale}
+            height={content.contentH * vp.scale}
             fill={LAYOUT_COLORS.background}
-            stroke="#cbd5e1"
-            strokeWidth={1}
+            stroke="#94a3b8"
+            strokeWidth={1.5}
           />
           {gridLines.map((ln, i) => (
             <Line key={`g-${i}`} points={ln.points} stroke={LAYOUT_COLORS.grid} strokeWidth={1} />
           ))}
+          {markers ? (
+            <>
+              <Text
+                x={markers.front.x - 36}
+                y={markers.front.y + 6}
+                width={72}
+                align="center"
+                text="FRENTE"
+                fontSize={11}
+                fontStyle="bold"
+                fill={LAYOUT_COLORS.marker}
+                listening={false}
+              />
+              <Text
+                x={markers.back.x - 36}
+                y={markers.back.y - 18}
+                width={72}
+                align="center"
+                text="FONDO"
+                fontSize={11}
+                fontStyle="bold"
+                fill={LAYOUT_COLORS.marker}
+                listening={false}
+              />
+              <Text
+                x={markers.left.x - 28}
+                y={markers.left.y - 8}
+                width={56}
+                align="center"
+                text="IZ"
+                fontSize={10}
+                fill={LAYOUT_COLORS.labelMuted}
+                listening={false}
+              />
+              <Text
+                x={markers.right.x - 28}
+                y={markers.right.y - 8}
+                width={56}
+                align="center"
+                text="DER"
+                fontSize={10}
+                fill={LAYOUT_COLORS.labelMuted}
+                listening={false}
+              />
+            </>
+          ) : null}
           {sorted.map((el) => {
             const scr = metricToScreen(
               {
@@ -264,6 +327,15 @@ export function WarehouseCanvas({
             const conflict = conflictKeys?.has(el.clientKey)
             const cx = scr.x + scr.width / 2
             const cy = scr.y + scr.height / 2
+            const type = el.physical.element_type
+            const showCode = type !== "facility_boundary" && (scr.width > 16 || scr.height > 16)
+            // Sectores/circulación: etiqueta discreta para no tapar pasillos/estructuras
+            const sectorQuiet = type === "sector" || type === "circulation"
+            const fontSize = Math.max(
+              sectorQuiet ? 10 : 9,
+              Math.min(sectorQuiet ? 13 : 15, Math.min(scr.width, scr.height) / (sectorQuiet ? 8 : 5)),
+            )
+            const showDims = shouldShowDimensions(type, scr.width, scr.height)
             return (
               <Group
                 key={el.clientKey}
@@ -273,9 +345,7 @@ export function WarehouseCanvas({
                 rotation={scr.rotation}
                 offsetX={scr.width / 2}
                 offsetY={scr.height / 2}
-                draggable={
-                  tool === "move" || (tool === "select" && selected)
-                }
+                draggable={tool === "move" || (tool === "select" && selected)}
                 onClick={(e) => {
                   e.cancelBubble = true
                   onSelect(el.clientKey)
@@ -343,31 +413,31 @@ export function WarehouseCanvas({
                         ? LAYOUT_COLORS.geom_conflict.stroke
                         : colors.stroke
                   }
-                  strokeWidth={selected ? LAYOUT_COLORS.selection.strokeWidth : 1.5}
-                  dash={
-                    pending
-                      ? LAYOUT_COLORS.pending_validation.dash
-                      : colors.dash
-                  }
+                  strokeWidth={selected ? LAYOUT_COLORS.selection.strokeWidth : type === "aisle" ? 1.75 : 1.25}
+                  dash={pending ? LAYOUT_COLORS.pending_validation.dash : colors.dash}
                 />
-                <Text
-                  text={el.physical.code}
-                  width={scr.width}
-                  height={Math.min(18, scr.height)}
-                  y={4}
-                  align="center"
-                  fontSize={Math.max(9, Math.min(14, scr.width / 6))}
-                  fill="#0f172a"
-                  listening={false}
-                />
-                {scr.width > 40 && scr.height > 28 ? (
+                {showCode ? (
+                  <Text
+                    text={el.physical.code}
+                    width={scr.width}
+                    height={Math.min(22, scr.height)}
+                    y={sectorQuiet ? Math.max(4, scr.height * 0.08) : 3}
+                    align="center"
+                    verticalAlign="middle"
+                    fontSize={fontSize}
+                    fontStyle={sectorQuiet ? "normal" : "bold"}
+                    fill={sectorQuiet ? LAYOUT_COLORS.labelMuted : LAYOUT_COLORS.label}
+                    listening={false}
+                  />
+                ) : null}
+                {showDims ? (
                   <Text
                     text={`${el.geometry.width_m.toFixed(2)}×${el.geometry.depth_m.toFixed(2)} m`}
                     width={scr.width}
-                    y={scr.height - 16}
+                    y={scr.height - Math.min(18, scr.height * 0.35)}
                     align="center"
-                    fontSize={9}
-                    fill="#475569"
+                    fontSize={Math.max(8, Math.min(11, scr.width / 10))}
+                    fill={LAYOUT_COLORS.labelMuted}
                     listening={false}
                   />
                 ) : null}
@@ -408,9 +478,20 @@ export function WarehouseCanvas({
           />
         </Layer>
       </Stage>
-      <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-white/90 px-2 py-1 text-[11px] text-slate-600 shadow">
-        Zoom {(scale * 100).toFixed(0)}% · cuadrícula {gridM} m · Y pantalla invertida (entrada abajo)
+      <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-white/95 px-2 py-1 text-[11px] text-slate-600 shadow">
+        Zoom {(scale * 100).toFixed(0)}% · cuadrícula {gridM} m ·{" "}
+        {viewOrientationLabel(viewOrientationDeg)}
       </div>
+      {onViewOrientationChange ? (
+        <button
+          type="button"
+          className="absolute bottom-2 right-2 rounded border border-slate-300 bg-white/95 px-2 py-1 text-[11px] font-medium text-slate-700 shadow hover:bg-slate-50"
+          title="Girar solo la vista (no modifica geometría guardada)"
+          onClick={() => onViewOrientationChange(nextViewOrientation(viewOrientationDeg))}
+        >
+          Girar vista ({viewOrientationDeg}°)
+        </button>
+      ) : null}
     </div>
   )
 }

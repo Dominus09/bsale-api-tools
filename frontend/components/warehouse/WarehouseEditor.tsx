@@ -58,6 +58,7 @@ import {
   type PublishEvaluation,
 } from "@/lib/warehouse/api"
 import { STANDARD_PALLET_M } from "@/lib/warehouse/style"
+import type { ViewOrientationDeg } from "@/lib/warehouse/coords"
 import type {
   EditorTool,
   ElementUpsertPayload,
@@ -149,6 +150,7 @@ export function WarehouseEditor() {
   const [generatorOpen, setGeneratorOpen] = useState(false)
   const [catalog, setCatalog] = useState<SymbologyCatalog | null>(null)
   const [fitRequest, setFitRequest] = useState(0)
+  const [viewOrientationDeg, setViewOrientationDeg] = useState<ViewOrientationDeg>(0)
   const [wide, setWide] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [tmpId, setTmpId] = useState(-1)
@@ -869,7 +871,8 @@ export function WarehouseEditor() {
 
       <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
         Plano provisional seed BC (pending_validation). Oficina, escalera y portón son referencias — no
-        es un plano arquitectónico definitivo. Origen métrico SW; pantalla con entrada abajo.
+        es un plano arquitectónico definitivo. Origen métrico SW (+X largo hacia el fondo, +Y ancho
+        hacia DER). Vista canónica longitudinal: entrada abajo, IZ izquierda.
         Publicar no certifica seguridad ni autoriza apilamiento.
       </div>
 
@@ -992,6 +995,8 @@ export function WarehouseEditor() {
             }}
             onCreateAt={createAt}
             fitRequest={fitRequest}
+            viewOrientationDeg={viewOrientationDeg}
+            onViewOrientationChange={setViewOrientationDeg}
           />
         </main>
 
