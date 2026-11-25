@@ -91,6 +91,8 @@ class GeneratePreviewIn(BaseModel):
 
     parent: dict[str, Any]
     parent_physical_id: int | None = None
+    row_axis: str | None = None
+    auto_row_gap: bool = False
     pallet_length_m: float = 1.26
     pallet_width_m: float = 1.06
     preset: str | None = "custom"

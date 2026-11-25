@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import math
 
 from backend.services.warehouse.geometry import footprint_area_m2, rect_outside_bounds, rects_overlap
 
@@ -69,9 +70,9 @@ def resolve_row_counts(
     key = (preset or "custom").strip()
     if key != "custom" and key in PRESETS and PRESETS[key]:
         return list(PRESETS[key])
-    counts = [int(c) for c in (row_counts or []) if int(c) > 0]
-    if not counts:
-        raise ValueError("Debe indicar preset o row_counts con al menos una fila > 0")
+    counts = list(row_counts or [])
+    if not counts or any(not isinstance(c, int) or isinstance(c, bool) or c <= 0 for c in counts):
+        raise ValueError("Indique conteos enteros positivos por fila")
     return counts
 
 
@@ -100,13 +101,15 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
     Config principal:
     - parent: {x_m,y_m,width_m,depth_m,rotation_deg,code,element_type}
     - pallet_length_m / pallet_width_m (default 1.26/1.06)
+    - row_axis: 'x' (largo de bodega/IZ) o 'y' (pasillo derecho, por defecto)
+    - auto_row_gap: repartir espacio transversal restante entre filas
     - preset | row_counts
     - row_orientations: lista 'standard'|'rotated' por fila (default standard)
     - gap_longitudinal_m / gap_transverse_m
     - margin_start_m / margin_end_m / margin_near_m / margin_far_m
-      (start/end a lo largo de Y; near/far a lo largo de X)
-    - anchor: 'start'|'end' (Y) — default 'start'; 'end' = anclar al fondo (+Y)
-    - grow_rows: 'near_to_far' | 'far_to_near' (eje X)
+      (start/end en eje de filas; near/far en el otro eje, coordenadas bajas/altas)
+    - anchor: 'start'|'end' — default 'start'; 'end' = anclar al extremo alto
+    - grow_rows: 'near_to_far' | 'far_to_near' (eje transversal)
     - code_prefix, code_suffix_mode: 'numeric' | 'iz_da' (D/A)
     - start_index, height_clear_m, constraints_json, observations
     - allow_outside_parent: bool
@@ -114,27 +117,37 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
     parent = config.get("parent") or {}
     px = float(parent["x_m"])
     py = float(parent["y_m"])
-    pw = float(parent["width_m"])
-    pd = float(parent["depth_m"])
+    width_x = float(parent["width_m"])
+    depth_y = float(parent["depth_m"])
     prot = float(parent.get("rotation_deg") or 0)
-    if abs(prot) > 1e-6:
-        # Generación axis-aligned al padre; padres rotados → coordenadas locales
-        # se proyectan asumiendo padre sin rotación (documentado como limitación 1.3).
-        pass
+    if not all(math.isfinite(v) for v in (px, py, width_x, depth_y, prot)) or min(width_x, depth_y) <= 0:
+        raise ValueError("Geometría del sector inválida")
+    if abs(prot % 360) > 1e-6 and abs(prot % 360 - 360) > 1e-6:
+        raise ValueError("El generador requiere un sector alineado a los ejes. Ajuste su rotación primero.")
 
-    pallet_l = float(config.get("pallet_length_m") or STANDARD_PALLET_M["length"])
-    pallet_w = float(config.get("pallet_width_m") or STANDARD_PALLET_M["width"])
-    if pallet_l <= 0 or pallet_w <= 0:
-        raise ValueError("Dimensiones de pallet deben ser > 0")
+    # Mantener la semántica histórica de P1-P7: filas en +Y.
+    # IZ recorre el largo de bodega (+X); sus filas paralelas se separan en Y.
+    axis = config.get("row_axis") or ("x" if parent.get("code") == "IZ" else "y")
+    if axis not in ("x", "y"):
+        raise ValueError("Eje de filas inválido")
+    pw, pd = (depth_y, width_x) if axis == "x" else (width_x, depth_y)
+    pallet_l = float(config.get("pallet_length_m", STANDARD_PALLET_M["length"]))
+    pallet_w = float(config.get("pallet_width_m", STANDARD_PALLET_M["width"]))
+    if not all(math.isfinite(v) and v > 0 for v in (pallet_l, pallet_w)):
+        raise ValueError("Dimensiones de pallet deben ser finitas y > 0")
 
     row_counts = resolve_row_counts(
         preset=config.get("preset"),
         row_counts=config.get("row_counts"),
     )
     n_rows = len(row_counts)
+    if n_rows > 50 or sum(row_counts) > 500:
+        raise ValueError("Máximo 50 filas y 500 posiciones por generación")
     orients = list(config.get("row_orientations") or [])
     while len(orients) < n_rows:
         orients.append(config.get("default_orientation") or "standard")
+    if len(orients) != n_rows or any(o not in ("standard", "rotated") for o in orients):
+        raise ValueError("Orientaciones por fila inválidas")
 
     gap_long = float(config.get("gap_longitudinal_m") or 0)
     gap_trans = float(config.get("gap_transverse_m") or 0)
@@ -143,12 +156,24 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
     m_near = float(config.get("margin_near_m") or 0)
     m_far = float(config.get("margin_far_m") or 0)
 
+    if not all(math.isfinite(v) and v >= 0 for v in (gap_long, gap_trans, m_start, m_end, m_near, m_far)):
+        raise ValueError("Separaciones y márgenes deben ser finitos y no negativos")
+    if m_start + m_end >= pd or m_near + m_far >= pw:
+        raise ValueError("Los márgenes consumen todo el sector")
     anchor = (config.get("anchor") or "start").strip()
-    grow_rows = (config.get("grow_rows") or "near_to_far").strip()
+    grow_rows = (config.get("grow_rows") or ("far_to_near" if axis == "x" else "near_to_far")).strip()
+    if anchor not in ("start", "end") or grow_rows not in ("near_to_far", "far_to_near"):
+        raise ValueError("Anclaje o dirección inválidos")
     prefix = (config.get("code_prefix") or parent.get("code") or "POS").strip()
     suffix_mode = (config.get("code_suffix_mode") or "numeric").strip()
     start_index = int(config.get("start_index") or 1)
+    if start_index < 1 or not prefix or suffix_mode not in ("numeric", "iz_da"):
+        raise ValueError("Nomenclatura inválida")
+    if suffix_mode == "iz_da" and (axis != "x" or n_rows > 2 or len(set(orients)) > 1):
+        raise ValueError("D/A requiere eje X, una o dos filas y la misma orientación de pallet")
     height_clear = config.get("height_clear_m")
+    if height_clear is not None and (not math.isfinite(float(height_clear)) or float(height_clear) <= 0):
+        raise ValueError("Altura libre debe ser positiva o desconocida")
     constraints = dict(config.get("constraints_json") or {})
     observations = config.get("observations") or (
         "Generada por editor — pending_validation. No autoriza apilamiento ni invasión de circulación."
@@ -163,16 +188,22 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
         for i in range(n_rows)
     ]
 
-    # Posición X de cada fila
+    # Distribuir las filas en el eje transversal elegido.
+    # La opción automática reparte el espacio sobrante entre filas, sin certificar acceso.
+    if config.get("auto_row_gap") and n_rows > 1:
+        gap_trans = max(0.0, (pw - m_near - m_far - sum(d[1] for d in row_dims)) / (n_rows - 1))
     row_x_offsets: list[float] = []
-    cursor_x = m_near
     if grow_rows == "far_to_near":
-        # Empujar desde el lado far
-        total_rows_w = sum(d[1] for d in row_dims) + gap_trans * max(0, n_rows - 1)
-        cursor_x = pw - m_far - total_rows_w
-    for i in range(n_rows):
-        row_x_offsets.append(cursor_x)
-        cursor_x += row_dims[i][1] + gap_trans
+        cursor = pw - m_far
+        for _, across in row_dims:
+            cursor -= across
+            row_x_offsets.append(cursor)
+            cursor -= gap_trans
+    else:
+        cursor = m_near
+        for _, across in row_dims:
+            row_x_offsets.append(cursor)
+            cursor += across + gap_trans
 
     positions: list[dict[str, Any]] = []
     idx = start_index
@@ -186,18 +217,20 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
         for ci in range(count):
             local_x = row_x_offsets[ri]
             local_y = y0 + ci * (along_y + gap_long)
-            # Mapear dims al sistema global: width=+X, depth=+Y
-            width_m = along_x
-            depth_m = along_y
-            gx = px + local_x
-            gy = py + local_y
+            # Coordenadas persistidas: width=+X, depth=+Y.
+            if axis == "x":
+                gx, gy = px + local_y, py + local_x
+                width_m, depth_m = along_y, along_x
+            else:
+                gx, gy = px + local_x, py + local_y
+                width_m, depth_m = along_x, along_y
             if suffix_mode == "iz_da":
-                # Fila 0 = D (delante / cerca circulación según grow), resto A…
-                side = "D" if ri == 0 else "A"
-                if grow_rows == "far_to_near":
-                    side = "A" if ri == 0 else "D"
-                code = f"{prefix}-{idx:02d}-{side}"
-                name = f"Posición {prefix} {idx:02d} {'delante' if side == 'D' else 'atrás'}"
+                # D es la fila de mayor Y (cerca de circulación), A la de menor Y.
+                side = ("D" if ri == 0 else "A") if grow_rows == "far_to_near" else ("A" if ri == 0 else "D")
+                # Numeración desde entrada; al anclar al fondo, alinear índices por tramo.
+                pair_idx = start_index + ci + (max(row_counts) - count if anchor == "end" else 0)
+                code = f"{prefix}-{pair_idx:02d}-{side}"
+                name = f"Posición {prefix} {pair_idx:02d} {'delante' if side == 'D' else 'atrás'}"
             else:
                 code = f"{prefix}-{idx:02d}"
                 name = f"Posición {code}"
@@ -229,6 +262,7 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
                             "provisional": True,
                             "generator_preset": config.get("preset") or "custom",
                             "row_orientation": orients[ri],
+                            "row_axis": axis,
                         },
                         "stack_levels_max": None,
                     },
@@ -243,19 +277,14 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
     min_y = min((p["geometry"]["y_m"] for p in positions), default=py)
     max_x = max((p["geometry"]["x_m"] + p["geometry"]["width_m"] for p in positions), default=px)
     min_x = min((p["geometry"]["x_m"] for p in positions), default=px)
-    extension_y_m = max(0.0, max_y - (py + pd), py - min_y)
-    extension_x_m = max(0.0, max_x - (px + pw), px - min_x)
+    extension_y_m = max(0.0, max_y - (py + depth_y), py - min_y)
+    extension_x_m = max(0.0, max_x - (px + width_x), px - min_x)
     extension_m = max(extension_y_m, extension_x_m)
 
     # Separación interior entre filas (si 2+) y holgura transversal residual en el padre
     interior_gap_m = None
     if n_rows >= 2 and positions:
-        a = next(p["geometry"] for p in positions if p["row_index"] == 0)
-        b = next(p["geometry"] for p in positions if p["row_index"] == 1)
-        if grow_rows == "far_to_near":
-            interior_gap_m = round(a["x_m"] - (b["x_m"] + b["width_m"]), 4)
-        else:
-            interior_gap_m = round(b["x_m"] - (a["x_m"] + a["width_m"]), 4)
+        interior_gap_m = round(gap_trans, 4)
     rows_span_x = sum(d[1] for d in row_dims) + gap_trans * max(0, n_rows - 1)
     remaining_transverse_m = round(pw - m_near - m_far - rows_span_x, 4)
 
@@ -284,6 +313,7 @@ def generate_positions(config: dict[str, Any]) -> dict[str, Any]:
         "preview": True,
         "persists": False,
         "preset": config.get("preset") or "custom",
+        "row_axis": axis,
         "position_count": len(positions),
         "occupied_area_m2": round(occupied, 4),
         "interior_gap_m": interior_gap_m,
