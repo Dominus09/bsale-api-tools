@@ -11,7 +11,7 @@
  * - Plano longitudinal: largo vertical, ancho horizontal
  * - Entrada (x≈0) abajo · fondo (x→length) arriba
  * - IZ (y≈0) izquierda · DER (y→width) derecha
- * - Konva rota en sentido horario → rotation_konva = −rotation_deg − viewOrientation
+ * - El eje local +X apunta arriba en 0°; la rotación Konva se obtiene del vector +X proyectado.
  *
  * viewOrientationDeg (0|90|180|270) solo afecta la vista; no muta geometría persistida.
  */
@@ -190,14 +190,11 @@ export function screenToMetric(
   // Rect no rotado con mismo centro: esquina SW = centro - half extents en ejes locales
   // rotation_deg métrica = ángulo del borde width respecto a +X
   const rotation_deg = edgeAngle
-  const halfW = width_m / 2
-  const halfD = depth_m / 2
-  const rr = (rotation_deg * Math.PI) / 180
-  // Esquina local (-halfW, -halfD) rotada + centro
-  const x_m =
-    mc.x_m + (-halfW) * Math.cos(rr) - (-halfD) * Math.sin(rr)
-  const y_m =
-    mc.y_m + (-halfW) * Math.sin(rr) + (-halfD) * Math.cos(rr)
+  // El origen persistido es la esquina del rectángulo SIN rotar.
+  // Restar el medio tamaño a su centro; rotar esta esquina desplazaría el
+  // pivote al guardar un giro o un arrastre de un elemento ya rotado.
+  const x_m = mc.x_m - width_m / 2
+  const y_m = mc.y_m - depth_m / 2
   return {
     x_m,
     y_m,

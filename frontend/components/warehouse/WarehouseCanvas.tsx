@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Stage, Layer, Rect, Text, Line, Arrow, Transformer, Group } from "react-konva"
 import type Konva from "konva"
 import type { WarehouseElement, EditorTool } from "@/lib/warehouse/types"
+import { clippedHatchLines, placeCanvasLabels, stairDecoration } from "@/lib/warehouse/canvasPresentation"
 import {
   fitOffsets,
   fitScale,
@@ -21,9 +22,7 @@ import {
 import {
   LAYOUT_COLORS,
   colorsForType,
-  isUnderStairMeta,
   labelPriority,
-  shouldShowDimensions,
 } from "@/lib/warehouse/style"
 
 type Props = {
@@ -62,6 +61,7 @@ export function WarehouseCanvas({
   const trRef = useRef<Konva.Transformer>(null)
   const [size, setSize] = useState({ w: 800, h: 560 })
   const [scale, setScale] = useState(1)
+  const [interactingKey, setInteractingKey] = useState<string | null>(null)
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 })
   const [base, setBase] = useState({ scale: 20, offsetX: 40, offsetY: 40 })
   const measureRef = useRef<{ x: number; y: number } | null>(null)
@@ -131,18 +131,20 @@ export function WarehouseCanvas({
   const gridLines = useMemo(() => {
     const lines: Array<{ points: number[] }> = []
     if (!gridM || gridM <= 0) return lines
-    for (let x = 0; x <= floorLengthM + 1e-6; x += gridM) {
+    // La cuadrícula visual se simplifica a zoom bajo; el snap conserva gridM.
+    const displayStep = gridM * Math.max(1, Math.ceil(8 / (gridM * vp.scale * scale)))
+    for (let x = 0; x <= floorLengthM + 1e-6; x += displayStep) {
       const a = metricPointToScreen(x, 0, vp)
       const b = metricPointToScreen(x, floorWidthM, vp)
       lines.push({ points: [a.x, a.y, b.x, b.y] })
     }
-    for (let y = 0; y <= floorWidthM + 1e-6; y += gridM) {
+    for (let y = 0; y <= floorWidthM + 1e-6; y += displayStep) {
       const a = metricPointToScreen(0, y, vp)
       const b = metricPointToScreen(floorLengthM, y, vp)
       lines.push({ points: [a.x, a.y, b.x, b.y] })
     }
     return lines
-  }, [gridM, floorLengthM, floorWidthM, vp])
+  }, [gridM, floorLengthM, floorWidthM, vp, scale])
 
   const sorted = useMemo(() => {
     return [...elements]
@@ -155,13 +157,32 @@ export function WarehouseCanvas({
 
   const markers = useMemo(() => {
     if (viewOrientationDeg !== 0) return null
-    const front = metricPointToScreen(0.15, floorWidthM / 2, vp)
-    // FONDO hacia IZ (y≈1) para no solapar ESC/BAE en CIRC (Y≈4–7)
-    const back = metricPointToScreen(floorLengthM - 0.12, 1.05, vp)
-    const left = metricPointToScreen(floorLengthM / 2, 0.2, vp)
-    const right = metricPointToScreen(floorLengthM / 2, floorWidthM - 0.2, vp)
-    return { front, back, left, right }
-  }, [vp, floorLengthM, floorWidthM, viewOrientationDeg])
+    const unit = 1 / scale
+    const front = metricPointToScreen(0, floorWidthM / 2, vp)
+    const back = metricPointToScreen(floorLengthM, floorWidthM / 2, vp)
+    return [
+      { text: "FONDO", x: back.x - 42 * unit, y: back.y - 20 * unit, width: 84 * unit, height: 15 * unit },
+      { text: "FRENTE", x: front.x - 42 * unit, y: front.y + 12 * unit, width: 84 * unit, height: 15 * unit },
+    ]
+  }, [vp, floorLengthM, floorWidthM, viewOrientationDeg, scale])
+
+  const canvasLabels = useMemo(() => placeCanvasLabels(
+    sorted.filter((el) => el.clientKey !== interactingKey).map((el) => {
+      const meta = { ...el.physical.meta_json, ...el.geometry.constraints_json, ...el.geometry.meta_json }
+      return {
+        key: el.clientKey,
+        code: el.physical.code,
+        type: el.physical.element_type,
+        rect: metricToScreen({ ...el.geometry, rotation_deg: el.geometry.rotation_deg || 0 }, vp),
+        dimensions: `${el.geometry.width_m.toFixed(2).replace(".", ",")} × ${el.geometry.depth_m.toFixed(2).replace(".", ",")} m`,
+        underStair: el.physical.element_type === "position" && meta.under_stair === true,
+        sectorWithAisles: el.physical.element_type === "sector" && sorted.some(
+          (child) => child.physical.parent_id === el.physical.id && child.physical.element_type === "aisle",
+        ),
+        selected: el.clientKey === selectedKey,
+      }
+    }), scale, markers ?? [],
+  ), [sorted, interactingKey, vp, selectedKey, scale, markers])
 
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault()
@@ -195,7 +216,7 @@ export function WarehouseCanvas({
   }
 
   return (
-    <div ref={wrapRef} className="relative h-full w-full overflow-hidden bg-slate-100">
+    <div ref={wrapRef} className="absolute inset-0 overflow-hidden bg-slate-100">
       <Stage
         ref={stageRef}
         width={size.w}
@@ -259,56 +280,11 @@ export function WarehouseCanvas({
             fill={LAYOUT_COLORS.background}
             stroke="#94a3b8"
             strokeWidth={1.5}
+            listening={false}
           />
           {gridLines.map((ln, i) => (
-            <Line key={`g-${i}`} points={ln.points} stroke={LAYOUT_COLORS.grid} strokeWidth={1} />
+            <Line key={`g-${i}`} points={ln.points} stroke={LAYOUT_COLORS.grid} strokeWidth={1} listening={false} />
           ))}
-          {markers ? (
-            <>
-              <Text
-                x={markers.front.x - 36}
-                y={markers.front.y + 6}
-                width={72}
-                align="center"
-                text="FRENTE"
-                fontSize={11}
-                fontStyle="bold"
-                fill={LAYOUT_COLORS.marker}
-                listening={false}
-              />
-              <Text
-                x={markers.back.x - 36}
-                y={markers.back.y - 18}
-                width={72}
-                align="center"
-                text="FONDO"
-                fontSize={11}
-                fontStyle="bold"
-                fill={LAYOUT_COLORS.marker}
-                listening={false}
-              />
-              <Text
-                x={markers.left.x - 28}
-                y={markers.left.y - 8}
-                width={56}
-                align="center"
-                text="IZ"
-                fontSize={10}
-                fill={LAYOUT_COLORS.labelMuted}
-                listening={false}
-              />
-              <Text
-                x={markers.right.x - 28}
-                y={markers.right.y - 8}
-                width={56}
-                align="center"
-                text="DER"
-                fontSize={10}
-                fill={LAYOUT_COLORS.labelMuted}
-                listening={false}
-              />
-            </>
-          ) : null}
           {sorted.map((el) => {
             const scr = metricToScreen(
               {
@@ -332,22 +308,9 @@ export function WarehouseCanvas({
             const cx = scr.x + scr.width / 2
             const cy = scr.y + scr.height / 2
             const type = el.physical.element_type
-            const underStair = type === "position" && isUnderStairMeta(mergedMeta)
+            const underStair = type === "position" && mergedMeta.under_stair === true
             const isStair = type === "stair"
             const isLoose = type === "loose_storage"
-            const showCode = type !== "facility_boundary" && (scr.width > 14 || scr.height > 14)
-            const sectorQuiet = type === "sector" || type === "circulation"
-            const fontSize = Math.max(
-              isStair ? 12 : sectorQuiet ? 10 : 9,
-              Math.min(
-                isStair ? 16 : sectorQuiet ? 13 : 15,
-                Math.min(scr.width, scr.height) / (isStair ? 4.5 : sectorQuiet ? 8 : 5),
-              ),
-            )
-            const showDims =
-              !underStair &&
-              !isStair &&
-              shouldShowDimensions(type, scr.width, scr.height)
             const strokeW = selected
               ? LAYOUT_COLORS.selection.strokeWidth
               : isStair
@@ -361,33 +324,8 @@ export function WarehouseCanvas({
               underStair || pending
                 ? LAYOUT_COLORS.pending_validation.dash
                 : colors.dash
-            // Peldaños ⊥ sentido de subida (+Y hacia DER/P7 → líneas // a X = verticales en vista 0°)
-            const stairSteps: number[][] = []
-            if (isStair && scr.width > 14) {
-              const n = Math.max(4, Math.min(9, Math.floor(scr.width / 9)))
-              for (let i = 1; i < n; i++) {
-                const xx = (scr.width * i) / n
-                stairSteps.push([xx, 3, xx, scr.height - 3])
-              }
-            }
-            const stairArrow =
-              isStair && scr.width > 36
-                ? {
-                    points: [
-                      Math.max(10, scr.width * 0.42),
-                      scr.height * 0.5,
-                      Math.max(22, scr.width - 8),
-                      scr.height * 0.5,
-                    ],
-                  }
-                : null
-            const looseHatch: number[][] = []
-            if (isLoose && scr.width > 10 && scr.height > 10) {
-              const step = 7
-              for (let x = -scr.height; x < scr.width + scr.height; x += step) {
-                looseHatch.push([x, 0, x + scr.height, scr.height])
-              }
-            }
+            const stairs = isStair ? stairDecoration(scr.width, scr.height) : null
+            const hatch = isLoose ? clippedHatchLines(scr.width, scr.height) : []
             return (
               <Group
                 key={el.clientKey}
@@ -406,7 +344,9 @@ export function WarehouseCanvas({
                   e.cancelBubble = true
                   onSelect(el.clientKey)
                 }}
+                onDragStart={() => setInteractingKey(el.clientKey)}
                 onDragEnd={(e) => {
+                  setInteractingKey(null)
                   const node = e.target
                   const topLeft = {
                     x: node.x() - node.offsetX(),
@@ -429,7 +369,9 @@ export function WarehouseCanvas({
                     rotation_deg: m.rotation_deg,
                   })
                 }}
+                onTransformStart={() => setInteractingKey(el.clientKey)}
                 onTransformEnd={(e) => {
+                  setInteractingKey(null)
                   const node = e.target
                   const scaleX = node.scaleX()
                   const scaleY = node.scaleY()
@@ -468,111 +410,54 @@ export function WarehouseCanvas({
                   strokeWidth={strokeW}
                   dash={dash}
                 />
-                {stairSteps.map((pts, i) => (
-                  <Line
-                    key={`st-${i}`}
-                    points={pts}
-                    stroke={colors.stroke}
-                    strokeWidth={1.35}
-                    opacity={0.8}
-                    listening={false}
-                  />
-                ))}
-                {stairArrow ? (
-                  <>
-                    <Arrow
-                      points={stairArrow.points}
-                      stroke="#5b21b6"
-                      fill="#5b21b6"
-                      strokeWidth={2}
-                      pointerLength={8}
-                      pointerWidth={8}
-                      opacity={0.95}
-                      listening={false}
-                    />
-                    <Text
-                      text="2° piso"
-                      x={Math.max(0, scr.width * 0.45)}
-                      y={Math.max(2, scr.height * 0.5 - 16)}
-                      width={Math.max(28, scr.width * 0.5)}
-                      align="right"
-                      fontSize={Math.max(8, Math.min(11, scr.width / 9))}
-                      fontStyle="bold"
-                      fill="#5b21b6"
-                      listening={false}
-                    />
-                  </>
-                ) : null}
-                {looseHatch.map((pts, i) => (
-                  <Line
-                    key={`lh-${i}`}
-                    points={pts}
-                    stroke={colors.stroke}
-                    strokeWidth={1}
-                    opacity={0.35}
-                    listening={false}
-                  />
-                ))}
-                {showCode && !underStair ? (
-                  <Text
-                    text={isStair ? "ESC" : el.physical.code}
-                    width={isStair ? Math.min(44, scr.width * 0.38) : scr.width}
-                    height={isStair ? Math.min(18, scr.height * 0.35) : Math.min(22, scr.height)}
-                    x={isStair ? 3 : 0}
-                    y={isStair ? 3 : sectorQuiet ? Math.max(4, scr.height * 0.08) : 3}
-                    align={isStair ? "left" : "center"}
-                    verticalAlign="middle"
-                    fontSize={isStair ? Math.max(10, Math.min(13, fontSize)) : fontSize}
-                    fontStyle={sectorQuiet ? "normal" : "bold"}
-                    fill={
-                      isStair
-                        ? "#4c1d95"
-                        : sectorQuiet
-                          ? LAYOUT_COLORS.labelMuted
-                          : LAYOUT_COLORS.label
-                    }
-                    listening={false}
-                  />
-                ) : null}
-                {underStair && showCode ? (
-                  <Text
-                    text={el.physical.code}
-                    width={scr.width}
-                    height={Math.min(18, scr.height)}
-                    y={Math.max(2, (scr.height - Math.min(18, scr.height)) / 2)}
-                    align="center"
-                    verticalAlign="middle"
-                    fontSize={Math.max(9, Math.min(12, Math.min(scr.width, scr.height) / 4.5))}
-                    fontStyle="bold"
-                    fill="#9a3412"
-                    listening={false}
-                  />
-                ) : null}
-                {isLoose && scr.height > 24 && scr.width > 36 ? (
-                  <Text
-                    text="sueltos"
-                    width={scr.width}
-                    y={scr.height - 14}
-                    align="center"
-                    fontSize={8}
-                    fill="#92400e"
-                    listening={false}
-                  />
-                ) : null}
-                {showDims ? (
-                  <Text
-                    text={`${el.geometry.width_m.toFixed(2)}×${el.geometry.depth_m.toFixed(2)} m`}
-                    width={scr.width}
-                    y={scr.height - Math.min(18, scr.height * 0.35)}
-                    align="center"
-                    fontSize={Math.max(8, Math.min(11, scr.width / 10))}
-                    fill={LAYOUT_COLORS.labelMuted}
-                    listening={false}
-                  />
+                {(stairs || hatch.length > 0) ? (
+                  <Group clipX={0} clipY={0} clipWidth={scr.width} clipHeight={scr.height} listening={false}>
+                    {stairs?.steps.map((pts, i) => (
+                      <Line key={`st-${i}`} points={pts} stroke={colors.stroke}
+                        strokeWidth={1.25} opacity={0.8} listening={false} />
+                    ))}
+                    {stairs?.arrow ? (
+                      <Arrow points={stairs.arrow} stroke="#4c1d95" fill="#4c1d95"
+                        strokeWidth={1.8} pointerLength={6} pointerWidth={6} listening={false} />
+                    ) : null}
+                    {hatch.map((pts, i) => (
+                      <Line key={`lh-${i}`} points={pts} stroke={colors.stroke}
+                        strokeWidth={1} opacity={0.35} listening={false} />
+                    ))}
+                  </Group>
                 ) : null}
               </Group>
             )
           })}
+          {/* Textos en coordenadas de pantalla, fuera de grupos rotados y del Transformer. */}
+          {markers?.map((marker) => (
+            <Text key={marker.text} {...marker} align="center" verticalAlign="middle"
+              fontSize={11 / scale} fontStyle="bold" fill={LAYOUT_COLORS.marker} listening={false} />
+          ))}
+          {canvasLabels.map((label) => (
+            <Group key={label.key} listening={false}>
+              {label.callout && label.anchor ? (
+                <>
+                  <Line points={[label.anchor.x, label.anchor.y, label.x + label.width / 2, label.y + label.height / 2]}
+                    stroke="#64748b" strokeWidth={0.9 / scale} listening={false} />
+                  <Rect x={label.x} y={label.y} width={label.width} height={label.height}
+                    fill="#f8fafc" stroke="#cbd5e1" strokeWidth={0.7 / scale}
+                    cornerRadius={3 / scale} listening={false} />
+                </>
+              ) : null}
+              <Text x={label.x} y={label.y + 2 / scale} width={label.width}
+                height={label.fontSize * 1.3} text={label.text} align="center" verticalAlign="middle"
+                fontSize={label.fontSize} fontStyle={label.muted ? "normal" : "bold"}
+                fill={label.special ? "#9a3412" : label.muted ? LAYOUT_COLORS.labelMuted : LAYOUT_COLORS.label}
+                listening={false} />
+              {label.subtitle ? (
+                <Text x={label.x} y={label.y + 2 / scale + label.fontSize * 1.3}
+                  width={label.width} height={label.subtitleSize * 1.3}
+                  text={label.subtitle} align="center" verticalAlign="middle"
+                  fontSize={label.subtitleSize} fill={LAYOUT_COLORS.labelMuted} listening={false} />
+              ) : null}
+            </Group>
+          ))}
           {measureLine ? (
             <>
               <Line
@@ -592,6 +477,7 @@ export function WarehouseCanvas({
           ) : null}
           <Transformer
             ref={trRef}
+            flipEnabled={false}
             rotateEnabled={tool === "rotate" || tool === "select"}
             enabledAnchors={
               tool === "resize" || tool === "select"
