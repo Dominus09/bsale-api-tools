@@ -166,23 +166,40 @@ export function WarehouseCanvas({
     ]
   }, [vp, floorLengthM, floorWidthM, viewOrientationDeg, scale])
 
-  const canvasLabels = useMemo(() => placeCanvasLabels(
-    sorted.filter((el) => el.clientKey !== interactingKey).map((el) => {
-      const meta = { ...el.physical.meta_json, ...el.geometry.constraints_json, ...el.geometry.meta_json }
-      return {
-        key: el.clientKey,
-        code: el.physical.code,
-        type: el.physical.element_type,
-        rect: metricToScreen({ ...el.geometry, rotation_deg: el.geometry.rotation_deg || 0 }, vp),
-        dimensions: `${el.geometry.width_m.toFixed(2).replace(".", ",")} × ${el.geometry.depth_m.toFixed(2).replace(".", ",")} m`,
-        underStair: el.physical.element_type === "position" && meta.under_stair === true,
-        sectorWithAisles: el.physical.element_type === "sector" && sorted.some(
-          (child) => child.physical.parent_id === el.physical.id && child.physical.element_type === "aisle",
-        ),
-        selected: el.clientKey === selectedKey,
-      }
-    }), scale, markers ?? [],
-  ), [sorted, interactingKey, vp, selectedKey, scale, markers])
+  const canvasLabels = useMemo(() => {
+    const parentById = new Map(sorted.map(el => [el.physical.id, el]))
+    const aisleParents = new Set(sorted.filter(el => el.physical.element_type === "aisle")
+      .map(el => el.physical.parent_id))
+    return placeCanvasLabels(
+      sorted.filter(el => el.clientKey !== interactingKey).map(el => {
+        const meta = { ...el.physical.meta_json, ...el.geometry.constraints_json, ...el.geometry.meta_json }
+        const parent = el.physical.parent_id == null ? undefined : parentById.get(el.physical.parent_id)
+        const type = el.physical.element_type
+        const rect = metricToScreen({ ...el.geometry, rotation_deg: el.geometry.rotation_deg || 0 }, vp)
+        const rad = rect.rotation * Math.PI / 180
+        const cx = rect.x + rect.width / 2
+        const cy = rect.y + rect.height / 2
+        // Local +X = largo métrico; +Y = profundidad métrica.
+        const entryPoint = type === "stair"
+          ? { x: cx - Math.cos(rad) * rect.width / 2, y: cy - Math.sin(rad) * rect.width / 2 }
+          : type === "aisle"
+            ? { x: cx + Math.sin(rad) * rect.height / 2, y: cy - Math.cos(rad) * rect.height / 2 }
+            : undefined
+        return {
+          key: el.clientKey,
+          code: el.physical.code,
+          type,
+          rect,
+          dimensions: `${el.geometry.width_m.toFixed(2).replace(".", ",")} × ${el.geometry.depth_m.toFixed(2).replace(".", ",")} m`,
+          underStair: type === "position" && (meta.under_stair === true || parent?.physical.element_type === "stair"),
+          sectorWithAisles: type === "sector" && aisleParents.has(el.physical.id),
+          parentKey: parent?.clientKey,
+          entryPoint,
+          selected: el.clientKey === selectedKey,
+        }
+      }), scale, markers ?? [],
+    )
+  }, [sorted, interactingKey, vp, selectedKey, scale, markers])
 
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault()
@@ -283,7 +300,7 @@ export function WarehouseCanvas({
             listening={false}
           />
           {gridLines.map((ln, i) => (
-            <Line key={`g-${i}`} points={ln.points} stroke={LAYOUT_COLORS.grid} strokeWidth={1} listening={false} />
+            <Line key={`g-${i}`} points={ln.points} stroke={LAYOUT_COLORS.grid} strokeWidth={0.8 / scale} opacity={0.65} listening={false} />
           ))}
           {sorted.map((el) => {
             const scr = metricToScreen(
@@ -308,22 +325,28 @@ export function WarehouseCanvas({
             const cx = scr.x + scr.width / 2
             const cy = scr.y + scr.height / 2
             const type = el.physical.element_type
-            const underStair = type === "position" && mergedMeta.under_stair === true
+            const underStair = type === "position" && (mergedMeta.under_stair === true ||
+              sorted.some(parent => parent.physical.id === el.physical.parent_id && parent.physical.element_type === "stair"))
             const isStair = type === "stair"
             const isLoose = type === "loose_storage"
-            const strokeW = selected
+            // Los colores semánticos de la simbología se mantienen. Sólo se
+            // ajusta el peso visual del trazo y la superposición bajo ESC.
+            const strokeW = (selected
               ? LAYOUT_COLORS.selection.strokeWidth
-              : isStair
-                ? 2.25
-                : underStair
-                  ? 2
-                  : type === "aisle"
-                    ? 1.75
-                    : 1.25
-            const dash =
-              underStair || pending
-                ? LAYOUT_COLORS.pending_validation.dash
-                : colors.dash
+              : conflict ? 2
+              : isStair ? 2.2
+              : underStair ? 1.3
+              : type === "aisle" ? 1.6
+              : type === "position" ? 0.95 : 1.1) / scale
+            const dash = (underStair
+              ? [3, 2]
+              : pending
+                ? type === "position" ? [3, 2] : LAYOUT_COLORS.pending_validation.dash
+                : colors.dash)?.map(value => value / scale)
+            const fill = conflict ? LAYOUT_COLORS.geom_conflict.fill
+              : isStair ? "#ede9fe"
+              : underStair ? "rgba(251,191,36,0.12)"
+              : colors.fill
             const stairs = isStair ? stairDecoration(scr.width, scr.height) : null
             const hatch = isLoose ? clippedHatchLines(scr.width, scr.height) : []
             return (
@@ -399,7 +422,7 @@ export function WarehouseCanvas({
                 <Rect
                   width={scr.width}
                   height={scr.height}
-                  fill={conflict ? LAYOUT_COLORS.geom_conflict.fill : colors.fill}
+                  fill={fill}
                   stroke={
                     selected
                       ? LAYOUT_COLORS.selection.stroke
@@ -414,15 +437,21 @@ export function WarehouseCanvas({
                   <Group clipX={0} clipY={0} clipWidth={scr.width} clipHeight={scr.height} listening={false}>
                     {stairs?.steps.map((pts, i) => (
                       <Line key={`st-${i}`} points={pts} stroke={colors.stroke}
-                        strokeWidth={1.25} opacity={0.8} listening={false} />
+                        strokeWidth={0.9 / scale} opacity={0.82} listening={false} />
                     ))}
                     {stairs?.arrow ? (
-                      <Arrow points={stairs.arrow} stroke="#4c1d95" fill="#4c1d95"
-                        strokeWidth={1.8} pointerLength={6} pointerWidth={6} listening={false} />
+                      <Group listening={false}>
+                        <Arrow points={stairs.arrow} stroke="#f8fafc" fill="#f8fafc"
+                          strokeWidth={3 / scale} pointerLength={Math.min(7 / scale, scr.width * 0.2)}
+                          pointerWidth={Math.min(7 / scale, scr.width * 0.2)} listening={false} />
+                        <Arrow points={stairs.arrow} stroke="#4c1d95" fill="#4c1d95"
+                          strokeWidth={1.6 / scale} pointerLength={Math.min(5 / scale, scr.width * 0.16)}
+                          pointerWidth={Math.min(5 / scale, scr.width * 0.16)} listening={false} />
+                      </Group>
                     ) : null}
                     {hatch.map((pts, i) => (
                       <Line key={`lh-${i}`} points={pts} stroke={colors.stroke}
-                        strokeWidth={1} opacity={0.35} listening={false} />
+                        strokeWidth={0.9 / scale} opacity={0.35} listening={false} />
                     ))}
                   </Group>
                 ) : null}
@@ -445,13 +474,19 @@ export function WarehouseCanvas({
                     cornerRadius={3 / scale} listening={false} />
                 </>
               ) : null}
-              <Text x={label.x} y={label.y + 2 / scale} width={label.width}
+              {label.special && !label.callout ? (
+                // El fondo compacto evita que los peldaños reduzcan legibilidad;
+                // pertenece a la capa de etiquetas, no al área seleccionable.
+                <Rect x={label.x} y={label.y} width={label.width} height={label.height}
+                  fill="#fff7ed" opacity={0.92} cornerRadius={2 / scale} listening={false} />
+              ) : null}
+              <Text x={label.x} y={label.y + label.paddingY} width={label.width}
                 height={label.fontSize * 1.3} text={label.text} align="center" verticalAlign="middle"
                 fontSize={label.fontSize} fontStyle={label.muted ? "normal" : "bold"}
                 fill={label.special ? "#9a3412" : label.muted ? LAYOUT_COLORS.labelMuted : LAYOUT_COLORS.label}
                 listening={false} />
               {label.subtitle ? (
-                <Text x={label.x} y={label.y + 2 / scale + label.fontSize * 1.3}
+                <Text x={label.x} y={label.y + label.paddingY + label.fontSize * 1.3}
                   width={label.width} height={label.subtitleSize * 1.3}
                   text={label.subtitle} align="center" verticalAlign="middle"
                   fontSize={label.subtitleSize} fill={LAYOUT_COLORS.labelMuted} listening={false} />
