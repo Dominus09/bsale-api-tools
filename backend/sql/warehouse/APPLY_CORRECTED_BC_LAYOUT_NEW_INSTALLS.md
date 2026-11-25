@@ -13,6 +13,7 @@ La corrección geométrica del draft productivo va en `006_fix_bc_draft_layout_o
 
 No usar el SQL `006` productivo en lab/staging con otros IDs: fallará a propósito.
 
-## Coordenadas objetivo (mismas que 006)
+## Coordenadas objetivo (equiv. 006 + 007)
 
-Ver tabla en `_audit_artifacts/inteligencia_bodega_layout_006_coords.md`.
+Tras el overlay: OFC/P1–P7 como en 006; **ESC/BAE en CIRC** (frente a P7, Y ⊂ 2,65–7,35); IZ-SU compacta fondo IZ.  
+Detalle: `_audit_artifacts/inteligencia_bodega_layout_007_esc_izsu.md`.

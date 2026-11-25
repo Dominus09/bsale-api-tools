@@ -73,7 +73,7 @@ export function PrintLayoutSheet({
         <text x={widthM / 2} y={lengthM - 0.25} fontSize={0.4} textAnchor="middle" fill="#334155">
           FRENTE
         </text>
-        <text x={widthM / 2} y={0.45} fontSize={0.4} textAnchor="middle" fill="#334155">
+        <text x={1.05} y={0.45} fontSize={0.4} textAnchor="middle" fill="#334155">
           FONDO
         </text>
         {visible.map((e) => {

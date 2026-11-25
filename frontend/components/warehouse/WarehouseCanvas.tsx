@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Stage, Layer, Rect, Text, Line, Transformer, Group } from "react-konva"
+import { Stage, Layer, Rect, Text, Line, Arrow, Transformer, Group } from "react-konva"
 import type Konva from "konva"
 import type { WarehouseElement, EditorTool } from "@/lib/warehouse/types"
 import {
@@ -21,6 +21,7 @@ import {
 import {
   LAYOUT_COLORS,
   colorsForType,
+  isUnderStairMeta,
   labelPriority,
   shouldShowDimensions,
 } from "@/lib/warehouse/style"
@@ -155,7 +156,8 @@ export function WarehouseCanvas({
   const markers = useMemo(() => {
     if (viewOrientationDeg !== 0) return null
     const front = metricPointToScreen(0.15, floorWidthM / 2, vp)
-    const back = metricPointToScreen(floorLengthM - 0.15, floorWidthM / 2, vp)
+    // FONDO hacia IZ (y≈1) para no solapar ESC/BAE en CIRC (Y≈4–7)
+    const back = metricPointToScreen(floorLengthM - 0.12, 1.05, vp)
     const left = metricPointToScreen(floorLengthM / 2, 0.2, vp)
     const right = metricPointToScreen(floorLengthM / 2, floorWidthM - 0.2, vp)
     return { front, back, left, right }
@@ -318,24 +320,74 @@ export function WarehouseCanvas({
               },
               vp,
             )
-            const colors = colorsForType(el.physical.element_type, {
+            const mergedMeta = {
               ...((el.physical.meta_json as Record<string, unknown>) || {}),
               ...((el.geometry.constraints_json as Record<string, unknown>) || {}),
-            })
+              ...((el.geometry.meta_json as Record<string, unknown>) || {}),
+            }
+            const colors = colorsForType(el.physical.element_type, mergedMeta)
             const selected = el.clientKey === selectedKey
             const pending = el.geometry.validation_status === "pending_validation"
             const conflict = conflictKeys?.has(el.clientKey)
             const cx = scr.x + scr.width / 2
             const cy = scr.y + scr.height / 2
             const type = el.physical.element_type
-            const showCode = type !== "facility_boundary" && (scr.width > 16 || scr.height > 16)
-            // Sectores/circulación: etiqueta discreta para no tapar pasillos/estructuras
+            const underStair = type === "position" && isUnderStairMeta(mergedMeta)
+            const isStair = type === "stair"
+            const isLoose = type === "loose_storage"
+            const showCode = type !== "facility_boundary" && (scr.width > 14 || scr.height > 14)
             const sectorQuiet = type === "sector" || type === "circulation"
             const fontSize = Math.max(
-              sectorQuiet ? 10 : 9,
-              Math.min(sectorQuiet ? 13 : 15, Math.min(scr.width, scr.height) / (sectorQuiet ? 8 : 5)),
+              isStair ? 12 : sectorQuiet ? 10 : 9,
+              Math.min(
+                isStair ? 16 : sectorQuiet ? 13 : 15,
+                Math.min(scr.width, scr.height) / (isStair ? 4.5 : sectorQuiet ? 8 : 5),
+              ),
             )
-            const showDims = shouldShowDimensions(type, scr.width, scr.height)
+            const showDims =
+              !underStair &&
+              !isStair &&
+              shouldShowDimensions(type, scr.width, scr.height)
+            const strokeW = selected
+              ? LAYOUT_COLORS.selection.strokeWidth
+              : isStair
+                ? 2.25
+                : underStair
+                  ? 2
+                  : type === "aisle"
+                    ? 1.75
+                    : 1.25
+            const dash =
+              underStair || pending
+                ? LAYOUT_COLORS.pending_validation.dash
+                : colors.dash
+            // Peldaños ⊥ sentido de subida (+Y hacia DER/P7 → líneas // a X = verticales en vista 0°)
+            const stairSteps: number[][] = []
+            if (isStair && scr.width > 14) {
+              const n = Math.max(4, Math.min(9, Math.floor(scr.width / 9)))
+              for (let i = 1; i < n; i++) {
+                const xx = (scr.width * i) / n
+                stairSteps.push([xx, 3, xx, scr.height - 3])
+              }
+            }
+            const stairArrow =
+              isStair && scr.width > 36
+                ? {
+                    points: [
+                      Math.max(10, scr.width * 0.42),
+                      scr.height * 0.5,
+                      Math.max(22, scr.width - 8),
+                      scr.height * 0.5,
+                    ],
+                  }
+                : null
+            const looseHatch: number[][] = []
+            if (isLoose && scr.width > 10 && scr.height > 10) {
+              const step = 7
+              for (let x = -scr.height; x < scr.width + scr.height; x += step) {
+                looseHatch.push([x, 0, x + scr.height, scr.height])
+              }
+            }
             return (
               <Group
                 key={el.clientKey}
@@ -413,20 +465,97 @@ export function WarehouseCanvas({
                         ? LAYOUT_COLORS.geom_conflict.stroke
                         : colors.stroke
                   }
-                  strokeWidth={selected ? LAYOUT_COLORS.selection.strokeWidth : type === "aisle" ? 1.75 : 1.25}
-                  dash={pending ? LAYOUT_COLORS.pending_validation.dash : colors.dash}
+                  strokeWidth={strokeW}
+                  dash={dash}
                 />
-                {showCode ? (
+                {stairSteps.map((pts, i) => (
+                  <Line
+                    key={`st-${i}`}
+                    points={pts}
+                    stroke={colors.stroke}
+                    strokeWidth={1.35}
+                    opacity={0.8}
+                    listening={false}
+                  />
+                ))}
+                {stairArrow ? (
+                  <>
+                    <Arrow
+                      points={stairArrow.points}
+                      stroke="#5b21b6"
+                      fill="#5b21b6"
+                      strokeWidth={2}
+                      pointerLength={8}
+                      pointerWidth={8}
+                      opacity={0.95}
+                      listening={false}
+                    />
+                    <Text
+                      text="2° piso"
+                      x={Math.max(0, scr.width * 0.45)}
+                      y={Math.max(2, scr.height * 0.5 - 16)}
+                      width={Math.max(28, scr.width * 0.5)}
+                      align="right"
+                      fontSize={Math.max(8, Math.min(11, scr.width / 9))}
+                      fontStyle="bold"
+                      fill="#5b21b6"
+                      listening={false}
+                    />
+                  </>
+                ) : null}
+                {looseHatch.map((pts, i) => (
+                  <Line
+                    key={`lh-${i}`}
+                    points={pts}
+                    stroke={colors.stroke}
+                    strokeWidth={1}
+                    opacity={0.35}
+                    listening={false}
+                  />
+                ))}
+                {showCode && !underStair ? (
+                  <Text
+                    text={isStair ? "ESC" : el.physical.code}
+                    width={isStair ? Math.min(44, scr.width * 0.38) : scr.width}
+                    height={isStair ? Math.min(18, scr.height * 0.35) : Math.min(22, scr.height)}
+                    x={isStair ? 3 : 0}
+                    y={isStair ? 3 : sectorQuiet ? Math.max(4, scr.height * 0.08) : 3}
+                    align={isStair ? "left" : "center"}
+                    verticalAlign="middle"
+                    fontSize={isStair ? Math.max(10, Math.min(13, fontSize)) : fontSize}
+                    fontStyle={sectorQuiet ? "normal" : "bold"}
+                    fill={
+                      isStair
+                        ? "#4c1d95"
+                        : sectorQuiet
+                          ? LAYOUT_COLORS.labelMuted
+                          : LAYOUT_COLORS.label
+                    }
+                    listening={false}
+                  />
+                ) : null}
+                {underStair && showCode ? (
                   <Text
                     text={el.physical.code}
                     width={scr.width}
-                    height={Math.min(22, scr.height)}
-                    y={sectorQuiet ? Math.max(4, scr.height * 0.08) : 3}
+                    height={Math.min(18, scr.height)}
+                    y={Math.max(2, (scr.height - Math.min(18, scr.height)) / 2)}
                     align="center"
                     verticalAlign="middle"
-                    fontSize={fontSize}
-                    fontStyle={sectorQuiet ? "normal" : "bold"}
-                    fill={sectorQuiet ? LAYOUT_COLORS.labelMuted : LAYOUT_COLORS.label}
+                    fontSize={Math.max(9, Math.min(12, Math.min(scr.width, scr.height) / 4.5))}
+                    fontStyle="bold"
+                    fill="#9a3412"
+                    listening={false}
+                  />
+                ) : null}
+                {isLoose && scr.height > 24 && scr.width > 36 ? (
+                  <Text
+                    text="sueltos"
+                    width={scr.width}
+                    y={scr.height - 14}
+                    align="center"
+                    fontSize={8}
+                    fill="#92400e"
                     listening={false}
                   />
                 ) : null}

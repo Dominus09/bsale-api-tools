@@ -7,13 +7,13 @@ export const LAYOUT_COLORS = {
   facility_boundary: { fill: "rgba(15,23,42,0.02)", stroke: "#334155" },
   sector: { fill: "rgba(37,99,235,0.06)", stroke: "#3b82f6" },
   position: { fill: "rgba(14,165,233,0.22)", stroke: "#0284c7" },
-  loose_storage: { fill: "rgba(202,138,4,0.18)", stroke: "#a16207" },
-  special_storage: { fill: "rgba(234,88,12,0.16)", stroke: "#c2410c" },
+  loose_storage: { fill: "rgba(202,138,4,0.22)", stroke: "#92400e" },
+  special_storage: { fill: "rgba(234,88,12,0.20)", stroke: "#c2410c" },
   aisle: { fill: "rgba(99,102,241,0.10)", stroke: "#6366f1" },
   circulation: { fill: "rgba(148,163,184,0.12)", stroke: "#64748b" },
   structure: { fill: "rgba(100,116,139,0.28)", stroke: "#475569" },
   office: { fill: "rgba(217,119,6,0.16)", stroke: "#b45309" },
-  stair: { fill: "rgba(126,34,206,0.14)", stroke: "#7c3aed" },
+  stair: { fill: "rgba(109,40,217,0.28)", stroke: "#5b21b6" },
   gate: { fill: "rgba(22,163,74,0.28)", stroke: "#15803d" },
   door: { fill: "rgba(22,163,74,0.20)", stroke: "#166534" },
   selection: { stroke: "#ea580c", strokeWidth: 2.5 },
@@ -68,9 +68,16 @@ export function labelPriority(type: WarehouseElementType): number {
   if (type === "facility_boundary") return 0
   if (type === "sector" || type === "circulation") return 1
   if (type === "aisle") return 2
-  if (type === "office" || type === "stair" || type === "gate" || type === "door") return 3
-  if (type === "loose_storage" || type === "position") return 4
+  if (type === "office" || type === "gate" || type === "door") return 3
+  if (type === "loose_storage") return 4
+  if (type === "stair") return 5
+  if (type === "position") return 6
   return 3
+}
+
+export function isUnderStairMeta(meta?: Record<string, unknown>): boolean {
+  if (!meta) return false
+  return meta.under_stair === true || meta.storage_kind === "special_restricted"
 }
 
 export function shouldShowDimensions(

@@ -109,26 +109,47 @@ BEGIN
         updated_at=now()
     WHERE revision_id=v_rev_id AND code_snap='P7';
 
+    -- ESC / IZ-SU / BAE: ESC en CIRC (frente a P7), no en DER
+    UPDATE warehouse.physical_elements pe
+    SET parent_id = (
+            SELECT id FROM warehouse.physical_elements
+            WHERE floor_id = pe.floor_id AND status='active' AND code='CIRC'
+        ),
+        updated_at=now()
+    WHERE pe.status='active' AND pe.code='ESC'
+      AND pe.floor_id IN (
+          SELECT fl.id FROM warehouse.floors fl
+          JOIN warehouse.facilities f ON f.id=fl.facility_id
+          WHERE f.code='BC' AND fl.code='PISO1'
+      );
+
     UPDATE warehouse.layout_elements SET
-        x_m=21.84, y_m=7.35, width_m=1.26, depth_m=6.00, rotation_deg=0,
+        x_m=21.58, y_m=4.05, width_m=1.52, depth_m=3.20, rotation_deg=0,
+        parent_physical_id_snap = (
+            SELECT pe.id FROM warehouse.physical_elements pe
+            JOIN warehouse.floors fl ON fl.id=pe.floor_id
+            JOIN warehouse.facilities f ON f.id=fl.facility_id
+            WHERE f.code='BC' AND fl.code='PISO1' AND pe.code='CIRC' AND pe.status='active'
+            LIMIT 1
+        ),
         validation_status='pending_validation',
-        observations='Escalera transversal al fondo junto a P7. Huella provisional para contener BAE; dims no definitivas.',
-        meta_json = COALESCE(meta_json,'{}'::jsonb) || jsonb_build_object('provisional',true,'corrected_by','new_install_overlay'),
+        observations='Escalera en extremo posterior de CIRC, frente a P7. No ocupa DER/P7. Dims provisionales.',
+        meta_json = COALESCE(meta_json,'{}'::jsonb) || jsonb_build_object('provisional',true,'to_second_floor',true,'in_circulation',true,'corrected_by','new_install_overlay'),
         updated_at=now()
     WHERE revision_id=v_rev_id AND code_snap='ESC';
 
     UPDATE warehouse.layout_elements SET
-        x_m=20.58, y_m=0.10, width_m=2.52, depth_m=1.06, rotation_deg=0,
+        x_m=21.84, y_m=0.10, width_m=1.26, depth_m=2.12, rotation_deg=0,
         validation_status='pending_validation',
-        observations='IZ-SU ≈2,67 m² extremo IZ del fondo. Sin posiciones pallet.',
-        meta_json = COALESCE(meta_json,'{}'::jsonb) || jsonb_build_object('provisional',true,'corrected_by','new_install_overlay'),
+        observations='IZ-SU compacta ≈2,67 m² (~2 pallets) en extremo IZ del fondo. Sin posiciones pallet.',
+        meta_json = COALESCE(meta_json,'{}'::jsonb) || jsonb_build_object('provisional',true,'storage_kind','loose_no_pallet','approx_area_m2',2.67,'corrected_by','new_install_overlay'),
         updated_at=now()
     WHERE revision_id=v_rev_id AND code_snap='IZ-SU';
 
     UPDATE warehouse.layout_elements SET
-        x_m=21.84, y_m=7.50, width_m=1.26, depth_m=1.06, rotation_deg=0,
+        x_m=21.68, y_m=4.20, width_m=1.26, depth_m=1.06, rotation_deg=0,
         validation_status='pending_validation',
-        observations='BAE-01 dentro de ESC. NO almacenamiento seguro autorizado.',
+        observations='BAE-01 bajo ESC en CIRC. NO almacenamiento seguro autorizado.',
         meta_json = COALESCE(meta_json,'{}'::jsonb) || jsonb_build_object('provisional',true,'under_stair',true,'corrected_by','new_install_overlay'),
         constraints_json = COALESCE(constraints_json,'{}'::jsonb) || jsonb_build_object(
             'storage_kind','special_restricted','safe_storage_authorized',false,'keep_stair_access_clear',true),
@@ -136,9 +157,9 @@ BEGIN
     WHERE revision_id=v_rev_id AND code_snap='BAE-01';
 
     UPDATE warehouse.layout_elements SET
-        x_m=21.84, y_m=8.70, width_m=1.26, depth_m=1.06, rotation_deg=0,
+        x_m=21.68, y_m=5.40, width_m=1.26, depth_m=1.06, rotation_deg=0,
         validation_status='pending_validation',
-        observations='BAE-02 dentro de ESC. NO almacenamiento seguro autorizado.',
+        observations='BAE-02 bajo ESC en CIRC. NO almacenamiento seguro autorizado.',
         meta_json = COALESCE(meta_json,'{}'::jsonb) || jsonb_build_object('provisional',true,'under_stair',true,'corrected_by','new_install_overlay'),
         constraints_json = COALESCE(constraints_json,'{}'::jsonb) || jsonb_build_object(
             'storage_kind','special_restricted','safe_storage_authorized',false,'keep_stair_access_clear',true),
