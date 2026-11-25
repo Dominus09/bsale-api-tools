@@ -1,7 +1,7 @@
 // node --experimental-strip-types --test frontend/lib/warehouse/canvasPresentation.test.mjs
 import assert from "node:assert/strict"
 import test from "node:test"
-import { boxesOverlap, clippedHatchLines, placeCanvasLabels, screenBounds, stairDecoration } from "./canvasPresentation.ts"
+import { boxesOverlap, clippedHatchLines, compactPositionCode, placeCanvasLabels, screenBounds, stairDecoration } from "./canvasPresentation.ts"
 import { metricToScreen, screenToMetric, fitScale, fitOffsets } from "./coords.ts"
 import { validateElements } from "./validation.ts"
 
@@ -101,4 +101,81 @@ test("adjacent P3/P4 do not show false overlap; true overlap remains", () => {
   const floor={length_m:L,width_m:W}
   assert.equal(validateElements([aisle(3,"P3",8.4),aisle(4,"P4",11.2)],floor).filter(i=>i.code==="overlap").length,0)
   assert.equal(validateElements([aisle(3,"P3",8.4),aisle(4,"P4",11.19)],floor).filter(i=>i.code==="overlap").length,1)
+})
+
+
+// Layout representativo de v5: la geometría de producción no se escribe
+// ni se presume idéntica a este fixture sintético de presentación.
+const populatedLabels = [
+  ...seedLabels.map(item => item.key === "ESC" ? {...item,parentKey:"CIRC"}
+    : item.underStair ? {...item,parentKey:"ESC"} : item),
+  ...Array.from({length:19},(_,i)=>["A","D"].map((side,j)=>({
+    key:`IZ-${i+1}-${side}`,code:`IZ-${String(i+1).padStart(2,"0")}-${side}`,
+    type:"position",parentKey:"IZ",g:rect(i*1.11,j*1.31,1.06,1.26),
+  }))).flat(),
+  ...Array.from({length:10},(_,i)=>({
+    key:`P7-${i+1}`,code:`P7-${String(i+1).padStart(2,"0")}`,
+    type:"position",parentKey:"P7",g:rect(19.6+Math.floor(i/5)*1.74,7.05+(i%5)*1.26,1.06,1.26),
+  })),
+]
+
+function projected(items, view, scale) {
+  return items.map(({g,...item})=>{
+    const r=metricToScreen(g,vp(view,scale))
+    const rad=r.rotation*Math.PI/180
+    const cx=r.x+r.width/2,cy=r.y+r.height/2
+    const entryPoint=item.type==="stair"?{x:cx-Math.cos(rad)*r.width/2,y:cy-Math.sin(rad)*r.width/2}
+      : item.type==="aisle"?{x:cx+Math.sin(rad)*r.height/2,y:cy-Math.cos(rad)*r.height/2}:undefined
+    return {...item,rect:r,entryPoint}
+  })
+}
+
+test("compact codes preserve paired suffix and do not change physical identity",()=>{
+  assert.equal(compactPositionCode("IZ-01-D"),"01D")
+  assert.equal(compactPositionCode("IZ-01-A"),"01A")
+  assert.equal(compactPositionCode("P7-10"),"10")
+  assert.equal(compactPositionCode("BAE-02"),"02")
+  assert.equal(compactPositionCode("custom"),"custom")
+})
+
+test("dense plan at fit: BAE codes inside their own footprints, aisle not over positions",()=>{
+  for(const view of [0,90,180,270]) {
+    for(const scale of [20,28,38]) {
+      const inputs=projected(populatedLabels,view,scale)
+      const original=JSON.stringify(inputs)
+      const labels=placeCanvasLabels(inputs,1)
+      const stair=labels.find(l=>l.key==="ESC")
+      assert.ok(stair,`stair missing view=${view} scale=${scale}`)
+      for(const code of ["BAE-01","BAE-02"]) {
+        const b=screenBounds(inputs.find(x=>x.key===code).rect)
+        const l=labels.find(x=>x.key===code)
+        assert.ok(l,`missing ${code} view=${view} scale=${scale}`)
+        assert.equal(l.callout,false)
+        assert.ok(l.x>=b.x-1e-7 && l.y>=b.y-1e-7 &&
+          l.x+l.width<=b.x+b.width+1e-7 && l.y+l.height<=b.y+b.height+1e-7)
+      }
+      const aisle=labels.find(x=>x.key==="P7")
+      assert.ok(aisle,`missing P7 view=${view} scale=${scale}`)
+      for(const p of inputs.filter(x=>x.parentKey==="P7")) {
+        assert.ok(!boxesOverlap(aisle,screenBounds(p.rect)),`P7 label covers ${p.code}`)
+      }
+      for(let i=0;i<labels.length;i++) for(let j=i+1;j<labels.length;j++) {
+        assert.ok(!boxesOverlap(labels[i],labels[j]),`${labels[i].key} vs ${labels[j].key}`)
+      }
+      assert.equal(JSON.stringify(inputs),original)
+    }
+  }
+})
+
+test("at closer zoom, compact positions show their full codes",()=>{
+  const inputs=projected(populatedLabels,0,28)
+  const labels=placeCanvasLabels(inputs,4)
+  for(const key of ["BAE-01","BAE-02","IZ-1-D","IZ-1-A","P7-1","P7-10"]) {
+    const item=inputs.find(p=>p.key===key)
+    const label=labels.find(p=>p.key===key)
+    assert.ok(label,`missing ${key}`)
+    assert.equal(label.text,item.code)
+    assert.equal(label.compact,false)
+    assert.equal(label.callout,false)
+  }
 })
