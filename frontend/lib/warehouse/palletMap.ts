@@ -27,3 +27,18 @@ export function toggleBatchGroup(selected:number[],eligible:number[],limit=MAX_B
   if(unique.every(id=>selected.includes(id)))return selected.filter(id=>!unique.includes(id))
   return [...new Set([...selected,...unique])].slice(0,limit)
 }
+
+
+export type BatchGroupElement = {physical:{id:number;parent_id:number|null;element_type:string;code:string}}
+export function groupBatchPositions(elements:BatchGroupElement[],positionIds:ReadonlySet<number>){
+  const groups=new Map<number,{id:number;code:string;ids:number[]}>()
+  const parents=new Map(elements.filter(e=>e.physical.element_type==="aisle"||e.physical.element_type==="sector").map(e=>[e.physical.id,e.physical]))
+  for(const e of elements){
+    if(e.physical.element_type!=="position"||!positionIds.has(e.physical.id))continue
+    const parent=e.physical.parent_id==null?undefined:parents.get(e.physical.parent_id)
+    if(!parent)continue
+    const g=groups.get(parent.id)??{id:parent.id,code:parent.code,ids:[]}
+    g.ids.push(e.physical.id);groups.set(parent.id,g)
+  }
+  return [...groups.values()].sort((a,b)=>a.code.localeCompare(b.code,"es",{numeric:true}))
+}

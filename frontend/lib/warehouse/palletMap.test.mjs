@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { slotsAtLevel, observedSlotState, batchSelectable, restrictedBatchLocation, toggleBatchGroup } from "./palletMap.ts"
+import { slotsAtLevel, observedSlotState, batchSelectable, restrictedBatchLocation, toggleBatchGroup, groupBatchPositions } from "./palletMap.ts"
 import { metricToScreen } from "./coords.ts"
 import { layoutColorsForTheme, colorsForType, LAYOUT_COLORS } from "./style.ts"
 import { isDarkThemeRoute } from "../appearance.ts"
@@ -52,4 +52,15 @@ test("select all aisle positions, toggle them off without removing other aisle",
   assert.deepEqual(toggleBatchGroup(selected,aisle),[20])
   assert.deepEqual(toggleBatchGroup([1,2],[2,3,3]),[1,2,3])
   assert.deepEqual(toggleBatchGroup([1],[2,3,4],3),[1,2,3])
+})
+
+
+test("aisle selection follows saved physical parent, not a code prefix",()=>{
+  const el=(id,parent_id,element_type,code)=>({physical:{id,parent_id,element_type,code}})
+  const ids=Array.from({length:10},(_,i)=>101+i)
+  const elements=[el(7,null,"aisle","P7"),el(8,null,"aisle","P8"),
+    ...ids.map((id,i)=>el(id,7,"position","P7-"+(i+1))),
+    el(201,8,"position","P7-SIMILAR"),el(301,7,"position","P7-RETIRED")]
+  const groups=groupBatchPositions(elements,new Set([...ids,201]))
+  assert.deepEqual(groups,[{id:7,code:"P7",ids},{id:8,code:"P8",ids:[201]}])
 })

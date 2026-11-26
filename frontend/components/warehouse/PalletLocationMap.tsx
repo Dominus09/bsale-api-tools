@@ -9,7 +9,7 @@ import { getWarehouseRevision, getWarehousePallet, listPalletLocations, type Pal
 import { metricToScreen, type ViewportTransform } from "@/lib/warehouse/coords"
 import type { RevisionBundle } from "@/lib/warehouse/types"
 import { isUnderStairMeta } from "@/lib/warehouse/style"
-import { observedSlotState, slotsAtLevel, batchSelectable, restrictedBatchLocation, toggleBatchGroup, MAX_BATCH_PALLETS } from "@/lib/warehouse/palletMap"
+import { observedSlotState, slotsAtLevel, batchSelectable, restrictedBatchLocation, toggleBatchGroup, groupBatchPositions, MAX_BATCH_PALLETS } from "@/lib/warehouse/palletMap"
 
 export type ObservedLocationForm = {id:string;level:string;ack:boolean}
 export type BatchLocationForm = {ids:number[];level:string;ack:boolean}
@@ -99,16 +99,7 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect,onSe
   const known=new Map((fresh?.items??[]).map(p=>[p.id,p]))
   // Agrupar por el padre físico guardado (pasillo/sector), no por geometría
   // inferida ni por nombres escritos por el usuario.
-  const groups=new Map<number,{id:number;code:string;ids:number[]}>()
-  const parents=new Map(elements.filter(e=>e.physical.element_type==="aisle"||e.physical.element_type==="sector").map(e=>[e.physical.id,e.physical]))
-  for(const e of elements){
-    if(e.physical.element_type!=="position"||!known.has(e.physical.id))continue
-    const parent=e.physical.parent_id==null?undefined:parents.get(e.physical.parent_id)
-    if(!parent)continue
-    const g=groups.get(parent.id)??{id:parent.id,code:parent.code,ids:[]}
-    g.ids.push(e.physical.id);groups.set(parent.id,g)
-  }
-  const groupList=[...groups.values()].sort((a,b)=>a.code.localeCompare(b.code,"es",{numeric:true}))
+  const groupList=groupBatchPositions(elements,new Set(known.keys()))
   const invalidIds=selectedIds.filter(id=>{const p=known.get(id);return !p||!batchSelectable(p,slotByPosition)})
   const selectedSet=new Set(selectedIds)
   const readyMany=!!fresh&&validLevel&&selectedIds.length>=2&&selectedIds.length<=MAX_BATCH_PALLETS&&!invalidIds.length

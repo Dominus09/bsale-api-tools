@@ -341,9 +341,11 @@ def test_batch_ten_positions_and_exact_replay(batch_service,monkeypatch):
 
 def test_batch_validation_and_rollback_no_partial_rows(batch_service,monkeypatch):
     service=batch_service
+    # Independent of the ten-position test and its execution order.
+    create(service,body(**loc(116,level=8)))
     before=batch_counts()
     for payload,exc in (
-        (batch_body([111,101]),WarehouseConflictError),  # occupied
+        (batch_body([111,116],level=8),WarehouseConflictError),  # occupied
         (batch_body([111,3]),WarehouseValidationError), # restricted BAE
         (batch_body([111,4]),WarehouseValidationError), # different company/floor
         (batch_body([111,112],layout_row_version=5),WarehouseConflictError),
