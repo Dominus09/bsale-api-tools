@@ -85,3 +85,36 @@ def test_edit_payload_does_not_accept_location_or_calculated_totals():
         PalletDetailsIn(**{**payload,"position_id":123})
     with pytest.raises(ValidationError):
         PalletDetailsIn(**{**payload,"lines":[{**BASE,"line_id":1,"total_units":500}]})
+
+
+def _batch_payload(**patch):
+    from uuid import uuid4
+    return {"batch_key":str(uuid4()),"floor_id":1,"layout_revision_id":1,
+            "layout_row_version":6,"observed_level":1,"observed_ack":True,
+            "items":[{"position_id":i,"pallet_kind":"complete","lines":[BASE]} for i in (1,2)],**patch}
+
+
+def test_batch_contract_requires_unique_slots_and_ack():
+    from backend.services.warehouse.pallet_models import PalletBatchIn
+    payload=_batch_payload()
+    assert len(PalletBatchIn(**payload).items)==2
+    for change in ({"observed_ack":False},{"observed_ack":"true"},{"observed_level":0},
+                   {"observed_level":1.5},{"items":[payload["items"][0]]},
+                   {"items":[payload["items"][0]]*2},
+                   {"items":[{**payload["items"][0],"position_id":i} for i in range(1,122)]},
+                   {"items":[{**payload["items"][0],"position_id":i,"lines":[BASE]*6} for i in range(1,101)]},
+                   {"company_id":3},{"items":[{**payload["items"][0],"total_units":100},payload["items"][1]]}):
+        with pytest.raises(ValidationError):
+            PalletBatchIn(**{**payload,**change})
+
+
+def test_batch_contract_keeps_per_pallet_exceptions():
+    from backend.services.warehouse.pallet_models import PalletBatchIn
+    p=_batch_payload()
+    p["items"][1]["lines"]=[{**BASE,"quantity_status":"unknown","boxes":None,"loose_units":None}]
+    p["items"][1]["received_on"]="2026-11-01"
+    p["items"][1]["pallet_kind"]="partial"
+    result=PalletBatchIn(**p).model_dump(mode="json")
+    assert result["items"][0]["lines"][0]["boxes"]==3
+    assert result["items"][1]["lines"][0]["boxes"] is None
+    assert result["items"][1]["received_on"]=="2026-11-01"
