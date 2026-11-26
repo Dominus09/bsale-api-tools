@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.auth.permissions import require_management_access
@@ -342,3 +342,58 @@ def warehouse_create_draft_from_revision(
         )
     except WarehouseError as e:
         raise _http(e) from e
+
+
+# Fase 2A — registro físico; mismas credenciales gerenciales ERP que layout.
+from backend.services.warehouse.pallet_models import PalletRegisterIn, PalletLocationIn, PalletVoidIn
+from backend.services.warehouse.pallets import default_pallet_service, PalletSchemaUnavailable
+
+
+def _pallet_call(method, *args, **kwargs):
+    try:
+        return method(*args, **kwargs)
+    except PalletSchemaUnavailable as e:
+        raise HTTPException(status_code=503, detail={"message":str(e),"code":e.code}) from e
+    except WarehouseError as e:
+        raise _http(e) from e
+
+
+@router.get("/pallets/locations")
+def pallet_locations(floor_id: int = Query(gt=0), _user: dict = Depends(require_management_access)):
+    return _pallet_call(default_pallet_service().locations,floor_id)
+
+
+@router.get("/pallets/products")
+def pallet_products(floor_id: int = Query(gt=0), q: str = Query(default="",max_length=120),
+                    _user: dict = Depends(require_management_access)):
+    return _pallet_call(default_pallet_service().search_products,floor_id,q)
+
+
+@router.get("/pallets")
+def pallet_list(floor_id: int = Query(gt=0), q: str = Query(default="",max_length=120),
+                limit: int = Query(default=50,ge=1,le=100), offset: int = Query(default=0,ge=0,le=100000),
+                _user: dict = Depends(require_management_access)):
+    return _pallet_call(default_pallet_service().list,floor_id,query=q,limit=limit,offset=offset)
+
+
+@router.post("/pallets", status_code=201)
+def pallet_register(body: PalletRegisterIn, user: dict = Depends(require_management_access)):
+    actor,uid = _actor(user)
+    return _pallet_call(default_pallet_service().register,body.model_dump(mode="json"),actor=actor or "ERP",uid=uid)
+
+
+@router.get("/pallets/{pallet_id}")
+def pallet_get(pallet_id: int, _user: dict = Depends(require_management_access)):
+    return _pallet_call(default_pallet_service().get,pallet_id)
+
+
+@router.post("/pallets/{pallet_id}/observe-location")
+def pallet_observe_location(pallet_id: int, body: PalletLocationIn, user: dict = Depends(require_management_access)):
+    actor,uid = _actor(user)
+    return _pallet_call(default_pallet_service().observe_location,pallet_id,body.model_dump(mode="json"),actor=actor or "ERP",uid=uid)
+
+
+@router.post("/pallets/{pallet_id}/void")
+def pallet_void(pallet_id: int, body: PalletVoidIn, user: dict = Depends(require_management_access)):
+    actor,uid = _actor(user)
+    return _pallet_call(default_pallet_service().void,pallet_id,body.model_dump(mode="json"),actor=actor or "ERP",uid=uid)
