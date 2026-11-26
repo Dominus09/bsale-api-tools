@@ -436,7 +436,10 @@ def _ors_route_merge_chunks(
             return None
         try:
             ors_data = get_route(chunk)
-        except Exception:
+        except Exception as exc:
+            # Antes se ocultaba todo error de ORS. Registrar tipo sin incluir
+            # body HTTP, HTML de Cloudflare ni credenciales.
+            logger.warning("ORS no pudo resolver un tramo (error=%s)", type(exc).__name__)
             return None
         if "routes" not in ors_data or not ors_data["routes"]:
             return None
