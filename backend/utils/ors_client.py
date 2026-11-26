@@ -5,7 +5,8 @@ import requests
 from backend.utils.config import ORS_API_KEY
 from backend.utils.ruta_zonas import haversine_m
 
-BASE_URL = "https://api.openrouteservice.org/v2/directions/driving-car"
+# The former api.openrouteservice.org endpoint was retired on 2026-11-24.
+BASE_URL = "https://api.heigit.org/openrouteservice/v2/directions/driving-car"
 
 # Cada tramo debe terminar antes de que el proxy del ERP alcance su timeout.
 # Sin timeout, una llamada ORS puede bloquear indefinidamente un worker FastAPI.

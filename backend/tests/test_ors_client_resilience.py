@@ -22,6 +22,7 @@ def test_ors_request_has_bounded_timeout():
     with patch("backend.utils.ors_client.requests.post", return_value=response) as post:
         out = get_route(COORDS)
     assert out["routes"]
+    assert post.call_args.args[0] == "https://api.heigit.org/openrouteservice/v2/directions/driving-car"
     assert post.call_args.kwargs["timeout"] == (
         ORS_CONNECT_TIMEOUT_S,
         ORS_READ_TIMEOUT_S,
