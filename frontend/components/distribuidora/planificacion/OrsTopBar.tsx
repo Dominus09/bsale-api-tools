@@ -18,6 +18,7 @@ type OrsTopBarProps = {
   dieselPricePerLiter?: number
   loading?: boolean
   routeSalesLoading?: boolean
+  routeUnavailable?: boolean
 }
 
 function MetricCard({
@@ -72,6 +73,7 @@ export function OrsTopBar({
   dieselPricePerLiter,
   loading,
   routeSalesLoading,
+  routeUnavailable = false,
 }: OrsTopBarProps) {
   const operationalClp = operationalCostClp ?? fuelCostClp
   const totalClp = totalRouteCostClp ?? operationalClp + crewCostClp
@@ -84,7 +86,7 @@ export function OrsTopBar({
     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
       <MetricCard
         label="Km total"
-        value={`${kmTotal.toFixed(1)} km`}
+        value={routeUnavailable ? "—" : `${kmTotal.toFixed(1)} km`}
         sub="ORS con retorno bodega"
         icon={MapPinned}
         loading={loading}
@@ -98,21 +100,21 @@ export function OrsTopBar({
       />
       <MetricCard
         label="Tiempo total"
-        value={`${Math.round(durationMin)} min`}
+        value={routeUnavailable ? "—" : `${Math.round(durationMin)} min`}
         sub="Conducción ORS"
         icon={Clock}
         loading={loading}
       />
       <MetricCard
         label="Litros est."
-        value={`${litersEstimated.toFixed(1)} L`}
+        value={routeUnavailable ? "—" : `${litersEstimated.toFixed(1)} L`}
         sub="Suma por rendimiento BD"
         icon={Droplets}
         loading={loading}
       />
       <MetricCard
         label="Costo combustible"
-        value={formatClp(fuelCostClp)}
+        value={routeUnavailable ? "—" : formatClp(fuelCostClp)}
         sub={dieselSub}
         icon={Fuel}
         loading={loading}
@@ -126,21 +128,21 @@ export function OrsTopBar({
       />
       <MetricCard
         label="Costo operacional"
-        value={formatClp(operationalClp)}
+        value={routeUnavailable ? "—" : formatClp(operationalClp)}
         sub="Combustible + ferry + viáticos + otros"
         icon={Banknote}
         loading={loading}
       />
       <MetricCard
         label="Personal"
-        value={formatClp(crewCostClp)}
+        value={routeUnavailable ? "—" : formatClp(crewCostClp)}
         sub="Chofer + peoneta / vuelta"
         icon={Users}
         loading={loading}
       />
       <MetricCard
         label="Costo total ruta"
-        value={formatClp(totalClp)}
+        value={routeUnavailable ? "—" : formatClp(totalClp)}
         sub="Operacional + personal"
         icon={Banknote}
         loading={loading}
