@@ -89,7 +89,7 @@ export function PalletBatchReview({floorId,locations,selection,common,onBack,onF
       const payload=frozen.current
       inFlight.current=true;setBusy(true)
       const result=await registerWarehousePalletBatch(payload)
-      if(result.batch_key!==payload.batch_key||result.items.length!==payload.items.length)throw new Error("Respuesta incompleta. Reintenta la misma operación.")
+      if(result.batch_key!==payload.batch_key||result.items.length!==payload.items.length||new Set(result.items.map(p=>p.id)).size!==payload.items.length)throw new Error("Respuesta incompleta. Reintenta la misma operación.")
       setReceipt(result);setUncertain(false)
     }catch(e){
       setError(err(e))

@@ -120,13 +120,13 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect,onSe
       setSelectionMessage("Posición ocupada o restringida: no se puede agregar al registro masivo.");return
     }
     if(selectedIds.length>=MAX_BATCH_PALLETS){setSelectionMessage("Máximo "+MAX_BATCH_PALLETS+" pallets por operación.");return}
-    setSelectedIds(old=>[...old,id])
+    setSelectedIds(old=>old.includes(id)?old:old.length>=MAX_BATCH_PALLETS?old:[...old,id])
   }
   const chooseGroup=(group:{ids:number[]})=>{
     const eligible=group.ids.filter(id=>{const p=known.get(id);return !!p&&batchSelectable(p,slotByPosition)})
     if(!eligible.length)return
     const remaining=MAX_BATCH_PALLETS-new Set([...selectedIds,...eligible]).size
-    setSelectionMessage(remaining<0?"Se alcanzó el máximo por operación; revisa la selección.":"")
+    setSelectionMessage(remaining<0&&!eligible.every(id=>selectedIds.includes(id))?"Se alcanzó el máximo por operación; revisa la selección.":"")
     setSelectedIds(old=>toggleBatchGroup(old,eligible))
   }
   const matches=(code:string)=>!search.trim()||code.toLowerCase().includes(search.trim().toLowerCase())
@@ -182,7 +182,7 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect,onSe
               const eligible=g.ids.filter(id=>{const p=known.get(id);return !!p&&batchSelectable(p,slotByPosition)})
               const count=g.ids.filter(id=>selectedSet.has(id)).length
               return <Button key={g.id} type="button" size="sm" variant={count?"default":"outline"} disabled={!validLevel||!eligible.length} onClick={()=>chooseGroup(g)}
-                aria-pressed={count>0} title={g.code+" · "+eligible.length+" seleccionables de "+g.ids.length}>{g.code} · {count}/{g.ids.length}</Button>
+                aria-pressed={count>0} title={g.code+" · "+eligible.length+" seleccionables de "+g.ids.length}>{g.code} · {count}/{g.ids.length}{eligible.length<g.ids.length?" ("+(g.ids.length-eligible.length)+" excl.)":""}</Button>
             })}
           </div>
           <p className="text-xs text-muted-foreground">Clic en un pasillo para seleccionar o quitar sus posiciones sin registro y no restringidas. También puedes marcar puestos individuales de varios pasillos.</p>
@@ -201,7 +201,7 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect,onSe
                     const pos=known.get(p.id),isPosition=p.element_type==="position"
                     const selected=!!pos&&(multiple?selectedSet.has(p.id):String(p.id)===picked)
                     const occ=slotByPosition.get(p.id)
-                    const restricted=!!pos&&(isUnderStairMeta({...pos.physical_meta_snap,...pos.constraints_json,...pos.meta_json})||pos.code.startsWith("BAE-"))
+                    const restricted=!!pos&&restrictedBatchLocation(pos)
                     const active=!!pos&&validLevel
                     const faded=isPosition&&!matches(p.code)
                     const fill=selected?"var(--chart-3)":occ?"var(--lq-warning)":isPosition?"var(--muted)":p.element_type==="stair"?"var(--chart-5)":p.element_type==="office"?"var(--chart-4)":"var(--card)"
