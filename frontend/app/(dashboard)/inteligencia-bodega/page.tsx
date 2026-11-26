@@ -19,7 +19,7 @@ export default function InteligenciaBodegaPage() {
 
   if (meState === "loading" || allowed === null) {
     return (
-      <div className="flex h-[50vh] items-center justify-center gap-2 text-slate-600">
+      <div className="flex h-[50vh] items-center justify-center gap-2 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin" />
         Verificando acceso…
       </div>
@@ -28,10 +28,10 @@ export default function InteligenciaBodegaPage() {
 
   if (!allowed) {
     return (
-      <div className="mx-auto mt-16 max-w-lg rounded-lg border border-red-200 bg-red-50 p-6 text-center">
-        <ShieldAlert className="mx-auto mb-3 h-10 w-10 text-red-600" />
-        <h1 className="text-lg font-semibold text-red-900">Acceso restringido</h1>
-        <p className="mt-2 text-sm text-red-800">
+      <div className="mx-auto mt-16 max-w-lg rounded-lg border border-destructive/30 bg-destructive/10 p-6 text-center">
+        <ShieldAlert className="mx-auto mb-3 h-10 w-10 text-destructive" />
+        <h1 className="text-lg font-semibold text-destructive">Acceso restringido</h1>
+        <p className="mt-2 text-sm text-destructive">
           Inteligencia de Bodega requiere permisos de gerencia ERP (roles gerencia / adm / admin u
           owner). El perfil PWA bodega no concede este acceso.
         </p>
@@ -42,10 +42,10 @@ export default function InteligenciaBodegaPage() {
   return (
     <div className="space-y-3">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-slate-900">
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">
           Inteligencia de Bodega
         </h1>
-        <p className="text-sm text-slate-600">
+        <p className="text-sm text-muted-foreground">
           Editor Maestro de Bodegas — layout físico versionado. Sin inventario ni FIFO. Publicación
           formal disponible; no certifica seguridad ni autoriza apilamiento.
         </p>

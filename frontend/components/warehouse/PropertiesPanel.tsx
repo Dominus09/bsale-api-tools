@@ -40,7 +40,7 @@ function NumField({
 }) {
   return (
     <div className="space-y-1">
-      <Label className="text-xs text-slate-600">{label}</Label>
+      <Label className="text-xs text-muted-foreground">{label}</Label>
       <Input
         type="number"
         step="0.01"
@@ -64,7 +64,7 @@ function NumField({
 export function PropertiesPanel({ element, parents, onChange, readOnly }: Props) {
   if (!element) {
     return (
-      <div className="flex h-full items-center justify-center p-4 text-center text-sm text-slate-500">
+      <div className="flex h-full items-center justify-center p-4 text-center text-sm text-muted-foreground">
         Seleccione un elemento del plano para editar sus propiedades.
       </div>
     )
@@ -77,8 +77,8 @@ export function PropertiesPanel({ element, parents, onChange, readOnly }: Props)
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3">
       <div>
-        <h3 className="text-sm font-semibold text-slate-900">Propiedades</h3>
-        <p className="text-xs text-slate-500">
+        <h3 className="text-sm font-semibold text-foreground">Propiedades</h3>
+        <p className="text-xs text-muted-foreground">
           Cambios locales hasta «Guardar borrador». Identidad física id=
           {p.id > 0 ? p.id : "nuevo"}
         </p>
