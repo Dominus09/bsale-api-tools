@@ -1,6 +1,6 @@
 """Validated image processing and a narrowly scoped GitHub Contents client.
 
-No temporary server files, no client-selected repository or path, no write on preview.
+No persistent preview files, no client-selected repository or path, no write on preview.
 """
 from __future__ import annotations
 
@@ -141,7 +141,7 @@ def validate_prepared(raw: bytes) -> None:
             img.verify()
     except HTTPException:
         raise
-    except (OSError, ValueError):
+    except (OSError, ValueError, SyntaxError):
         raise HTTPException(422, "WebP no válido.") from None
 
 
@@ -227,14 +227,19 @@ def verify_preview(token: str, *, user_id: int, row_id: int, barcode: str, raw: 
         raise HTTPException(409, "La previsualización expiró o cambió. Prepárala nuevamente.") from None
 
 
-def publish_photo(*, barcode: str, raw: bytes, expected_sha: str | None, user_id: int, row_id: int) -> dict:
+def publish_photo(*, barcode: str, raw: bytes, expected_sha: str | None, audit_id: str) -> dict:
     if not writes_enabled():
         raise HTTPException(503, "La publicación de fotos está deshabilitada.")
     validate_prepared(raw)
     if photo_sha(barcode) != expected_sha:
         raise HTTPException(409, "Otra persona cambió la fotografía. Actualiza la previsualización.")
-    # Audit is part of the durable Git commit itself; no token/email in commit.
-    body = {"message": f"catalog photo {safe_barcode(barcode)} | ERP user={user_id} product={row_id} previous={expected_sha or 'none'} sha256={digest(raw)}",
+    # Only an opaque reference is public; the ERP retains the actual actor and product.
+    if not re.fullmatch(r"[0-9a-f]{32}", audit_id):
+        raise HTTPException(500, "Referencia de auditoría no válida.")
+    blob_sha = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+    if blob_sha == expected_sha:
+        raise HTTPException(409, "La fotografía es idéntica a la existente.")
+    body = {"message": f"catalog photo {safe_barcode(barcode)} | audit={audit_id}",
             "content": base64.b64encode(raw).decode(), "branch": BRANCH}
     if expected_sha is not None:
         body["sha"] = expected_sha
@@ -248,6 +253,8 @@ def publish_photo(*, barcode: str, raw: bytes, expected_sha: str | None, user_id
     new_sha = (result.get("content") or {}).get("sha")
     if not isinstance(commit, str) or not _SHA.fullmatch(commit) or not isinstance(new_sha, str) or not _SHA.fullmatch(new_sha):
         raise HTTPException(502, "GitHub no devolvió una confirmación verificable. Revisa el estado.")
+    if new_sha != blob_sha:
+        raise HTTPException(502, "El contenido confirmado no coincide con la previsualización. Revisa el estado.")
     return {"commit_sha": commit, "old_sha": expected_sha, "new_sha": new_sha,
             "commit_url": f"https://github.com/{REPO}/commit/{commit}",
             "published_to_repository": True, "catalog_verified": False}

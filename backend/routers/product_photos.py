@@ -2,24 +2,24 @@
 from __future__ import annotations
 
 import base64
-import os
+import logging
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from backend.auth.permissions import require_management_access
 from backend.db import get_connection
 from backend.services import product_photo_service as photos
+from backend.services import product_master_admin_service as admin
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/products-master/id", tags=["product-photos"])
 
 
 def _actor(user: dict) -> int:
-    value = user.get("id") or user.get("uid")
-    try:
-        actor = int(value)
-        if actor <= 0:
-            raise ValueError()
-        return actor
-    except (ValueError, TypeError):
-        raise HTTPException(403, "No se pudo identificar al usuario de gerencia.") from None
+    return admin.actor_id(user)
+
+
+def _writes_enabled() -> bool:
+    return photos.writes_enabled() and admin.photo_audit_ready()
 
 
 def _product(row_id: int) -> dict:
@@ -68,7 +68,7 @@ def get_photo(row_id: int, user: dict = Depends(require_management_access)):
     p = _product(row_id)
     sha = photos.photo_sha(p["barcode"])
     return {**p, "github_sha": sha, "has_photo": sha is not None,
-            "writes_enabled": photos.writes_enabled(), "ai_enabled": photos.ai_enabled()}
+            "writes_enabled": _writes_enabled(), "ai_enabled": photos.ai_enabled()}
 
 
 @router.post("/{row_id}/photo/prepare")
@@ -84,7 +84,7 @@ def prepare(row_id: int, mode: str = Form("original"), image: UploadFile = File(
         image.file.close()
     data = photos.prepare_photo(raw, mode)
     sha = photos.photo_sha(p["barcode"])
-    enabled = photos.writes_enabled()
+    enabled = _writes_enabled()
     return {"data_base64": base64.b64encode(data).decode(), "bytes": len(data),
             "width": photos.SIZE, "height": photos.SIZE, "format": "WEBP", "mode": mode,
             "filename": p["filename"], "expected_sha": sha, "writes_enabled": enabled,
@@ -96,7 +96,7 @@ def prepare(row_id: int, mode: str = Form("original"), image: UploadFile = File(
 def commit(row_id: int, preview_token: str = Form(..., max_length=2048),
            image: UploadFile = File(...), user: dict = Depends(require_management_access)):
     actor = _actor(user)
-    if not photos.writes_enabled():
+    if not _writes_enabled():
         raise HTTPException(503, "La publicación de fotos está deshabilitada.")
     p = _product(row_id)
     if p["blocked_reason"]:
@@ -108,6 +108,23 @@ def commit(row_id: int, preview_token: str = Form(..., max_length=2048),
     photos.validate_prepared(raw)
     expected = photos.verify_preview(preview_token, user_id=actor, row_id=row_id,
                                      barcode=p["barcode"], raw=raw)
-    result = photos.publish_photo(barcode=p["barcode"], raw=raw, expected_sha=expected,
-                                  user_id=actor, row_id=row_id)
-    return {**result, "filename": p["filename"], "catalog_asset_url": p["catalog_asset_url"]}
+    audit_id = admin.start_photo_audit(actor=actor, product=p, expected_sha=expected,
+                                       prepared_sha256=photos.digest(raw))
+    try:
+        result = photos.publish_photo(barcode=p["barcode"], raw=raw, expected_sha=expected,
+                                      audit_id=audit_id)
+    except Exception as exc:
+        try:
+            admin.finish_photo_audit(audit_id, None, getattr(exc, "status_code", 500))
+        except Exception:
+            logger.error("catalog_photo_audit_finalize_pending audit=%s", audit_id)
+        raise
+    audit_pending = False
+    try:
+        admin.finish_photo_audit(audit_id, result)
+    except Exception:
+        # The GitHub commit exists. Never misreport it as a failed publication.
+        audit_pending = True
+        logger.error("catalog_photo_audit_finalize_pending audit=%s", audit_id)
+    return {**result, "audit_id": audit_id, "audit_pending": audit_pending,
+            "filename": p["filename"], "catalog_asset_url": p["catalog_asset_url"]}

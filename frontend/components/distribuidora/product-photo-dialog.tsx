@@ -10,7 +10,7 @@ import { getApiBaseUrl } from "@/lib/api-base"
 type Mode = "original" | "white" | "remove" | "remove_white"
 type PhotoState = { filename: string; barcode: string; github_sha: string | null; has_photo: boolean; writes_enabled: boolean; ai_enabled: boolean; catalog_asset_url: string; catalog_variant_ids: number[]; catalog_image_urls: string[]; blocked_reason: string | null }
 type Preview = { data_base64: string; bytes: number; width: number; height: number; filename: string; expected_sha: string | null; preview_token: string | null; writes_enabled: boolean }
-type Published = { commit_sha: string; commit_url: string; catalog_asset_url: string; new_sha: string; published_to_repository: boolean }
+type Published = { commit_sha: string; commit_url: string; catalog_asset_url: string; new_sha: string; published_to_repository: boolean; audit_id: string; audit_pending: boolean }
 const modes: { value: Mode; label: string; detail: string; ai?: boolean }[] = [
   { value: "original", label: "Conservar foto", detail: "Mantiene el fondo original" },
   { value: "white", label: "Marco blanco", detail: "Centra sobre lienzo blanco" },
@@ -126,7 +126,7 @@ export function ProductPhotoDialog({ product, onClose }: { product: ProductMaste
               <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-white text-slate-500">
                 {state.has_photo && !existingBroken ? <img className="h-full w-full object-contain" src={state.catalog_asset_url} alt="Foto publicada en catálogo" onError={() => setExistingBroken(true)} /> : <ImagePlus className="size-6" />}
               </div>
-              <div><p className="text-sm font-semibold">{state.has_photo ? "Foto existente en GitHub" : "Sin archivo en GitHub"}</p><p className="break-all text-xs text-muted-foreground">{state.filename}</p><p className="text-xs text-muted-foreground">Variante catálogo: {state.catalog_variant_ids.join(", ") || "no verificada"}</p></div>
+              <div><p className="text-sm font-semibold">{state.has_photo ? "Foto existente en GitHub" : "Sin archivo en GitHub"}</p><p className="break-all text-xs text-muted-foreground">{state.filename}</p><p className="text-xs text-muted-foreground">Variante catálogo: {state.catalog_variant_ids.join(", ") || "no verificada"}</p><p className="text-xs text-muted-foreground">{existingBroken ? "El archivo no está visible en el catálogo actual." : "Miniatura del sitio publicado (puede estar desactualizada)."}</p></div>
             </div>
             <Button type="button" variant="ghost" size="sm" disabled={!!busy} onClick={() => setRefresh(x => x + 1)}>Actualizar estado</Button>
           </div>
@@ -159,6 +159,7 @@ export function ProductPhotoDialog({ product, onClose }: { product: ProductMaste
           </div> : null}
           {published ? <div role="status" className="space-y-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
             <p className="flex items-center gap-2 font-semibold"><CheckCircle2 className="size-5 text-emerald-600" /> Archivo guardado en GitHub</p>
+            {published.audit_pending ? <p role="alert" className="text-sm font-medium">GitHub confirmó la foto; falta reconciliar la auditoría interna. No vuelvas a publicarla. Referencia {published.audit_id}</p> : null}
             <p className="text-sm">La foto todavía debe verificarse en el catálogo publicado. Los archivos estáticos pueden requerir un nuevo despliegue y actualización de caché.</p>
             <div className="flex flex-wrap gap-4 text-sm"><a className="underline inline-flex items-center gap-1" href={published.commit_url} target="_blank" rel="noreferrer">Ver cambio <ExternalLink className="size-3" /></a><a className="underline inline-flex items-center gap-1" href={published.catalog_asset_url + "?v=" + published.new_sha} target="_blank" rel="noreferrer">Comprobar foto publicada <ExternalLink className="size-3" /></a></div>
           </div> : null}

@@ -53,7 +53,7 @@ def test_token_binds_exact_content_product_user_and_sha(monkeypatch):
 
 def test_publish_is_disabled_and_concurrent_replacement_stops(monkeypatch):
     data = p.prepare_photo(image_bytes(), "original")
-    args = dict(barcode="00123", raw=data, expected_sha="a"*40, user_id=42, row_id=8)
+    args = dict(barcode="00123", raw=data, expected_sha="a"*40, audit_id="f"*32)
     monkeypatch.delenv("CATALOG_PHOTO_WRITES_ENABLED", raising=False)
     with patch.object(p, "_request") as request:
         with pytest.raises(HTTPException):
@@ -67,3 +67,37 @@ def test_publish_is_disabled_and_concurrent_replacement_stops(monkeypatch):
             p.publish_photo(**args)
         assert exc.value.status_code == 409
         request.assert_not_called()
+
+def test_publish_mocked_github_success_exact_bytes(monkeypatch):
+    import base64
+    import hashlib
+    from types import SimpleNamespace
+    monkeypatch.setenv("CATALOG_PHOTO_WRITES_ENABLED", "1")
+    monkeypatch.setenv("CATALOG_PHOTO_GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("CATALOG_PHOTO_PREVIEW_SECRET", "test-secret-" * 4)
+    raw = p.prepare_photo(image_bytes(), "original")
+    expected_blob = hashlib.sha1(f"blob {len(raw)}\0".encode() + raw).hexdigest()
+    response = SimpleNamespace(status_code=201, json=lambda: {
+        "commit": {"sha": "c"*40}, "content": {"sha": expected_blob},
+    })
+    with patch.object(p, "photo_sha", return_value=None), patch.object(p, "_request", return_value=response) as request:
+        result = p.publish_photo(barcode="00123", raw=raw, expected_sha=None, audit_id="f"*32)
+    assert result["new_sha"] == expected_blob
+    assert result["catalog_verified"] is False
+    payload = request.call_args.kwargs["json"]
+    assert "sha" not in payload
+    assert base64.b64decode(payload["content"]) == raw
+    assert "user=" not in payload["message"]
+    assert payload["branch"] == "main"
+
+
+def test_expired_preview_rejected(monkeypatch):
+    monkeypatch.setenv("CATALOG_PHOTO_PREVIEW_SECRET", "test-secret-" * 4)
+    data = p.prepare_photo(image_bytes(), "original")
+    args = dict(user_id=42, row_id=8, barcode="00123", raw=data)
+    with patch.object(p.time, "time", return_value=100):
+        token = p.sign_preview(**args, old_sha=None)
+    with patch.object(p.time, "time", return_value=100 + p.TTL + 1):
+        with pytest.raises(HTTPException) as exc:
+            p.verify_preview(token, **args)
+        assert exc.value.status_code == 409
