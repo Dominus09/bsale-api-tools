@@ -7,6 +7,15 @@ from backend.utils.ruta_zonas import haversine_m
 
 BASE_URL = "https://api.openrouteservice.org/v2/directions/driving-car"
 
+# Cada tramo debe terminar antes de que el proxy del ERP alcance su timeout.
+# Sin timeout, una llamada ORS puede bloquear indefinidamente un worker FastAPI.
+ORS_CONNECT_TIMEOUT_S = 8
+ORS_READ_TIMEOUT_S = 35
+
+
+class OrsServiceError(RuntimeError):
+    """Error seguro para logs: nunca incluye HTML, token ni payload remoto."""
+
 
 def _ors_coords_debug_enabled() -> bool:
     return os.getenv("RUTA_DEBUG_ORS_COORDS", "").strip().lower() in ("1", "true", "yes")
@@ -77,11 +86,37 @@ def get_route(coordinates: list[list[float]]) -> dict:
 
     body = {"coordinates": coordinates}
 
-    response = requests.post(BASE_URL, json=body, headers=headers)
+    try:
+        response = requests.post(
+            BASE_URL,
+            json=body,
+            headers=headers,
+            timeout=(ORS_CONNECT_TIMEOUT_S, ORS_READ_TIMEOUT_S),
+        )
+    except requests.exceptions.Timeout as exc:
+        raise OrsServiceError("ORS excedió el tiempo máximo de respuesta.") from exc
+    except requests.exceptions.RequestException as exc:
+        raise OrsServiceError("No fue posible conectar con el servicio ORS.") from exc
 
+    # Nunca propagar response.text: proveedores y proxies pueden devolver HTML
+    # completo (como la página 502 de Cloudflare) o información interna.
     if response.status_code != 200:
-        raise Exception(f"ORS error: {response.text}")
+        status = response.status_code
+        if status == 429:
+            reason = "ORS alcanzó su límite temporal de solicitudes."
+        elif status in (401, 403):
+            reason = "ORS rechazó la autorización configurada."
+        elif status >= 500:
+            reason = "ORS no está disponible temporalmente."
+        else:
+            reason = "ORS rechazó el cálculo solicitado."
+        raise OrsServiceError(f"{reason} (HTTP {status}).")
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise OrsServiceError("ORS devolvió una respuesta no JSON.") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("routes"), list) or not data["routes"]:
+        raise OrsServiceError("ORS devolvió una respuesta sin rutas válidas.")
     _debug_log_distancia_despues(coordinates, data)
     return data

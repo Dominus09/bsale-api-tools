@@ -156,6 +156,7 @@ export default function PlanificacionDespachoPage() {
 
   const orsAbortRef = useRef<AbortController | null>(null)
   const orsInFlightKeyRef = useRef<string | null>(null)
+  const orsSuccessKeyRef = useRef<string | null>(null)
   const sessionLoadedForRef = useRef<string | null>(null)
   const bootstrapDoneRef = useRef(false)
   const crewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -217,7 +218,14 @@ export default function PlanificacionDespachoPage() {
         dieselPricePerLiter ??
         operationalCostsRef.current.diesel_clp_per_liter ??
         null
-      const routeKey = `${camion}:${diesel ?? "d"}:${routableOrders.map((o) => o.document_id).join(",")}`
+      const crew = crewMap.get(camion) ?? { driverCount: 1, assistantCount: 0 }
+      // Incluye posiciones, personal, camión, sesión y combustible. Una ruta de
+      // otra configuración jamás puede reutilizarse como cálculo vigente.
+      const routeKey = JSON.stringify({
+        camion, sessionId, diesel, crew,
+        truckId: routableOrders[0]?.truck_id ?? null,
+        stops: routableOrders.map((o) => [o.document_id, Number(o.lat), Number(o.lng)]),
+      })
       if (orsInFlightKeyRef.current === routeKey) {
         logFrontendPlanDebug("ors-routes", { camion, skipped: "inflight-same-key" })
         return
@@ -230,6 +238,7 @@ export default function PlanificacionDespachoPage() {
 
       setLoading(true)
       setError(null)
+      if (orsSuccessKeyRef.current !== routeKey) setOrsPayload(null)
       logFrontendPlanDebug("ors-routes", {
         camion,
         plan_session_id: sessionId,
@@ -239,7 +248,6 @@ export default function PlanificacionDespachoPage() {
       })
 
       try {
-        const crew = crewMap.get(camion) ?? { driverCount: 1, assistantCount: 0 }
         const res = await postDistribuidoraPlanificacionOrsRoutes({
           planSessionId: sessionId,
           dieselPricePerLiter: diesel,
@@ -259,6 +267,18 @@ export default function PlanificacionDespachoPage() {
           signal: ac.signal,
         })
         if (ac.signal.aborted) return
+        const calculated = res.routes.find((r) => r.camion === camion)
+        if (
+          !calculated ||
+          !Number.isFinite(calculated.distance_km) ||
+          !Number.isFinite(calculated.duration_min) ||
+          calculated.distance_km <= 0 ||
+          calculated.duration_min <= 0 ||
+          !calculated.geometry?.coordinates?.length
+        ) {
+          throw new Error("La ruta calculada no contiene kilómetros, tiempo o geometría válidos.")
+        }
+        orsSuccessKeyRef.current = routeKey
         setOrsPayload(res)
         if (res.crew_defaults) setCrewDefaults(res.crew_defaults)
         const optimized = applyOptimizedStopOrder(truckOrders, res.routes)
@@ -268,7 +288,9 @@ export default function PlanificacionDespachoPage() {
       } catch (e: unknown) {
         if (ac.signal.aborted) return
         setError(e instanceof Error ? e.message : "Error ORS")
-        setOrsPayload(null)
+        // Solo conservar un cálculo anterior si los inputs son idénticos.
+        // Aun así, bloquear confirmación hasta un cálculo sin error.
+        if (orsSuccessKeyRef.current !== routeKey) setOrsPayload(null)
       } finally {
         if (orsInFlightKeyRef.current === routeKey) {
           orsInFlightKeyRef.current = null
@@ -375,7 +397,7 @@ export default function PlanificacionDespachoPage() {
   }, [])
 
   const orsRoutes = orsPayload?.routes ?? []
-  const activeRoute = orsRoutes[0] ?? null
+  const activeRoute = orsRoutes.find((r) => r.camion === selectedCamion) ?? null
   const depot = orsPayload?.depot ?? null
 
   const truckColorMap = useMemo(() => {
@@ -678,6 +700,9 @@ export default function PlanificacionDespachoPage() {
     if (!truckId) throw new Error("Camión sin truck_id")
     const { routable, pendingGeoref } = splitOrdersByGeo(truckOrders)
     if (routable.length === 0 && pendingGeoref.length === 0) return
+    if (routable.length > 0 && (loading || error || !activeRoute)) {
+      throw new Error("Primero debe calcular correctamente la ruta ORS antes de confirmar.")
+    }
     const crew = crewByCamion.get(selectedCamion) ?? { driverCount: 1, assistantCount: 0 }
     const bd = activeRoute?.cost_breakdown
     const maxRoutedStop = routable.reduce(
@@ -743,6 +768,8 @@ export default function PlanificacionDespachoPage() {
   }, [
     selectedCamion,
     activeRoute,
+    loading,
+    error,
     planSessionId,
     orders,
     crewByCamion,
@@ -830,6 +857,7 @@ export default function PlanificacionDespachoPage() {
                 clearPlanificacionPayload()
                 setOrders([])
                 setOrsPayload(null)
+                orsSuccessKeyRef.current = null
                 setSelectedVisitId(null)
                 setPlanSessionId(null)
                 setCrewByCamion(new Map())
@@ -854,6 +882,7 @@ export default function PlanificacionDespachoPage() {
             dieselPricePerLiter={totals.diesel}
             loading={loading}
             routeSalesLoading={false}
+            routeUnavailable={!!error && routableForTruck.length > 0}
           />
           <OrsCommercialKpiStrip counts={commercialCounts} loading={loading} />
         </div>
@@ -965,6 +994,7 @@ export default function PlanificacionDespachoPage() {
             plan={activePlan}
             canConfirm={
               !loading &&
+              !error &&
               !activePlan &&
               ordersForTruck.length > 0 &&
               (routableForTruck.length === 0 || !!activeRoute)
