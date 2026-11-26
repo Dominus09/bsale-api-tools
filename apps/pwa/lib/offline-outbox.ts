@@ -255,7 +255,7 @@ export async function saveCompleteDeliveryLocal(
     input.customerKey,
   )
   if (existing && existing.localUuid !== input.resumeLocalUuid) {
-    if (existing.op_type !== "complete_delivery" || existing.status === "pending") {
+    if (existing.op_type !== "complete_delivery" || existing.status !== "draft") {
       return {
         ok: false,
         code: "DUPLICATE_PENDING",
@@ -276,6 +276,10 @@ export async function saveCompleteDeliveryLocal(
       code: "USER_ISOLATION",
       message: "No se puede modificar una operación de otro usuario.",
     }
+  }
+  if (prior && (prior.planId !== Number(input.planId) || prior.customerKey !== input.customerKey ||
+    prior.status !== "draft" || prior.attempt_count > 0 || prior.server_confirmed)) {
+    return { ok: false, code: "DUPLICATE_PENDING", message: "La entrega ya está registrada. Revisa su estado antes de crear otra.", existing: prior }
   }
   const idem =
     prior?.idempotency_key ||
@@ -408,6 +412,10 @@ export async function saveClosedStoreLocal(
       code: "USER_ISOLATION",
       message: "No se puede modificar una operación de otro usuario.",
     }
+  }
+  if (prior && (prior.planId !== Number(input.planId) || prior.customerKey !== input.customerKey ||
+    prior.status !== "draft" || prior.attempt_count > 0 || prior.server_confirmed)) {
+    return { ok: false, code: "DUPLICATE_PENDING", message: "La entrega ya está registrada. Revisa su estado antes de crear otra.", existing: prior }
   }
   const localUuid = prior?.localUuid || newLocalUuid()
   const idem =

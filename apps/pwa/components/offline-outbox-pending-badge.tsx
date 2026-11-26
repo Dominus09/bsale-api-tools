@@ -27,25 +27,24 @@ export function OfflineOutboxPendingBadge({ onOpen }: Props) {
       if (document.visibilityState === "visible") refresh()
     }
     const onStorage = () => refresh()
-    window.addEventListener("visibilitychange", onVis)
+    document.addEventListener("visibilitychange", onVis)
     window.addEventListener("lq-outbox-changed", onStorage)
     return () => {
-      window.removeEventListener("visibilitychange", onVis)
+      document.removeEventListener("visibilitychange", onVis)
       window.removeEventListener("lq-outbox-changed", onStorage)
     }
   }, [refresh])
-
-  if (count < 1) return null
 
   return (
     <button
       type="button"
       className="outbox-pending-badge"
-      aria-label={`${count} operaciones pendientes de sincronización`}
-      title={`${count} pendientes de sincronización`}
+      aria-label={`Mis entregas, ${count} por resolver`}
+      title="Mis entregas"
       onClick={onOpen}
     >
-      {count > 99 ? "99+" : count}
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16v13H4zM8 3h8l4 4M8 3 4 7m5 7 2 2 4-4" /></svg>
+      {count > 0 ? <span>{count > 99 ? "99+" : count}</span> : null}
     </button>
   )
 }

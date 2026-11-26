@@ -3,7 +3,7 @@
  * Nunca se limpia desde clearOfflineForUser / logout / 401 / BUILD_ID.
  */
 
-import type { OutboxOperation } from "./offline-outbox-types.ts"
+import { canClaimOutboxSync, type OutboxOperation } from "./offline-outbox-types.ts"
 
 const DB_NAME = "quillotana-ops-outbox-v2"
 const DB_VERSION = 1
@@ -198,4 +198,66 @@ export async function verifyOutboxBlobPersisted(
  */
 export function outboxClearApiBlocked(): string {
   return "Borrado de outbox no disponible en 2A.2 sin procedimiento autorizado"
+}
+
+
+/** Read/compare/write in one IDB transaction, including across tabs. */
+async function mutateOutboxOp(
+  localUuid: string,
+  mutate: (current: OutboxOperation | null) => OutboxOperation | null,
+): Promise<OutboxOperation | null> {
+  if (memoryDb) {
+    const current = memoryDb.ops.get(localUuid)
+    const next = mutate(current ? structuredClone(current) : null)
+    if (next) memoryDb.ops.set(localUuid, structuredClone(next))
+    return next
+  }
+  const db = await openDb()
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_OPS, "readwrite")
+      const store = tx.objectStore(STORE_OPS)
+      const req = store.get(localUuid)
+      let result: OutboxOperation | null = null
+      req.onsuccess = () => {
+        result = mutate((req.result as OutboxOperation | undefined) ?? null)
+        if (result) store.put(result)
+      }
+      tx.oncomplete = () => resolve(result)
+      tx.onabort = () => reject(tx.error || new Error("outbox mutation aborted"))
+      tx.onerror = () => reject(tx.error || new Error("outbox mutation failed"))
+    })
+  } finally {
+    db.close()
+  }
+}
+
+export function claimOutboxOpForSync(
+  localUuid: string,
+  userId: string,
+  now = Date.now(),
+): Promise<OutboxOperation | null> {
+  return mutateOutboxOp(localUuid, (current) => {
+    if (!current || current.userId !== String(userId) || !canClaimOutboxSync(current, now)) return null
+    return {
+      ...current,
+      status: "syncing",
+      attempt_count: (current.attempt_count || 0) + 1,
+      updated_at: new Date(now).toISOString(),
+      last_error: null,
+    }
+  })
+}
+
+/** A late response from an expired lease cannot overwrite a newer attempt. */
+export function settleOutboxSync(
+  claim: OutboxOperation,
+  changes: Pick<OutboxOperation, "status" | "last_error"> & Partial<Pick<OutboxOperation, "server_confirmed" | "sync_enabled">>,
+): Promise<OutboxOperation | null> {
+  return mutateOutboxOp(claim.localUuid, (current) => {
+    if (!current || current.userId !== claim.userId || current.idempotency_key !== claim.idempotency_key ||
+      current.status !== "syncing" || current.attempt_count !== claim.attempt_count ||
+      current.updated_at !== claim.updated_at) return null
+    return { ...current, ...changes, updated_at: new Date().toISOString() }
+  })
 }
