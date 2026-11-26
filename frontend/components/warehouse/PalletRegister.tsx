@@ -1,16 +1,17 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Box, ClipboardList, Loader2, Plus, Search, X, ArrowLeftRight, AlertTriangle, History } from "lucide-react"
+import { Box, ClipboardList, Loader2, Plus, Search, X, ArrowLeftRight, AlertTriangle, History, MapPin, Pencil } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   listWarehouseFacilities, listWarehouseFloors, listPalletLocations, listWarehousePallets,
   searchPalletProducts, registerWarehousePallet, getWarehousePallet, observeWarehousePalletLocation,
-  voidWarehousePallet,
+  voidWarehousePallet, updateWarehousePalletDetails,
   type PalletProduct, type PalletLocations, type PalletRecord, type PalletLineInput, type ObservedLocationInput,
 } from "@/lib/warehouse/api"
+import { PalletLocationMap, type ObservedLocationForm } from "@/components/warehouse/PalletLocationMap"
 import type { WarehouseFacility, WarehouseFloor } from "@/lib/warehouse/types"
 
 const kindLabels = {complete:"Completo",partial:"Molido",mixed:"Mixto"} as const
@@ -19,23 +20,31 @@ const err = (e: unknown) => e instanceof Error ? e.message : "Error inesperado"
 const dateText = (s: string | null) => s ? s.slice(0,10).split("-").reverse().join("/") : "Sin fecha verificada"
 const selectClass = "h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-900"
 const textAreaClass = "w-full rounded-md border border-slate-200 bg-white p-2 text-sm"
-type LocationForm = { id: string; level: string; ack: boolean }
-type Line = { key: string; product: PalletProduct; verified: boolean; boxes: string; units: string; expiry: PalletLineInput["expiry_status"]; expires: string; lot: string }
+type LocationForm = ObservedLocationForm
+type Line = { key: string; lineId?: number; product: PalletProduct; verified: boolean; boxes: string; units: string; expiry: PalletLineInput["expiry_status"]; expires: string; lot: string }
 
-function LocationFields({ locations, value, onChange, exclude, disabled }: {
+function LocationFields({ locations, value, onChange, onLocationsChange, exclude, disabled }: {
   locations: PalletLocations; value: LocationForm; onChange:(v:LocationForm)=>void
+  onLocationsChange:(locations:PalletLocations)=>void
   exclude?: PalletRecord; disabled?: boolean
 }) {
+  const [mapOpen,setMapOpen]=useState(false)
   const pos = locations.items.find(p=>p.id===Number(value.id))
   const occupied = locations.observed_slots.some(s=>s.position_id===Number(value.id)&&s.observed_level===Number(value.level)&&
     !(exclude?.position_id===s.position_id&&exclude?.observed_level===s.observed_level))
   const special = pos && ({...pos.physical_meta_snap,...pos.constraints_json,...pos.meta_json}.under_stair===true || pos.code.startsWith("BAE-"))
   return <div className="space-y-2">
+    <Button type="button" variant="outline" className="h-10 w-full justify-start gap-2 border-primary/40 text-primary hover:bg-primary/10 hover:text-primary" disabled={disabled||!locations.revision} onClick={()=>setMapOpen(true)}>
+      <MapPin className="h-4 w-4"/> Seleccionar en el mapa
+      {pos?<span className="ml-auto font-mono text-xs">{pos.code}</span>:null}
+    </Button>
+    {mapOpen?<PalletLocationMap locations={locations} value={value} exclude={exclude} onClose={()=>setMapOpen(false)}
+      onSelect={(next,fresh)=>{onLocationsChange(fresh);onChange(next);setMapOpen(false)}}/>:null}
     <div className="grid grid-cols-[minmax(0,1fr)_100px] gap-2">
       <label className="space-y-1 text-xs font-medium">Ubicación observada
         <select className={selectClass} value={value.id} disabled={disabled} onChange={e=>onChange({id:e.target.value,level:"1",ack:false})}>
           <option value="">Sin ubicación verificada</option>
-          {locations.items.map(p=><option key={p.id} value={p.id}>{p.code} · {p.name}</option>)}
+          {locations.items.map(p=><option key={p.id} value={p.id}>{p.code}</option>)}
         </select>
       </label>
       <label className="space-y-1 text-xs font-medium">Nivel observado
@@ -73,16 +82,25 @@ function linePayload(l:Line):PalletLineInput {
     expected_units_per_box:l.product.units_per_box,expiry_status:l.expiry,expires_on:l.expiry==="dated"?l.expires:null,lot:l.lot.trim()||null}
 }
 
-function RegisterDialog({floorId, locations, onClose, onSaved}:{
-  floorId:number;locations:PalletLocations;onClose:()=>void;onSaved:(p:PalletRecord)=>void
+function RegisterDialog({floorId, locations: initialLocations, onClose, onSaved, initial}:{
+  floorId:number;locations:PalletLocations;onClose:()=>void;onSaved:(p:PalletRecord)=>void;initial?:PalletRecord
 }) {
-  const [kind,setKind]=useState<keyof typeof kindLabels>("complete")
-  const [received,setReceived]=useState("")
-  const [notes,setNotes]=useState("")
+  const [locations,setLocations]=useState(initialLocations)
+  const [kind,setKind]=useState<keyof typeof kindLabels>(initial?.pallet_kind??"complete")
+  const [received,setReceived]=useState(initial?.received_on??"")
+  const [notes,setNotes]=useState(initial?.notes??"")
+  const [reason,setReason]=useState("")
   const [loc,setLoc]=useState<LocationForm>({id:"",level:"1",ack:false})
   const [query,setQuery]=useState("")
   const [products,setProducts]=useState<PalletProduct[]>([])
-  const [lines,setLines]=useState<Line[]>([])
+  const [lines,setLines]=useState<Line[]>(()=>initial?.lines.map(l=>({
+    key:"line-"+l.id,lineId:l.id,
+    product:{variant_id:l.variant_id,product_id:l.product_id,product_name:l.product_name_snap,
+      variant_name:l.variant_name_snap,product_type:l.product_type_snap,barcode:l.barcode_snap,sku:l.sku_snap,
+      units_per_box:l.units_per_box_snap},
+    verified:l.quantity_status==="verified",boxes:String(l.boxes??0),units:String(l.loose_units??0),
+    expiry:l.expiry_status,expires:l.expires_on??"",lot:l.lot??""
+  }))??[])
   const [busy,setBusy]=useState(false)
   const [searching,setSearching]=useState(false)
   const [error,setError]=useState("")
@@ -112,20 +130,30 @@ function RegisterDialog({floorId, locations, onClose, onSaved}:{
       if(!lines.length)throw new Error("Selecciona al menos una variante Bsale.")
       const distinct=new Set(lines.map(l=>l.product.variant_id)).size
       if((kind==="mixed"&&distinct<2)||(kind!=="mixed"&&distinct!==1))throw new Error("Mixto requiere distintas variantes; completo/molido permite varias líneas del mismo producto.")
-      const body={...locationPayload(loc,locations),registration_key:registrationKey.current??crypto.randomUUID(),
-        floor_id:floorId,pallet_kind:kind,received_on:received||null,notes:notes.trim()||null,lines:lines.map(linePayload)}
-      registrationKey.current=body.registration_key
-      inFlight.current=true;setBusy(true)
-      const saved=await registerWarehousePallet(body)
-      onSaved(saved)
+      if(initial&&reason.trim().length<3)throw new Error("Indica el motivo de la corrección.")
+      const fields={pallet_kind:kind,received_on:received||null,notes:notes.trim()||null}
+      if(initial){
+        const kept=new Set(lines.flatMap(l=>l.lineId===undefined?[]:[l.lineId]))
+        const body={...fields,expected_row_version:initial.row_version,reason:reason.trim(),
+          lines:lines.map(l=>({...linePayload(l),line_id:l.lineId??null})),
+          remove_line_ids:initial.lines.filter(l=>!kept.has(l.id)).map(l=>l.id)}
+        inFlight.current=true;setBusy(true)
+        onSaved(await updateWarehousePalletDetails(initial.id,body))
+      }else{
+        const body={...fields,...locationPayload(loc,locations),registration_key:registrationKey.current??crypto.randomUUID(),
+          floor_id:floorId,lines:lines.map(linePayload)}
+        registrationKey.current=body.registration_key
+        inFlight.current=true;setBusy(true)
+        onSaved(await registerWarehousePallet(body))
+      }
     }catch(e){setError(err(e))}
     finally{inFlight.current=false;setBusy(false)}
   }
   return <Dialog open onOpenChange={open=>{if(!open&&!busy)onClose()}}>
     <DialogContent className="flex max-h-[94vh] w-[96vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[1040px]">
       <DialogHeader className="shrink-0 border-b px-5 py-4">
-        <DialogTitle>Registrar pallet físico</DialogTitle>
-        <p className="text-xs text-slate-500">{locations.floor.facility_code} · {locations.floor.floor_code} · ID PAL asignado al guardar, sin stock Bsale.</p>
+        <DialogTitle>{initial?"Editar "+initial.code:"Registrar pallet físico"}</DialogTitle>
+        <p className="text-xs text-slate-500">{locations.floor.facility_code} · {locations.floor.floor_code} · {initial?"Corrección observada · v"+initial.row_version+" · sin modificar identidad ni stock":"ID PAL asignado al guardar, sin stock Bsale."}</p>
       </DialogHeader>
       <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50 p-4">
         <fieldset disabled={busy} className="grid gap-4 md:grid-cols-[minmax(250px,.75fr)_minmax(0,1.25fr)]">
@@ -144,10 +172,18 @@ function RegisterDialog({floorId, locations, onClose, onSaved}:{
                 <textarea className={textAreaClass} rows={3} maxLength={2000} value={notes} onChange={e=>setNotes(e.target.value)}/>
               </label>
             </section>
-            <section className="space-y-3 rounded-xl border bg-white p-4">
+            {initial?<section className="space-y-3 rounded-xl border bg-white p-4">
+              <h3 className="text-sm font-semibold">2. Motivo de corrección</h3>
+              <p className="text-xs text-slate-500">La ubicación se mantiene: {initial.position_code_snap??"Sin verificar"}{initial.observed_level?" · N"+initial.observed_level:""}. Para corregirla usa Ubicación observada.</p>
+              <label className="block space-y-1 text-xs font-medium">Motivo obligatorio
+                <textarea className={textAreaClass} value={reason} maxLength={1000} onChange={e=>setReason(e.target.value)} rows={3} placeholder="Ej. Conteo físico y lote verificados"/>
+              </label>
+              <p className="text-xs text-slate-500">Se conservará el registro anterior en el historial. No es una salida ni un ajuste comercial.</p>
+              {initial.lines.some(l=>!lines.some(x=>x.lineId===l.id))?<p className="rounded bg-amber-50 p-2 text-xs text-amber-800">Las líneas retiradas se conservarán en la auditoría al guardar esta corrección.</p>:null}
+            </section>:<section className="space-y-3 rounded-xl border bg-white p-4">
               <h3 className="text-sm font-semibold">2. Ubicación física</h3>
-              <LocationFields locations={locations} value={loc} onChange={setLoc} disabled={busy}/>
-            </section>
+              <LocationFields locations={locations} value={loc} onChange={setLoc} onLocationsChange={setLocations} disabled={busy}/>
+            </section>}
           </div>
           <section className="min-w-0 space-y-3 rounded-xl border bg-white p-4">
             <h3 className="text-sm font-semibold">3. Productos, lotes y vencimientos</h3>
@@ -184,19 +220,20 @@ function RegisterDialog({floorId, locations, onClose, onSaved}:{
             </div>)}
           </section>
         </fieldset>
-        {error?<div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<p className="mt-1 text-xs">Si se perdió la respuesta al guardar, reintenta sin cambiar los datos o revisa el listado antes de registrar nuevamente.</p></div>:null}
+        {error?<div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}<p className="mt-1 text-xs">{initial?"Si la versión cambió, cierra y vuelve a consultar el pallet antes de corregirlo.":"Si se perdió la respuesta al guardar, reintenta sin cambiar los datos o revisa el listado antes de registrar nuevamente."}</p></div>:null}
       </div>
       <DialogFooter className="shrink-0 border-t px-5 py-3">
         <Button type="button" variant="outline" disabled={busy} onClick={onClose}>Cancelar</Button>
-        <Button type="button" disabled={busy||!lines.length} onClick={()=>void submit()}>{busy?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:null}Registrar pallet</Button>
+        <Button type="button" disabled={busy||!lines.length||!!initial&&reason.trim().length<3} onClick={()=>void submit()}>{busy?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:null}{initial?"Guardar corrección":"Registrar pallet"}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
 }
 
-function DetailDialog({pallet, locations, onClose, onChanged}:{
-  pallet:PalletRecord; locations:PalletLocations; onClose:()=>void; onChanged:()=>void
+function DetailDialog({pallet, locations: initialLocations, onClose, onChanged, onEdit}:{
+  pallet:PalletRecord; locations:PalletLocations; onClose:()=>void; onChanged:()=>void;onEdit:(p:PalletRecord)=>void
 }) {
+  const [locations,setLocations]=useState(initialLocations)
   const [data,setData]=useState(pallet)
   const [mode,setMode]=useState<"view"|"location"|"void">("view")
   const [loc,setLoc]=useState<LocationForm>({id:pallet.position_id?String(pallet.position_id):"",level:String(pallet.observed_level??1),ack:false})
@@ -232,16 +269,16 @@ function DetailDialog({pallet, locations, onClose, onChanged}:{
           <p className="mt-2 text-xs">{l.total_units==null?"Cantidad pendiente":num(l.total_units)+" unidades · "+num(l.boxes??0)+" cajas + "+num(l.loose_units??0)+" unidades"}</p>
           <p className="text-xs">Lote: {l.lot||"Sin verificar"} · Vence: {l.expiry_status==="not_applicable"?"No aplica":dateText(l.expires_on)}</p>
         </div>)}</div>
-        {mode==="location"?<div className="space-y-2 rounded-lg border p-3"><h3 className="text-sm font-semibold">Registrar ubicación observada</h3><LocationFields value={loc} onChange={setLoc} locations={locations} exclude={data} disabled={busy}/></div>:null}
+        {mode==="location"?<div className="space-y-2 rounded-lg border p-3"><h3 className="text-sm font-semibold">Registrar ubicación observada</h3><LocationFields value={loc} onChange={setLoc} locations={locations} onLocationsChange={setLocations} exclude={data} disabled={busy}/></div>:null}
         {mode==="void"?<p className="rounded bg-red-50 p-3 text-xs text-red-800">Anular sólo un registro erróneo o duplicado. No elimina el historial, no descuenta stock ni representa una salida de mercadería.</p>:null}
         {mode!=="view"?<label className="block space-y-1 text-xs font-medium">Motivo obligatorio<textarea className={textAreaClass} disabled={busy} value={reason} maxLength={1000} onChange={e=>setReason(e.target.value)} rows={2}/></label>:null}
         <div><h3 className="mb-2 flex items-center gap-2 text-sm font-semibold"><History className="h-4 w-4"/>Historial</h3>
-          {data.events?.map(e=><div key={e.id} className="border-b py-2 text-xs"><strong>{e.action==="registered"?"Registro inicial":e.action==="voided"?"Anulación":"Cambio de ubicación observado"}</strong><p className="text-slate-500">{dateText(e.created_at)} · {e.actor_label}</p>{typeof e.detail_json.reason==="string"?<p>{e.detail_json.reason}</p>:null}{e.action==="location_observed"?<details><summary className="cursor-pointer text-slate-600">Detalle antes/después</summary><pre className="overflow-auto whitespace-pre-wrap text-[10px]">{JSON.stringify(e.detail_json,null,2)}</pre></details>:null}</div>)}
+          {data.events?.map(e=><div key={e.id} className="border-b py-2 text-xs"><strong>{e.action==="registered"?"Registro inicial":e.action==="voided"?"Anulación":e.action==="details_updated"?"Corrección de datos":"Cambio de ubicación observado"}</strong><p className="text-slate-500">{dateText(e.created_at)} · {e.actor_label}</p>{typeof e.detail_json.reason==="string"?<p>{e.detail_json.reason}</p>:null}{e.action==="location_observed"||e.action==="details_updated"?<details><summary className="cursor-pointer text-slate-600">Detalle antes/después</summary><pre className="overflow-auto whitespace-pre-wrap text-[10px]">{JSON.stringify(e.detail_json,null,2)}</pre></details>:null}</div>)}
         </div>
         {error?<p className="rounded bg-red-50 p-2 text-xs text-red-800">{error}</p>:null}
       </div>
       <DialogFooter className="border-t px-5 py-3">
-        {mode==="view"?<>{data.status==="active"&&data.events?<><Button type="button" variant="outline" onClick={()=>{setReason("");setMode("location")}}><ArrowLeftRight className="mr-1 h-4 w-4"/>Ubicación observada</Button><Button type="button" variant="outline" className="text-red-700" onClick={()=>{setReason("");setMode("void")}}>Anular registro</Button></>:null}<Button type="button" onClick={onClose}>Cerrar</Button></>:
+        {mode==="view"?<>{data.status==="active"&&data.events?<><Button type="button" variant="outline" onClick={()=>onEdit(data)}><Pencil className="mr-1 h-4 w-4"/>Editar datos</Button><Button type="button" variant="outline" onClick={()=>{setReason("");setMode("location")}}><ArrowLeftRight className="mr-1 h-4 w-4"/>Ubicación observada</Button><Button type="button" variant="outline" className="text-red-700" onClick={()=>{setReason("");setMode("void")}}>Anular registro</Button></>:null}<Button type="button" onClick={onClose}>Cerrar</Button></>:
           <><Button type="button" variant="outline" disabled={busy} onClick={()=>setMode("view")}>Volver</Button><Button type="button" disabled={busy||reason.trim().length<3} onClick={()=>void change()}>{busy?"Guardando…":mode==="void"?"Confirmar anulación":"Guardar observación"}</Button></>}
       </DialogFooter>
     </DialogContent>
@@ -264,6 +301,7 @@ export function PalletRegister(){
   const [notice,setNotice]=useState("")
   const [open,setOpen]=useState(false)
   const [selected,setSelected]=useState<PalletRecord|null>(null)
+  const [editing,setEditing]=useState<PalletRecord|null>(null)
   const [reload,setReload]=useState(0)
   useEffect(()=>{
     let cancelled=false
@@ -296,8 +334,8 @@ export function PalletRegister(){
     </div>
     <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950"><AlertTriangle className="h-4 w-4 shrink-0"/>Las ubicaciones y niveles registran observaciones. No autorizan uso de circulación, espacios bajo escalera ni apilamiento. No se calculan existencias de Bsale ni capacidad disponible a partir de registros parciales.</div>
     <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-white p-3">
-      <label className="min-w-[180px] space-y-1 text-xs font-medium">Bodega<select className={selectClass} value={facility??""} disabled={open||!!selected} onChange={e=>{setOffset(0);setFacility(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{facilities.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
-      <label className="min-w-[160px] space-y-1 text-xs font-medium">Piso<select className={selectClass} value={floor??""} disabled={open||!!selected} onChange={e=>{setOffset(0);setFloor(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{floors.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
+      <label className="min-w-[180px] space-y-1 text-xs font-medium">Bodega<select className={selectClass} value={facility??""} disabled={open||!!selected||!!editing} onChange={e=>{setOffset(0);setFacility(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{facilities.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
+      <label className="min-w-[160px] space-y-1 text-xs font-medium">Piso<select className={selectClass} value={floor??""} disabled={open||!!selected||!!editing} onChange={e=>{setOffset(0);setFloor(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{floors.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
       <form className="flex min-w-[250px] flex-1 gap-2" onSubmit={e=>{e.preventDefault();setOffset(0);setFilter(query.trim())}}>
         <Input placeholder="Buscar PAL, producto, lote, ubicación..." value={query} maxLength={120} onChange={e=>setQuery(e.target.value)}/>
         <Button variant="outline" type="submit"><Search className="h-4 w-4"/></Button>
@@ -333,6 +371,9 @@ export function PalletRegister(){
       <div className="flex justify-end gap-2 border-t p-3"><Button size="sm" variant="outline" disabled={loading||offset===0} onClick={()=>setOffset(v=>Math.max(0,v-50))}>Anterior</Button><Button size="sm" variant="outline" disabled={loading||!more} onClick={()=>setOffset(v=>v+50)}>Siguiente</Button></div>
     </section>
     {open&&locations&&floor!=null?<RegisterDialog floorId={floor} locations={locations} onClose={()=>setOpen(false)} onSaved={p=>{setOpen(false);setNotice(p.code+" registrado. No se modificó stock Bsale.");setOffset(0);setFilter("");setQuery("");refresh()}}/>:null}
-    {selected&&locations?<DetailDialog pallet={selected} locations={locations} onClose={()=>setSelected(null)} onChanged={()=>{setSelected(null);setNotice("Observación registrada con historial.");refresh()}}/>:null}
+    {selected&&locations?<DetailDialog pallet={selected} locations={locations} onClose={()=>setSelected(null)}
+      onEdit={p=>{setSelected(null);setEditing(p)}} onChanged={()=>{setSelected(null);setNotice("Observación registrada con historial.");refresh()}}/>:null}
+    {editing&&locations&&floor!=null?<RegisterDialog key={"edit-"+editing.id} initial={editing} floorId={floor} locations={locations}
+      onClose={()=>setEditing(null)} onSaved={p=>{setEditing(null);setNotice(p.code+" actualizado. Identidad e historial conservados.");refresh()}}/>:null}
   </div>
 }

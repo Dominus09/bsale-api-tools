@@ -59,7 +59,7 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
   const slotByPosition=useMemo(()=>new Map((fresh?.observed_slots??[]).filter(s=>s.observed_level===Number(level)).map(s=>[s.position_id,s])),[fresh,level])
   const chosen=fresh?.items.find(p=>p.id===Number(picked))
   const slot=chosen?slotByPosition.get(chosen.id):undefined
-  const own=!!slot&&slot.pallet_id===exclude?.id
+  const own=!!slot&&!!exclude&&slot.pallet_id===exclude.id
   // Compatibilidad con API 2A: si no hay pallet_id, no asumir que el slot está libre.
   const blocked=!!slot&&!own
   const palletId=slot?.pallet_id
@@ -140,10 +140,10 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
                     const choose=()=>{if(active)setPicked(String(p.id))}
                     return <g key={p.id} role={active?"button":undefined} tabIndex={active?0:undefined} aria-label={active?shapeLabel:undefined}
                       aria-pressed={active?selected:undefined} onClick={active?choose:undefined} onKeyDown={active?ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();choose()}}:undefined}
-                      className={active?"cursor-pointer focus-visible:outline-none focus-visible:[&_rect]:stroke-[var(--primary)]":undefined} opacity={faded?.25:1}>
+                      className={active?"cursor-pointer focus-visible:outline-none focus-visible:[&_rect]:stroke-[var(--primary)]":undefined} opacity={faded ? .25 : 1}>
                       <title>{shapeLabel}</title>
                       <rect x={b.x} y={b.y} width={b.width} height={b.height} transform={`rotate(${b.rotation} ${cx} ${cy})`}
-                        fill={fill} fillOpacity={selected?.72:occ?.36:isPosition?1:p.element_type==="stair"||p.element_type==="office"?.18:.45}
+                        fill={fill} fillOpacity={selected ? .72 : occ ? .36 : isPosition ? 1 : p.element_type==="stair"||p.element_type==="office" ? .18 : .45}
                         stroke={stroke} strokeWidth={selected?2.6:restricted?1.8:1} strokeDasharray={restricted?"4 2":p.element_type==="aisle"?"4 3":undefined}/>
                       {(isPosition||["office","gate","stair","circulation","loose_storage"].includes(p.element_type))?
                         <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" pointerEvents="none"
