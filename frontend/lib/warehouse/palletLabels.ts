@@ -51,7 +51,10 @@ export function summarizePalletLabel(label:PalletLabelData){
 export function labelGroups(locations:PalletLocations){
   const parents=new Map(locations.items.filter(p=>p.parent_id!=null&&p.parent_code).map(p=>[p.id,{id:p.parent_id!,code:p.parent_code!}]))
   const groups=new Map<number,{id:number;code:string;ids:number[]}>()
-  for(const slot of locations.observed_slots){
+  const codes=new Map(locations.items.map(p=>[p.id,p.code]))
+  const ordered=[...locations.observed_slots].sort((a,b)=>
+    (codes.get(a.position_id)??"").localeCompare(codes.get(b.position_id)??"","es",{numeric:true})||a.observed_level-b.observed_level)
+  for(const slot of ordered){
     if(!slot.pallet_id)continue
     const parent=parents.get(slot.position_id)
     if(!parent)continue

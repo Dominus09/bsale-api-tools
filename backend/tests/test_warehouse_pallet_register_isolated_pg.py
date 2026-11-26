@@ -272,8 +272,8 @@ def batch_service(service):
                            SELECT i,1,1,100,'position','P7-'||lpad((i-100)::text,2,'0'),'Fixture '||i
                            FROM generate_series(101,116) i""")
             cur.execute("""INSERT INTO warehouse.layout_elements
-                (revision_id,physical_element_id,code_snap,name_snap,element_type_snap,width_m,depth_m)
-                SELECT 1,id,code,name,element_type,1.26,1.06 FROM warehouse.physical_elements WHERE id BETWEEN 100 AND 116""")
+                (revision_id,physical_element_id,code_snap,name_snap,element_type_snap,parent_physical_id_snap,width_m,depth_m)
+                SELECT 1,id,code,name,element_type,parent_id,1.26,1.06 FROM warehouse.physical_elements WHERE id BETWEEN 100 AND 116""")
     return service
 
 
@@ -423,3 +423,69 @@ def test_batch_simultaneous_retry_is_exactly_once(batch_service):
     assert sorted(r["replayed"] for r in results)==[False,True]
     assert [p["id"] for p in results[0]["items"]]==[p["id"] for p in results[1]["items"]]
     assert batch_counts()==tuple(a+2 for a in before)
+
+
+def test_pallet_labels_batch_read_only_identity_and_void(batch_service,monkeypatch):
+    service=batch_service
+    with psycopg2.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET warehouse.pallets_lab='on'")
+            cur.execute((SQL/"009_pallet_details_audit_AWAITING_APPROVAL.sql").read_text(encoding="utf-8"))
+    registered=service.register_batch(batch_body([101,102],level=15),actor="lab",uid=1)["items"]
+    ids=[p["id"] for p in registered]
+    payload={"floor_id":1,"pallet_ids":list(reversed(ids))}
+    app=FastAPI()
+    app.include_router(router_module.router)
+    monkeypatch.setattr(router_module,"default_pallet_service",lambda:service)
+    client=TestClient(app)
+    url="/warehouse/pallets/labels/preview"
+    before=batch_counts()
+    assert client.post(url,json=payload).status_code in (401,403)
+    app.dependency_overrides[router_module.require_management_access]=lambda:{"id":1,"email":"lab"}
+    response=client.post(url,json=payload)
+    assert response.status_code==200,response.text
+    assert response.headers["cache-control"]=="no-store"
+    labels=response.json()["items"]
+    assert [p["id"] for p in labels]==payload["pallet_ids"]
+    assert len({p["qr_value"] for p in labels})==2
+    for label in labels:
+        assert label["qr_value"]==label["code"]
+        assert not ({"position_id","position_code_snap","observed_level","floor_id","notes","events"}&set(label))
+        assert label["lines"][0]["product_name_snap"]=="Producto fixture"
+    assert batch_counts()==before
+    positions=service.locations(1)["items"]
+    assert next(p for p in positions if p["id"]==101)["parent_code"]=="P7"
+    assert next(p for p in positions if p["id"]==101)["parent_id"]==100
+    assert service.locations(1)["revision"]["row_version"]==6
+    old_label=labels[1]
+    moved=service.observe_location(ids[0],{**loc(103,15),"expected_row_version":1,"reason":"Traslado observado"},actor="lab",uid=1)
+    assert moved["position_id"]==103
+    service.update_details(ids[0],{
+        "expected_row_version":2,"reason":"Fecha verificada","pallet_kind":"partial",
+        "received_on":None,"notes":None,"remove_line_ids":[],
+        "lines":[{**line(boxes=4,expires_on="2028-02-20"),"line_id":moved["lines"][0]["id"]}],
+    },actor="lab",uid=1)
+    before=batch_counts()
+    new_label=client.post(url,json={"floor_id":1,"pallet_ids":[ids[0]]}).json()["items"][0]
+    assert new_label["qr_matrix"]==old_label["qr_matrix"]
+    assert new_label["qr_value"]==old_label["qr_value"]
+    assert new_label["row_version"]==3
+    assert new_label["lines"][0]["expires_on"]=="2028-02-20"
+    assert new_label["lines"][0]["total_units"]==97
+    assert batch_counts()==before
+    assert client.get(f"/warehouse/pallets/{ids[0]}").json()["position_code_snap"]=="P7-03"
+    assert client.post(url,json={"floor_id":1,"pallet_ids":[ids[0],ids[0]]}).status_code==422
+    assert client.post(url,json={"floor_id":1,"pallet_ids":[ids[0],999999999]}).status_code==409
+    assert client.post(url,json={"floor_id":2,"pallet_ids":[ids[0]]}).status_code==404
+    assert batch_counts()==before
+    service.void(ids[1],{"expected_row_version":1,"reason":"Anulación fixture"},actor="lab",uid=1)
+    before=batch_counts()
+    assert client.post(url,json=payload).status_code==409
+    assert client.get(f"/warehouse/pallets/{ids[1]}").json()["status"]=="voided"
+    assert batch_counts()==before
+    with psycopg2.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT units_per_box FROM bsale.variants WHERE company_id=3 AND bsale_id=100")
+            assert cur.fetchone()[0]==24
+            cur.execute("SELECT row_version FROM warehouse.layout_revisions WHERE id=1")
+            assert cur.fetchone()[0]==6
