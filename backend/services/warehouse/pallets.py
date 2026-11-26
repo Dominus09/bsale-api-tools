@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
+from uuid import UUID, uuid5
 
 from psycopg2 import errors
 
@@ -14,6 +15,7 @@ from backend.services.warehouse.errors import (
     WarehouseConflictError, WarehouseError, WarehouseNotFoundError, WarehouseValidationError,
 )
 from backend.services.warehouse.service import _serialize_row
+from backend.services.warehouse.pallet_models import MAX_BATCH_PALLETS, MAX_BATCH_LINES
 
 # Mismo alcance de empresa que el Editor Maestro existente. No aceptar
 # company_id desde el cliente. Ampliar alcance mediante permisos explícitos.
@@ -245,13 +247,58 @@ class PalletService:
                 item["current_position_code"] = current["code"] if current else None
             return {"items": items, "has_more": len(ids) > limit, "offset": offset}
 
+    def _prepare_contents(self, cur, data: dict, product_cache: dict | None = None):
+        """Validación compartida por registro individual y masivo."""
+        kind = data["pallet_kind"]
+        lines = data["lines"]
+        variants = {line["variant_id"] for line in lines}
+        if not 1 <= len(lines) <= 100 or kind not in ("complete","partial","mixed"):
+            raise WarehouseValidationError("Tipo o líneas del pallet inválidos.")
+        if (kind == "mixed" and len(variants) < 2) or (kind != "mixed" and len(variants) != 1):
+            raise WarehouseValidationError("Mixto requiere distintas variantes; completo/molido admite varios lotes de una variante.")
+        if data.get("received_on") and date.fromisoformat(str(data["received_on"])) > chile_business_date():
+            raise WarehouseValidationError("Fecha de ingreso futura.")
+        cache = product_cache if product_cache is not None else {}
+        normalized = []
+        for line in lines:
+            vid = line["variant_id"]
+            if vid not in cache:
+                cache[vid] = self._product(cur, vid)
+            product = cache[vid]
+            normalized.append((normalize_line(line, product), product))
+        return normalized
+
+    def _insert_registration(self, cur, floor, data, key, fingerprint, loc, normalized, *,
+                             actor, uid, batch_meta=None):
+        kind = data["pallet_kind"]
+        cur.execute("""INSERT INTO warehouse.pallets
+          (registration_key,request_hash,company_id,facility_id,floor_id,pallet_kind,received_on,notes,
+           position_id,position_code_snap,observed_level,layout_revision_id,layout_row_version,created_by)
+          VALUES (%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                    (key,fingerprint,COMPANY_ID,floor["facility_id"],floor["floor_id"],kind,
+                     data.get("received_on"),data.get("notes"),*loc,actor))
+        pid = cur.fetchone()[0]
+        for i, (line, product) in enumerate(normalized, 1):
+            cur.execute("""INSERT INTO warehouse.pallet_lines
+             (pallet_id,line_number,variant_id,product_id,product_name_snap,variant_name_snap,
+              product_type_snap,barcode_snap,sku_snap,units_per_box_snap,quantity_status,boxes,
+              loose_units,total_units,expiry_status,expires_on,lot)
+             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (pid,i,product["variant_id"],product["product_id"],product["product_name"],
+                         product["variant_name"],product["product_type"],product["barcode"],product["sku"],
+                         line["units_per_box_snap"],line["quantity_status"],line["boxes"],line["loose_units"],
+                         line["total_units"],line["expiry_status"],line.get("expires_on"),line.get("lot")))
+        saved = self._get(cur, pid)
+        event = saved if batch_meta is None else {**saved, "registration_batch": batch_meta}
+        self._event(cur,pid,"registered",actor,uid,event)
+        return saved
+
     def register(self, data: dict, *, actor: str, uid: int | None):
+        # Mantener el fingerprint del contrato 2A para todos los reintentos existentes.
         fingerprint = hashlib.sha256(_json(data).encode()).hexdigest()
         key = str(data["registration_key"])
         with self._transaction() as cur:
             floor = self._floor(cur, data["floor_id"])
-            # Serializa reintentos de una misma solicitud incluso si la conexión
-            # anterior perdió respuesta después del COMMIT.
             cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ("warehouse:register:"+key,))
             cur.execute("SELECT id,request_hash FROM warehouse.pallets WHERE registration_key=%s::uuid AND company_id=%s", (key, COMPANY_ID))
             previous = _one(cur)
@@ -259,39 +306,83 @@ class PalletService:
                 if previous["request_hash"] != fingerprint:
                     raise WarehouseConflictError("La solicitud ya se registró con otros datos. Revise el listado.", code="registration_key_reused")
                 return self._get(cur, previous["id"])
-            kind = data["pallet_kind"]
-            lines = data["lines"]
-            variants = {line["variant_id"] for line in lines}
-            if not 1 <= len(lines) <= 100 or kind not in ("complete","partial","mixed"):
-                raise WarehouseValidationError("Tipo o líneas del pallet inválidos.")
-            if (kind == "mixed" and len(variants) < 2) or (kind != "mixed" and len(variants) != 1):
-                raise WarehouseValidationError("Mixto requiere distintas variantes; completo/molido admite varios lotes de una variante.")
-            if data.get("received_on"):
-                if date.fromisoformat(str(data["received_on"])) > chile_business_date():
-                    raise WarehouseValidationError("Fecha de ingreso futura.")
             loc = self._location(cur, floor["floor_id"], data)
-            normalized = [(normalize_line(line, product), product) for line in lines
-                          for product in [self._product(cur, line["variant_id"])]]
-            cur.execute("""INSERT INTO warehouse.pallets
-              (registration_key,request_hash,company_id,facility_id,floor_id,pallet_kind,received_on,notes,
-               position_id,position_code_snap,observed_level,layout_revision_id,layout_row_version,created_by)
-              VALUES (%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-                        (key,fingerprint,COMPANY_ID,floor["facility_id"],floor["floor_id"],kind,
-                         data.get("received_on"),data.get("notes"),*loc,actor))
-            pid = cur.fetchone()[0]
-            for i, (line, product) in enumerate(normalized, 1):
-                cur.execute("""INSERT INTO warehouse.pallet_lines
-                 (pallet_id,line_number,variant_id,product_id,product_name_snap,variant_name_snap,
-                  product_type_snap,barcode_snap,sku_snap,units_per_box_snap,quantity_status,boxes,
-                  loose_units,total_units,expiry_status,expires_on,lot)
-                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                            (pid,i,product["variant_id"],product["product_id"],product["product_name"],
-                             product["variant_name"],product["product_type"],product["barcode"],product["sku"],
-                             line["units_per_box_snap"],line["quantity_status"],line["boxes"],line["loose_units"],
-                             line["total_units"],line["expiry_status"],line.get("expires_on"),line.get("lot")))
-            saved = self._get(cur, pid)
-            self._event(cur,pid,"registered",actor,uid,saved)
-            return saved
+            normalized = self._prepare_contents(cur, data)
+            return self._insert_registration(cur,floor,data,key,fingerprint,loc,normalized,actor=actor,uid=uid)
+
+    def register_batch(self, data: dict, *, actor: str, uid: int | None):
+        """Alta atómica, con identidad y evento por pallet; sin migración nueva.
+
+        UUID derivados del batch_key + ordinal permiten replay exacto usando las
+        restricciones 008. Todas las filas guardan el hash de la solicitud ENTERA;
+        una solicitud alterada, incluso con menos/otras posiciones, no se reusa.
+        El ordinal se calcula en orden de ID de posición, no en orden del clic.
+        """
+        items = sorted(data["items"], key=lambda item: item["position_id"])
+        ids = [item["position_id"] for item in items]
+        level = data["observed_level"]
+        if (not 2 <= len(items) <= MAX_BATCH_PALLETS or len(set(ids)) != len(ids)
+            or sum(len(i["lines"]) for i in items) > MAX_BATCH_LINES
+            or data.get("observed_ack") is not True or type(level) is not int or not 1 <= level <= 100):
+            raise WarehouseValidationError("Registro masivo inválido: confirme posiciones únicas y nivel físico.")
+        batch_uuid = UUID(str(data["batch_key"]))
+        batch_key = str(batch_uuid)
+        canonical = {**data, "batch_key": batch_key, "items": items}
+        fingerprint = "batch:v1:" + hashlib.sha256(_json(canonical).encode()).hexdigest()
+        keys = [str(uuid5(batch_uuid, f"warehouse:pallet-batch:v1:{i}")) for i in range(len(items))]
+        with self._transaction() as cur:
+            floor = self._floor(cur, data["floor_id"])
+            # Una clave de operación, más los locks del mismo espacio que el
+            # alta individual. Adquirir en orden estable para no cruzar lotes.
+            cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ("warehouse:batch:"+batch_key,))
+            for key in sorted(keys):
+                cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ("warehouse:register:"+key,))
+            cur.execute("""SELECT id,registration_key::text AS registration_key,request_hash,company_id
+                           FROM warehouse.pallets WHERE registration_key=ANY(%s::uuid[])""", (keys,))
+            previous = {r["registration_key"]:r for r in _rows(cur)}
+            if previous:
+                if len(previous) != len(items) or any(r["company_id"] != COMPANY_ID or r["request_hash"] != fingerprint for r in previous.values()):
+                    raise WarehouseConflictError("La operación masiva ya se usó con otros datos. Revise los registros antes de continuar.",code="batch_key_reused")
+                # No reinsertar aun si luego se corrigieron o anularon pallets.
+                return {"batch_key":batch_key, "replayed":True,
+                        "items":[self._get(cur,previous[key]["id"]) for key in keys]}
+            rev = self._revision(cur, floor["floor_id"], lock=True)
+            if not rev or rev["id"] != data["layout_revision_id"] or rev["row_version"] != data["layout_row_version"]:
+                raise WarehouseConflictError("Cambió la revisión del plano. Actualice ubicaciones.",code="layout_changed")
+            positions = {p["id"]:p for p in self._positions(cur,floor["floor_id"],rev["id"])}
+            for pid in ids:
+                p = positions.get(pid)
+                if p is None:
+                    raise WarehouseValidationError("Una posición no pertenece al plano guardado.",code="invalid_location")
+                meta = {**(p.get("physical_meta_snap") or {}),**(p.get("constraints_json") or {}),**(p.get("meta_json") or {})}
+                # Las ubicaciones especiales requieren observación individual.
+                if p["code"].startswith("BAE-") or meta.get("under_stair") is True or meta.get("storage_kind") == "special_restricted":
+                    raise WarehouseValidationError(f"{p['code']} es restringida; registre su observación individualmente.",code="restricted_batch_location")
+            cur.execute("""SELECT position_code_snap FROM warehouse.pallets
+                           WHERE status='active' AND position_id=ANY(%s::bigint[]) AND observed_level=%s
+                           ORDER BY position_code_snap""",(ids,level))
+            occupied = [r[0] for r in cur.fetchall()]
+            if occupied:
+                raise WarehouseConflictError("Ya hay pallets registrados en: "+", ".join(occupied)+". No se guardó el grupo.",code="occupied_observed_slot")
+            # Validar TODAS las líneas y el catálogo antes de insertar; índice
+            # único 008 cubre una ocupación que llegue después del precheck.
+            cache = {}
+            prepared = []
+            for item,key in zip(items,keys):
+                try:
+                    normalized = self._prepare_contents(cur,item,cache)
+                except (WarehouseValidationError, WarehouseConflictError) as exc:
+                    raise type(exc)(f"{positions[item['position_id']]['code']}: {exc}",code=exc.code) from exc
+                pos = positions[item["position_id"]]
+                loc = (pos["id"],pos["code"],level,rev["id"],rev["row_version"])
+                prepared.append((item,key,loc,normalized))
+            saved = []
+            # Mismo orden de slots para altas simultáneas; una colisión del
+            # índice revierte todos los INSERT, líneas y eventos del lote.
+            for i,(item,key,loc,normalized) in enumerate(prepared,1):
+                saved.append(self._insert_registration(cur,floor,item,key,fingerprint,loc,normalized,
+                    actor=actor,uid=uid,batch_meta={"batch_key":batch_key,"ordinal":i,"size":len(items)}))
+            return {"batch_key":batch_key,"replayed":False,"items":saved}
 
     def update_details(self, pallet_id: int, data: dict, *, actor: str, uid: int | None):
         """Corrección de levantamiento, no picking ni movimiento de inventario."""

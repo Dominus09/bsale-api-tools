@@ -259,3 +259,167 @@ def test_pallet_details_migration_edit_and_history(service, monkeypatch):
             assert cur.fetchone()[0]==24
     service.void(original["id"],{"expected_row_version":3,"reason":"Fixture finalizado"},actor="lab",uid=1)
     assert client.patch(endpoint,json={**replacement,"expected_row_version":4}).status_code==409
+
+
+# Fase 2C: solo datos de laboratorio en la BD desechable del fixture.
+@pytest.fixture(scope="module")
+def batch_service(service):
+    with psycopg2.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO warehouse.physical_elements(id,facility_id,floor_id,element_type,code,name)
+                           VALUES(100,1,1,'aisle','P7','Pasillo 7 fixture')""")
+            cur.execute("""INSERT INTO warehouse.physical_elements(id,facility_id,floor_id,parent_id,element_type,code,name)
+                           SELECT i,1,1,100,'position','P7-'||lpad((i-100)::text,2,'0'),'Fixture '||i
+                           FROM generate_series(101,116) i""")
+            cur.execute("""INSERT INTO warehouse.layout_elements
+                (revision_id,physical_element_id,code_snap,name_snap,element_type_snap,width_m,depth_m)
+                SELECT 1,id,code,name,element_type,1.26,1.06 FROM warehouse.physical_elements WHERE id BETWEEN 100 AND 116""")
+    return service
+
+
+def batch_body(positions,level=1,**patch):
+    return {"batch_key":str(uuid4()),"floor_id":1,"layout_revision_id":1,
+            "layout_row_version":6,"observed_level":level,"observed_ack":True,
+            "items":[{"position_id":pid,"pallet_kind":"complete","received_on":None,
+                      "notes":None,"lines":[line()]} for pid in positions],**patch}
+
+
+def batch_counts():
+    with psycopg2.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            result=[]
+            for table in ("pallets","pallet_lines","pallet_events"):
+                cur.execute("SELECT count(*) FROM warehouse."+table)
+                result.append(cur.fetchone()[0])
+            return tuple(result)
+
+
+def test_batch_ten_positions_and_exact_replay(batch_service,monkeypatch):
+    service=batch_service
+    app=FastAPI()
+    app.include_router(router_module.router)
+    monkeypatch.setattr(router_module,"default_pallet_service",lambda:service)
+    client=TestClient(app)
+    payload=batch_body(list(range(101,111)))
+    payload["items"][2]["lines"]=[line(quantity_status="unknown",boxes=None,loose_units=None,
+        expiry_status="unknown",expires_on=None,lot=None)]
+    payload["items"][3]["lines"]=[line(boxes=3,loose_units=0,lot="LOT-B"),
+        line(boxes=1,loose_units=0,lot="LOT-C",expires_on="2027-02-01")]
+    payload["items"][4]["pallet_kind"]="partial"
+    payload["items"][4]["received_on"]=chile_business_date().isoformat()
+    before=batch_counts()
+    assert client.post("/warehouse/pallets/batch",json=payload).status_code in (401,403)
+    app.dependency_overrides[router_module.require_management_access]=lambda:{"id":1,"email":"lab"}
+    saved=client.post("/warehouse/pallets/batch",json=payload)
+    assert saved.status_code==201,saved.text
+    result=saved.json()
+    records=result["items"]
+    assert not result["replayed"] and len({p["code"] for p in records})==10
+    assert [p["position_id"] for p in records]==list(range(101,111))
+    assert records[2]["lines"][0]["total_units"] is None
+    assert len(records[3]["lines"])==2 and records[3]["lines"][1]["lot"]=="LOT-C"
+    assert records[4]["pallet_kind"]=="partial"
+    assert batch_counts()==tuple(a+b for a,b in zip(before,(10,11,10)))
+    for i,p in enumerate(records,1):
+        event=service.get(p["id"])["events"][0]
+        assert event["action"]=="registered"
+        assert event["detail_json"]["registration_batch"]=={"batch_key":payload["batch_key"],"ordinal":i,"size":10}
+    replay=client.post("/warehouse/pallets/batch",json={**payload,"items":list(reversed(payload["items"]))})
+    assert replay.status_code==201 and replay.json()["replayed"]
+    assert [p["id"] for p in replay.json()["items"]]==[p["id"] for p in records]
+    # Reuse same UUID even for a completely different set or a shorter group.
+    for items in (payload["items"][:2],batch_body([111,112])["items"]):
+        bad=client.post("/warehouse/pallets/batch",json={**payload,"items":items})
+        assert bad.status_code==409,bad.text
+    assert batch_counts()==tuple(a+b for a,b in zip(before,(10,11,10)))
+    assert service.locations(1)["revision"]["row_version"]==6
+    with psycopg2.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT units_per_box FROM bsale.variants WHERE company_id=3 AND bsale_id=100")
+            assert cur.fetchone()[0]==24
+
+
+def test_batch_validation_and_rollback_no_partial_rows(batch_service,monkeypatch):
+    service=batch_service
+    # Independent of the ten-position test and its execution order.
+    create(service,body(**loc(116,level=8)))
+    before=batch_counts()
+    for payload,exc in (
+        (batch_body([111,116],level=8),WarehouseConflictError),  # occupied
+        (batch_body([111,3]),WarehouseValidationError), # restricted BAE
+        (batch_body([111,4]),WarehouseValidationError), # different company/floor
+        (batch_body([111,112],layout_row_version=5),WarehouseConflictError),
+    ):
+        with pytest.raises(exc):
+            service.register_batch(payload,actor="lab",uid=1)
+        assert batch_counts()==before
+    bad=batch_body([111,112])
+    bad["items"][1]["lines"]=[line(200)]
+    with pytest.raises(WarehouseValidationError):
+        service.register_batch(bad,actor="lab",uid=1)
+    assert batch_counts()==before
+    # Force a real transactional rollback after INSERT into all three tables.
+    original=service._insert_registration
+    count=0
+    def fail_after_first(*args,**kwargs):
+        nonlocal count
+        result=original(*args,**kwargs)
+        count+=1
+        if count==1:
+            raise WarehouseValidationError("fixture rollback after first pallet")
+        return result
+    monkeypatch.setattr(service,"_insert_registration",fail_after_first)
+    with pytest.raises(WarehouseValidationError):
+        service.register_batch(batch_body([111,112]),actor="lab",uid=1)
+    assert count==1 and batch_counts()==before
+
+
+def test_batch_concurrent_overlap_rolls_back_losing_group(batch_service):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    # Both transactions have inserted a different first slot before racing
+    # for the shared second slot. The unique index must roll the loser back.
+    barrier=Barrier(2,timeout=15)
+    before=batch_counts()
+    def run(positions):
+        local=PalletService(lambda:psycopg2.connect(DSN))
+        original=local._insert_registration
+        count=0
+        def insert(*args,**kwargs):
+            nonlocal count
+            result=original(*args,**kwargs)
+            count+=1
+            if count==1: barrier.wait()
+            return result
+        local._insert_registration=insert
+        try:
+            result=local.register_batch(batch_body(positions,level=9),actor="lab",uid=1)
+            return ("ok",positions,result)
+        except WarehouseConflictError:
+            return ("conflict",positions,None)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a=pool.submit(run,[111,113])
+        b=pool.submit(run,[112,113])
+        results=[a.result(timeout=45),b.result(timeout=45)]
+    assert sorted(r[0] for r in results)==["conflict","ok"]
+    winner=next(r[1] for r in results if r[0]=="ok")
+    slots=[s for s in batch_service.locations(1)["observed_slots"] if s["observed_level"]==9]
+    assert {s["position_id"] for s in slots}==set(winner)
+    assert batch_counts()==tuple(a+2 for a in before)
+
+
+def test_batch_simultaneous_retry_is_exactly_once(batch_service):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    before=batch_counts()
+    payload=batch_body([114,115],level=10)
+    barrier=Barrier(2,timeout=15)
+    def run():
+        barrier.wait()
+        return batch_service.register_batch(payload,actor="lab",uid=1)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a,b=pool.submit(run),pool.submit(run)
+        results=[a.result(timeout=45),b.result(timeout=45)]
+    assert sorted(r["replayed"] for r in results)==[False,True]
+    assert [p["id"] for p in results[0]["items"]]==[p["id"] for p in results[1]["items"]]
+    assert batch_counts()==tuple(a+2 for a in before)

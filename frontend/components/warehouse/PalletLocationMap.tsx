@@ -9,23 +9,34 @@ import { getWarehouseRevision, getWarehousePallet, listPalletLocations, type Pal
 import { metricToScreen, type ViewportTransform } from "@/lib/warehouse/coords"
 import type { RevisionBundle } from "@/lib/warehouse/types"
 import { isUnderStairMeta } from "@/lib/warehouse/style"
-import { observedSlotState, slotsAtLevel } from "@/lib/warehouse/palletMap"
+import { observedSlotState, slotsAtLevel, batchSelectable, restrictedBatchLocation, toggleBatchGroup, groupBatchPositions, MAX_BATCH_PALLETS } from "@/lib/warehouse/palletMap"
 
 export type ObservedLocationForm = {id:string;level:string;ack:boolean}
+export type BatchLocationForm = {ids:number[];level:string;ack:boolean}
 type Props = {
   locations:PalletLocations; value:ObservedLocationForm; exclude?:PalletRecord
   onClose:()=>void
   onSelect:(value:ObservedLocationForm, fresh:PalletLocations)=>void
+  onSelectMany?:(value:BatchLocationForm, fresh:PalletLocations)=>void
+  initialBatch?:BatchLocationForm|null
+  startMultiple?:boolean
 }
 const message=(e:unknown)=>e instanceof Error?e.message:"No se pudo cargar el mapa."
 const number=(n:number)=>n.toLocaleString("es-CL")
 const dateLabel=(d:string|null)=>d?d.slice(0,10).split("-").reverse().join("/"):"Sin verificar"
 
-export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Props){
+export function PalletLocationMap({locations,value,exclude,onClose,onSelect,onSelectMany,initialBatch,startMultiple}:Props){
   const [fresh,setFresh]=useState<PalletLocations|null>(null)
   const [bundle,setBundle]=useState<RevisionBundle|null>(null)
-  const [level,setLevel]=useState(value.level||"1")
+  const [multiple,setMultiple]=useState(!!onSelectMany&&(!!initialBatch||!!startMultiple))
+  const [selectedIds,setSelectedIds]=useState<number[]>(initialBatch?.ids??[])
+  const [level,setLevel]=useState(initialBatch?.level||value.level||"1")
   const [picked,setPicked]=useState(value.id)
+  const [selectionMessage,setSelectionMessage]=useState("")
+  const changeLevel=(next:string)=>{
+    if(next!==level){setSelectedIds([]);setSelectionMessage(multiple?"Selección reiniciada para el nuevo nivel.":"")}
+    setLevel(next)
+  }
   const [search,setSearch]=useState("")
   const [zoom,setZoom]=useState(1)
   const [refresh,setRefresh]=useState(0)
@@ -86,6 +97,29 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
     return [...(bundle?.elements??[])].sort((a,b)=>(order[a.physical.element_type]??4)-(order[b.physical.element_type]??4))
   },[bundle])
   const known=new Map((fresh?.items??[]).map(p=>[p.id,p]))
+  // Agrupar por el padre físico guardado (pasillo/sector), no por geometría
+  // inferida ni por nombres escritos por el usuario.
+  const groupList=groupBatchPositions(elements,new Set(known.keys()))
+  const invalidIds=selectedIds.filter(id=>{const p=known.get(id);return !p||!batchSelectable(p,slotByPosition)})
+  const selectedSet=new Set(selectedIds)
+  const readyMany=!!fresh&&validLevel&&selectedIds.length>=2&&selectedIds.length<=MAX_BATCH_PALLETS&&!invalidIds.length
+  const chooseMany=(id:number)=>{
+    setSelectionMessage("")
+    if(selectedSet.has(id)){setSelectedIds(old=>old.filter(x=>x!==id));return}
+    const pos=known.get(id)
+    if(!pos||!batchSelectable(pos,slotByPosition)){
+      setSelectionMessage("Posición ocupada o restringida: no se puede agregar al registro masivo.");return
+    }
+    if(selectedIds.length>=MAX_BATCH_PALLETS){setSelectionMessage("Máximo "+MAX_BATCH_PALLETS+" pallets por operación.");return}
+    setSelectedIds(old=>old.includes(id)?old:old.length>=MAX_BATCH_PALLETS?old:[...old,id])
+  }
+  const chooseGroup=(group:{ids:number[]})=>{
+    const eligible=group.ids.filter(id=>{const p=known.get(id);return !!p&&batchSelectable(p,slotByPosition)})
+    if(!eligible.length)return
+    const remaining=MAX_BATCH_PALLETS-new Set([...selectedIds,...eligible]).size
+    setSelectionMessage(remaining<0&&!eligible.every(id=>selectedIds.includes(id))?"Se alcanzó el máximo por operación; revisa la selección.":"")
+    setSelectedIds(old=>toggleBatchGroup(old,eligible))
+  }
   const matches=(code:string)=>!search.trim()||code.toLowerCase().includes(search.trim().toLowerCase())
   const levels=[...new Set([1,...(fresh?.observed_slots??[]).map(s=>s.observed_level),...(validLevel?[Number(level)]:[])])].sort((a,b)=>a-b)
   const numberOccupied=validLevel?[...slotByPosition.keys()].filter(id=>known.has(id)).length:0
@@ -97,16 +131,23 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
         <DialogDescription>{locations.floor.facility_code} · {locations.floor.floor_code} · Plano {locations.revision?.status} v{revisionVersion} · orientación horizontal</DialogDescription>
       </DialogHeader>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background p-4">
+        {onSelectMany?<div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-card p-3">
+          <div className="flex gap-1 rounded-lg bg-muted p-1">
+            <Button type="button" size="sm" variant={multiple?"ghost":"default"} onClick={()=>{setMultiple(false);setSelectionMessage("")}}>Individual</Button>
+            <Button type="button" size="sm" variant={multiple?"default":"ghost"} onClick={()=>{setMultiple(true);setSelectionMessage("");if(!selectedIds.length&&chosen&&batchSelectable(chosen,slotByPosition))setSelectedIds([chosen.id])}}>Registro masivo</Button>
+          </div>
+          <p className="text-xs text-muted-foreground">{multiple?selectedIds.length+" seleccionados · mismo nivel · mínimo 2":"Selecciona una posición"}</p>
+        </div>:null}
         <div className="flex flex-wrap items-end justify-between gap-3 rounded-xl border bg-card p-3">
           <div className="flex flex-wrap items-end gap-2">
             <label className="space-y-1 text-xs font-medium">Nivel observado
-              <select value={validLevel?level:""} onChange={e=>setLevel(e.target.value)} className="block h-9 min-w-[120px] rounded-md border bg-card px-2 text-sm text-foreground">
+              <select value={validLevel?level:""} onChange={e=>changeLevel(e.target.value)} className="block h-9 min-w-[120px] rounded-md border bg-card px-2 text-sm text-foreground">
                 {!validLevel?<option value="">Seleccionar nivel</option>:null}
                 {levels.map(n=><option key={n} value={n}>N{n}{n===1?" · Piso":""}</option>)}
               </select>
             </label>
             <label className="w-24 space-y-1 text-xs font-medium">Otro nivel
-              <Input type="number" min={1} max={100} value={level} onChange={e=>setLevel(e.target.value)}/>
+              <Input type="number" min={1} max={100} value={level} onChange={e=>changeLevel(e.target.value)}/>
             </label>
             <label className="relative space-y-1 text-xs font-medium">Buscar posición
               <span className="relative block"><Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground"/><Input className="w-40 pl-8" placeholder="P3-04, IZ…" value={search} onChange={e=>setSearch(e.target.value)}/></span>
@@ -122,6 +163,24 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
         <div className="rounded-lg border border-lq-warning/30 bg-lq-warning/10 p-2 text-xs text-lq-warning">
           <AlertTriangle className="mr-1 inline h-4 w-4"/>Sin registro no significa vacío. Confirma físicamente el nivel; el mapa no autoriza apilamiento ni almacenamiento en zonas restringidas.
         </div>
+        {multiple&&fresh&&bundle?<div className="space-y-2 rounded-xl border bg-card p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-xs font-semibold">Selección por pasillo / sector</h3>
+            <Button type="button" variant="ghost" size="sm" disabled={!selectedIds.length} onClick={()=>{setSelectedIds([]);setSelectionMessage("")}}>Limpiar selección</Button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {groupList.map(g=>{
+              const eligible=g.ids.filter(id=>{const p=known.get(id);return !!p&&batchSelectable(p,slotByPosition)})
+              const count=g.ids.filter(id=>selectedSet.has(id)).length
+              return <Button key={g.id} type="button" size="sm" variant={count?"default":"outline"} disabled={!validLevel||!eligible.length} onClick={()=>chooseGroup(g)}
+                aria-pressed={count>0} title={g.code+" · "+eligible.length+" seleccionables de "+g.ids.length}>{g.code} · {count}/{g.ids.length}{eligible.length<g.ids.length?" ("+(g.ids.length-eligible.length)+" excl.)":""}</Button>
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">Clic en un pasillo para seleccionar o quitar sus posiciones sin registro y no restringidas. También puedes marcar puestos individuales de varios pasillos.</p>
+          {selectionMessage?<p role="status" className="text-xs text-lq-warning">{selectionMessage}</p>:null}
+          {invalidIds.length?<div className="flex flex-wrap items-center gap-2 text-xs text-destructive">Hay {invalidIds.length} posiciones que ya no se pueden registrar.
+            <Button type="button" size="sm" variant="outline" onClick={()=>setSelectedIds(old=>old.filter(id=>!invalidIds.includes(id)))}>Quitar bloqueadas</Button></div>:null}
+        </div>:null}
         {error?<p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>:!fresh||!bundle?<div className="flex items-center justify-center gap-2 p-12 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin"/>Cargando plano y ocupación…</div>:
           <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_285px]">
             <div className="min-w-0 rounded-xl border bg-card p-2">
@@ -131,27 +190,28 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
                   {elements.map(e=>{
                     const p=e.physical,g=e.geometry,b=metricToScreen(g,viewport),cx=b.x+b.width/2,cy=b.y+b.height/2
                     const pos=known.get(p.id),isPosition=p.element_type==="position"
-                    const selected=!!pos&&String(p.id)===picked
+                    const selected=!!pos&&(multiple?selectedSet.has(p.id):String(p.id)===picked)
                     const occ=slotByPosition.get(p.id)
-                    const restricted=!!pos&&(isUnderStairMeta({...pos.physical_meta_snap,...pos.constraints_json,...pos.meta_json})||pos.code.startsWith("BAE-"))
+                    const restricted=!!pos&&restrictedBatchLocation(pos)
                     const active=!!pos&&validLevel
                     const faded=isPosition&&!matches(p.code)
                     const fill=selected?"var(--chart-3)":occ?"var(--lq-warning)":isPosition?"var(--muted)":p.element_type==="stair"?"var(--chart-5)":p.element_type==="office"?"var(--chart-4)":"var(--card)"
                     const stroke=selected?"var(--lq-info)":restricted?"var(--chart-5)":occ?"var(--lq-warning)":"var(--lq-line)"
                     const shapeLabel=pos?p.code+(occ?" · "+(occ.pallet_code??"Pallet registrado"):" · Sin registro en este nivel")+(restricted?" · Restringida":""):p.code
-                    const choose=()=>{if(active)setPicked(String(p.id))}
+                    const choose=()=>{if(active){setPicked(String(p.id));if(multiple)chooseMany(p.id)}}
                     return <g key={p.id} role={active?"button":undefined} tabIndex={active?0:undefined} aria-label={active?shapeLabel:undefined}
                       aria-pressed={active?selected:undefined} onClick={active?choose:undefined} onKeyDown={active?ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();choose()}}:undefined}
                       className={active?"cursor-pointer focus-visible:outline-none focus-visible:[&_rect]:stroke-[var(--primary)]":undefined} opacity={faded ? .25 : 1}>
                       <title>{shapeLabel}</title>
                       <rect x={b.x} y={b.y} width={b.width} height={b.height} transform={`rotate(${b.rotation} ${cx} ${cy})`}
                         fill={fill} fillOpacity={selected ? .24 : occ ? .23 : isPosition ? (pos?1:.28) : p.element_type==="stair"||p.element_type==="office" ? .18 : .45}
-                        stroke={stroke} strokeWidth={selected?2.6:restricted?1.8:1} strokeDasharray={restricted?"4 2":p.element_type==="aisle"?"4 3":undefined}/>
+                        stroke={multiple&&selected&&(occ||restricted)?"var(--destructive)":stroke} strokeWidth={selected?2.6:restricted?1.8:1} strokeDasharray={restricted?"4 2":p.element_type==="aisle"?"4 3":undefined}/>
                       {p.element_type==="aisle"?<text x={cx} y={cy-b.height/2-7} fontSize={12} fontWeight={600} fill="var(--foreground)" textAnchor="middle" pointerEvents="none">{p.code}</text>:null}
                       {(isPosition||["office","gate","stair","circulation","loose_storage"].includes(p.element_type))?
                         <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" pointerEvents="none"
                           fontSize={isPosition?Math.max(6,Math.min(9,Math.min(b.width,b.height)*.21)):10} fontWeight={selected||isPosition?600:400}
                           fill="var(--foreground)">{p.code}</text>:null}
+                      {multiple&&selected&&isPosition?<text x={cx+Math.min(b.width,b.height)*.28} y={cy-Math.min(b.width,b.height)*.27} fontSize={10} fontWeight={800} fill="var(--lq-info)" pointerEvents="none">✓</text>:null}
                       {occ&&isPosition?<circle cx={cx+Math.min(b.width,b.height)*.32} cy={cy-Math.min(b.width,b.height)*.32} r={2.8} fill="var(--lq-warning)" pointerEvents="none"/>:null}
                     </g>
                   })}
@@ -162,7 +222,15 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
               </div>
             </div>
             <aside className="min-w-0 space-y-3 rounded-xl border bg-card p-4">
-              <p className="text-xs font-medium text-muted-foreground">UBICACIÓN SELECCIONADA</p>
+              {multiple?<div className="space-y-2 border-b pb-3">
+                <p className="text-xs font-medium text-muted-foreground">SELECCIÓN MASIVA · N{level}</p>
+                <h3 className="text-2xl font-semibold tabular-nums">{selectedIds.length} pallets</h3>
+                <div className="flex max-h-36 flex-wrap gap-1 overflow-y-auto">
+                  {selectedIds.map(id=><Button type="button" key={id} size="sm" variant="outline" className={invalidIds.includes(id)?"text-destructive":"text-xs"} onClick={()=>setSelectedIds(old=>old.filter(x=>x!==id))} title="Quitar de selección">{known.get(id)?.code??id} ×</Button>)}
+                </div>
+                {!selectedIds.length?<p className="text-xs text-muted-foreground">Marca posiciones o un pasillo.</p>:null}
+              </div>:null}
+              <p className="text-xs font-medium text-muted-foreground">{multiple?"ÚLTIMA POSICIÓN CONSULTADA":"UBICACIÓN SELECCIONADA"}</p>
               {chosen?<><h3 className="text-2xl font-semibold tracking-tight">{chosen.code}</h3><p className="text-xs text-muted-foreground">{chosen.name} · N{level}</p>
                 <div className={`rounded-md border p-2 text-xs ${slot?"border-lq-warning/30 bg-lq-warning/10 text-lq-warning":"border-border bg-muted text-foreground"}`}>{slot?(own?"Pallet actual · "+(slot.pallet_code??"Registrado"):(slot.pallet_code??"Pallet registrado")+" · Ocupado en este nivel"):"Sin pallet registrado en este nivel"}</div>
                 {chosen.code.startsWith("BAE-")||isUnderStairMeta({...chosen.physical_meta_snap,...chosen.constraints_json,...chosen.meta_json})?<p className="text-xs text-lq-warning">Bajo escalera / restringida. Sólo observaciones existentes.</p>:null}
@@ -181,7 +249,8 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
       </div>
       <DialogFooter className="shrink-0 border-t bg-card px-5 py-3">
         <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
-        <Button type="button" disabled={!fresh||!chosen||!validLevel||blocked||!!error} onClick={()=>{if(fresh&&chosen&&!blocked&&validLevel)onSelect({id:String(chosen.id),level,ack:false},fresh)}}>Usar ubicación seleccionada</Button>
+        {multiple?<Button type="button" disabled={!readyMany||!!error} onClick={()=>{if(fresh&&readyMany)onSelectMany?.({ids:[...selectedIds],level,ack:false},fresh)}}>Usar {selectedIds.length} posiciones</Button>:
+        <Button type="button" disabled={!fresh||!chosen||!validLevel||blocked||!!error} onClick={()=>{if(fresh&&chosen&&!blocked&&validLevel)onSelect({id:String(chosen.id),level,ack:false},fresh)}}>Usar ubicación seleccionada</Button>}
       </DialogFooter>
     </DialogContent>
   </Dialog>
