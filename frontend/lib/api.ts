@@ -1925,10 +1925,44 @@ export async function postDistribuidoraPlanificacionOrsRoutes(params: {
     ORS_FETCH_TIMEOUT_MS,
   )
   if (!res.ok) {
-    const msg = await res.text().catch(() => "")
-    throw new Error(msg || "Error al calcular rutas ORS")
+    // El proxy del ERP y Cloudflare pueden devolver HTML en errores 502.
+    // No mostrar nunca el cuerpo remoto (ni scripts, trazas o tokens) al usuario.
+    let detail: unknown = null
+    if (res.headers.get("content-type")?.toLowerCase().includes("application/json")) {
+      const data: unknown = await res.json().catch(() => null)
+      if (data && typeof data === "object" && "detail" in data) {
+        detail = (data as { detail: unknown }).detail
+      }
+    }
+    const safeDetail =
+      typeof detail === "string" &&
+      detail.length <= 180 &&
+      !/[<>]/.test(detail) &&
+      !/token|authorization|api.key|traceback/i.test(detail)
+        ? detail
+        : null
+    const statusMessage =
+      res.status === 429
+        ? "Servicio de rutas ocupado. Espere un momento antes de reintentar."
+        : [502, 503, 504].includes(res.status)
+          ? "No fue posible calcular la ruta: el servicio no respondió correctamente. Reintente."
+          : res.status === 401 || res.status === 403
+            ? "No se pudo autorizar el cálculo de rutas."
+            : "No fue posible calcular la ruta ORS."
+    throw new Error(safeDetail || statusMessage)
   }
-  return res.json() as Promise<DistribuidoraPlanificacionOrsResponse>
+  const data: unknown = await res.json().catch(() => null)
+  if (
+    !data ||
+    typeof data !== "object" ||
+    !("routes" in data) ||
+    !Array.isArray((data as { routes: unknown }).routes) ||
+    (data as { routes: unknown[] }).routes.length === 0 ||
+    !("totals" in data)
+  ) {
+    throw new Error("El servicio devolvió una ruta incompleta. No se puede confirmar.")
+  }
+  return data as DistribuidoraPlanificacionOrsResponse
 }
 
 export type DispatchPlanStatus =
