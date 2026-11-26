@@ -254,8 +254,8 @@ export default function MapaPage() {
   }
 
   return (
-    <div className="stack-gap">
-      <div className="despacho-hero-head">
+    <div className="stack-gap driver-map-page">
+      <div className="despacho-hero-head driver-screen-heading">
         <div>
           <h2 className="section-title" style={{ marginBottom: 2 }}>
             Mapa del despacho
@@ -292,6 +292,7 @@ export default function MapaPage() {
         <button
           type="button"
           className={`filter-chip${sortMode === "route" ? " active" : ""}`}
+          aria-pressed={sortMode === "route"}
           onClick={() => {
             setSortMode("route")
             void loadMap(userLoc, "route")
@@ -302,6 +303,7 @@ export default function MapaPage() {
         <button
           type="button"
           className={`filter-chip${sortMode === "near" ? " active" : ""}`}
+          aria-pressed={sortMode === "near"}
           onClick={() => {
             setSortMode("near")
             if (userLoc) void loadMap(userLoc, "near")
@@ -348,7 +350,7 @@ export default function MapaPage() {
           />
 
           {selected ? (
-            <div className="map-sheet" role="dialog" aria-label="Cliente seleccionado">
+            <div className="map-sheet driver-map-selected" role="region" aria-label="Cliente seleccionado">
               <div className="map-sheet-handle" aria-hidden />
               <div className="despacho-hero-head">
                 <h3 className="map-sheet-title">{selected.client_name || "Cliente"}</h3>
@@ -393,7 +395,7 @@ export default function MapaPage() {
                 {distLabel ? (
                   <span className="pill">
                     {distLabel}
-                    <span className="muted"> · geográfica</span>
+                    <span className="muted"> · en línea recta</span>
                   </span>
                 ) : null}
                 <span className="pill">
@@ -427,7 +429,7 @@ export default function MapaPage() {
               </div>
             </div>
           ) : next && nextHref ? (
-            <div className="map-sheet" role="status">
+            <div className="map-sheet driver-map-next" role="region" aria-label="Siguiente cliente pendiente">
               <div className="map-sheet-handle" aria-hidden />
               <p className="muted" style={{ margin: 0, fontSize: "0.75rem" }}>
                 Siguiente pendiente · {next.suggestion_reason_es || "Siguiente en ruta"}

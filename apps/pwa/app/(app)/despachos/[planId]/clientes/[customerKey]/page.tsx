@@ -220,7 +220,7 @@ export default function ClienteFichaPage() {
         ← Clientes
       </AppLink>
 
-      <div className="card">
+      <div className="card driver-ficha-card">
         <div className="ficha-head">
           <button
             type="button"
@@ -256,6 +256,8 @@ export default function ClienteFichaPage() {
           </div>
         </div>
 
+        {obs ? <div className="obs-block driver-ficha-obs"><strong>Observaciones de entrega</strong><div>{obs}</div></div> : null}
+
         <div className="ficha-compact-row">
           <span className="muted">Teléfono</span>
           <span>
@@ -277,9 +279,6 @@ export default function ClienteFichaPage() {
           <span>{c.city || "—"}</span>
         </div>
 
-        <div className={obs ? "obs-block" : "obs-block obs-empty"}>
-          {obs ? `Obs: ${obs}` : "Sin observaciones"}
-        </div>
 
         <div className="ficha-kpi-grid">
           <div className="kpi">
@@ -324,6 +323,7 @@ export default function ClienteFichaPage() {
         <button
           type="button"
           className="btn btn-secondary"
+          aria-expanded={showPedido}
           onClick={() => setShowPedido((v) => !v)}
         >
           {showPedido ? "Ocultar pedido" : "Ver pedido"}
@@ -425,9 +425,9 @@ export default function ClienteFichaPage() {
       {offlineSource && offlineV2Ui ? (
         <div className="stack-gap">
           <div className="banner banner-info">
-            <strong>Operaciones Offline V2</strong>
+            <strong>Entrega sin conexión</strong>
             <div style={{ fontSize: "0.78rem", marginTop: 4 }}>
-              Se guardan localmente y sincronizan al recuperar conexión.
+              Tus registros quedan en el teléfono hasta que el servidor confirme el envío.
             </div>
           </div>
           <div className="btn-row">
@@ -452,10 +452,9 @@ export default function ClienteFichaPage() {
         </div>
       ) : offlineSource ? (
         <div className="banner banner-info">
-          <strong>Consulta Offline V1</strong>
+          <strong>Consulta sin conexión</strong>
           <div style={{ fontSize: "0.78rem", marginTop: 4 }}>
-            Ficha disponible sin conexión. Offline V2 requiere autorización
-            previa con internet (despacho descargado íntegramente).
+            Puedes consultar esta ficha. Para guardar entregas sin conexión, prepara y autoriza el despacho mientras tengas internet.
           </div>
         </div>
       ) : (

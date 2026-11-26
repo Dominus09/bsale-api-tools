@@ -53,5 +53,5 @@ export default function DespachosModuleLayout({
   if (!ok) {
     return <div className="empty">Verificando módulo Choferes…</div>
   }
-  return children
+  return <div className="driver-module">{children}</div>
 }

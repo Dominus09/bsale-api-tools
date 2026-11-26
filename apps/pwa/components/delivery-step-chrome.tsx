@@ -28,10 +28,9 @@ export function DeliveryStepChrome({
             ← Volver
           </Link>
           <div className="step-chrome-client">
+            <span className="driver-eyebrow">Entrega · Paso {step} de {STEP_DEFS.length}</span>
             <strong>{clientName || "Cliente"}</strong>
-            <span className="muted" style={{ fontSize: "0.8rem" }}>
-              {title}
-            </span>
+            <span className="muted" style={{ fontSize: "0.8rem" }}>{title}</span>
           </div>
         </div>
         <nav className="step-pills" aria-label="Pasos de entrega">
@@ -41,7 +40,8 @@ export function DeliveryStepChrome({
               className={`pill${s.step === step ? " pill-active" : s.step < step ? " pill-ok" : ""}`}
               aria-current={s.step === step ? "step" : undefined}
             >
-              {s.step} {s.label}
+              <span className="driver-step-number">{s.step < step ? "✓" : s.step}</span>
+              <span>{s.label}</span>
             </span>
           ))}
         </nav>

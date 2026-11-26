@@ -15,6 +15,18 @@ import { buildEntregaHref, docKeyFromDocument, moneyCLP } from "@/lib/delivery-f
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
 
+function PaymentIcon({ method }: { method: PaymentMethod }) {
+  const paths: Record<PaymentMethod, React.ReactNode> = {
+    cash: <><rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h1m10 0h1"/></>,
+    transfer_declared: <><path d="M3 8h17m-4-4 4 4-4 4M21 16H4m4-4-4 4 4 4"/></>,
+    cash_and_transfer: <><rect x="3" y="4" width="14" height="9" rx="2"/><circle cx="10" cy="8.5" r="1.8"/><path d="M6 18h15m-4-4 4 4-4 4"/></>,
+    check_declared: <><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M6 9h7M6 15h3m3 0 2 2 4-4"/></>,
+    pending: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
+    not_applicable: <><circle cx="12" cy="12" r="9"/><path d="m6 6 12 12"/></>,
+  }
+  return <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[method]}</svg>
+}
+
 type DocPayState = {
   related_document_id: number
   document_result_id: number | null
@@ -213,10 +225,13 @@ export default function EntregaCobranzaPage() {
         </button>
       }
     >
-      <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
-        ¿Cómo pagó el cliente? Sin montos. Cheque es solo declaración del chofer
-        (no validación ni crédito).
-      </p>
+      <div className="driver-screen-heading">
+        <h2 className="section-title">¿Cómo pagó el cliente?</h2>
+        <p className="muted" style={{ margin: 0, fontSize: "0.82rem" }}>
+          Selecciona una forma de pago por documento. No ingreses montos.
+          Cheque es solo declaración del chofer, no validación ni crédito.
+        </p>
+      </div>
 
       {pendingCount > 0 ? (
         <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
@@ -263,11 +278,13 @@ export default function EntregaCobranzaPage() {
                     key={m.value}
                     type="button"
                     className={`pay-method-chip${selected ? " is-selected" : ""}`}
+                    aria-pressed={selected}
                     disabled={doc.saving || !doc.document_result_id || applyBusy}
                     onClick={() => void saveDoc(doc, m.value)}
                   >
-                    {m.label}
-                    {selected && doc.saved ? " ✓" : ""}
+                    <PaymentIcon method={m.value} />
+                    <span>{m.label}</span>
+                    {selected && doc.saved ? <span className="driver-pay-check" aria-label="Guardado">✓</span> : null}
                   </button>
                 )
               })}

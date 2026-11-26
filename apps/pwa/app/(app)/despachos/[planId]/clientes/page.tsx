@@ -277,11 +277,12 @@ export default function ClientesPage() {
       setNearDist({})
       return
     }
+    const currentOrigin = origin
     let cancelled = false
     async function loadDistances() {
       try {
         const { getMyMapa } = await import("@/lib/api")
-        const data = await getMyMapa(planId, origin)
+        const data = await getMyMapa(planId, currentOrigin)
         if (cancelled) return
         const map: Record<string, number | null> = {}
         for (const m of data.markers || []) {
@@ -289,7 +290,7 @@ export default function ClientesPage() {
             typeof m.distance_m === "number"
               ? m.distance_m
               : m.latitude != null && m.longitude != null
-                ? haversineMeters(origin!.lat, origin!.lng, m.latitude, m.longitude)
+                ? haversineMeters(currentOrigin.lat, currentOrigin.lng, m.latitude, m.longitude)
                 : null
         }
         setNearDist(map)
@@ -329,11 +330,12 @@ export default function ClientesPage() {
     : null
 
   return (
-    <div className="stack-gap">
-      <div>
+    <div className="stack-gap driver-clients">
+      <div className="driver-screen-heading">
+        <span className="driver-eyebrow">Recorrido</span>
         <h2 className="section-title">Clientes</h2>
         <p className="muted" style={{ margin: 0, fontSize: "0.82rem" }}>
-          Faltan {remainingGlobal} cliente{remainingGlobal === 1 ? "" : "s"}
+          {q.trim() && !progress ? "Resultados de búsqueda" : `Faltan ${remainingGlobal} cliente${remainingGlobal === 1 ? "" : "s"}`}
           {sortMode === "near"
             ? " · orden por cercanía geográfica"
             : sortMode === "name"
@@ -362,6 +364,7 @@ export default function ClientesPage() {
         <button
           type="button"
           className={`filter-chip${filter === "all" ? " active" : ""}`}
+          aria-pressed={filter === "all"}
           onClick={() => setFilter("all")}
         >
           Todos ({counts.all})
@@ -369,6 +372,7 @@ export default function ClientesPage() {
         <button
           type="button"
           className={`filter-chip${filter === "pending" ? " active" : ""}`}
+          aria-pressed={filter === "pending"}
           onClick={() => setFilter("pending")}
         >
           Pendientes ({counts.pending})
@@ -376,6 +380,7 @@ export default function ClientesPage() {
         <button
           type="button"
           className={`filter-chip${filter === "in_progress" ? " active" : ""}`}
+          aria-pressed={filter === "in_progress"}
           onClick={() => setFilter("in_progress")}
         >
           En atención ({counts.in_progress})
@@ -383,6 +388,7 @@ export default function ClientesPage() {
         <button
           type="button"
           className={`filter-chip${filter === "managed" ? " active" : ""}`}
+          aria-pressed={filter === "managed"}
           onClick={() => setFilter("managed")}
         >
           Gestionados ({counts.managed})
@@ -390,6 +396,7 @@ export default function ClientesPage() {
         <button
           type="button"
           className={`filter-chip${filter === "incidents" ? " active" : ""}`}
+          aria-pressed={filter === "incidents"}
           onClick={() => setFilter("incidents")}
         >
           Incidencias ({counts.incidents})
@@ -400,6 +407,7 @@ export default function ClientesPage() {
         <button
           type="button"
           className={`filter-chip${sortMode === "route" ? " active" : ""}`}
+          aria-pressed={sortMode === "route"}
           onClick={() => setSortMode("route")}
         >
           Orden ruta
@@ -407,6 +415,7 @@ export default function ClientesPage() {
         <button
           type="button"
           className={`filter-chip${sortMode === "near" ? " active" : ""}`}
+          aria-pressed={sortMode === "near"}
           onClick={() => setSortMode("near")}
         >
           Más cercano
@@ -414,6 +423,7 @@ export default function ClientesPage() {
         <button
           type="button"
           className={`filter-chip${sortMode === "name" ? " active" : ""}`}
+          aria-pressed={sortMode === "name"}
           onClick={() => setSortMode("name")}
         >
           Nombre
@@ -434,6 +444,9 @@ export default function ClientesPage() {
         <div className="empty">No hay clientes para mostrar.</div>
       ) : null}
 
+      {sortedVisible.length > 0 ? (
+        <p className="driver-list-count">{sortedVisible.length} cliente{sortedVisible.length === 1 ? "" : "s"} en esta vista</p>
+      ) : null}
       <div className="stack-gap">
         {sortedVisible.map(({ c, index }) => {
           const obs = (c.observations || "").trim()
@@ -457,12 +470,13 @@ export default function ClientesPage() {
             <AppLink
               key={c.customer_key}
               href={`/despachos/${planId}/clientes/${encodeURIComponent(c.customer_key)}`}
-              className="card tap-card client-card"
+              className="card tap-card client-card driver-client-card"
+              data-attention={st}
             >
               <div className="client-card-head">
                 <h3 className="client-card-name">
                   <span className="client-stop">{stopLabel(c, index)}</span>
-                  {c.client_name || "Sin nombre"}
+                  <span className="driver-client-name-text">{c.client_name || "Sin nombre"}</span>
                 </h3>
                 <span className={`pill${c.has_coordinates ? " pill-ok" : ""}`}>
                   {c.has_coordinates ? "GPS" : "Sin GPS"}
@@ -498,9 +512,8 @@ export default function ClientesPage() {
                 ) : null}
               </div>
 
-              <div className={obs ? "obs-block" : "obs-block obs-empty"}>
-                {obs ? `Obs: ${obs}` : "Sin observaciones"}
-              </div>
+              {obs ? <div className="obs-block"><strong>Observaciones</strong><div>{obs}</div></div> : null}
+              <div className="driver-card-link">Abrir ficha <span aria-hidden="true">→</span></div>
             </AppLink>
           )
         })}

@@ -129,9 +129,10 @@ function PlanCard(props: {
     <article className={`card plan-card-flow${props.hero ? " despacho-hero" : ""}`}>
       <div className="plan-card-body">
         <div className="despacho-hero-head">
-          <h2 style={{ margin: 0, fontSize: props.hero ? "1.15rem" : "1.02rem" }}>
-            {p.planning_code || `Plan #${p.id}`}
-          </h2>
+          <div className="driver-plan-title">
+            <span className="driver-eyebrow">{p.planning_code || `Plan #${p.id}`}</span>
+            <h2>{p.route_name || "Despacho asignado"}</h2>
+          </div>
           <span className={`pill${p.status === "picking_generated" ? " pill-ok" : ""}`}>
             {statusLabel(p.status)}
           </span>
@@ -143,10 +144,6 @@ function PlanCard(props: {
         ) : null}
 
         <div className="despacho-hero-grid">
-          <div>
-            <span className="meta-label">Ruta</span>
-            <span className="meta-value">{p.route_name || "—"}</span>
-          </div>
           <div>
             <span className="meta-label">Vehículo</span>
             <span className="meta-value">{p.truck_name || "—"}</span>
@@ -445,8 +442,29 @@ export default function DespachosPage() {
     )
   }
 
+  const todayProgress = buckets.today.map(p => progressById[p.id])
+  const hasTodayProgress = todayProgress.length > 0 && todayProgress.every(Boolean)
+  const todayManaged = hasTodayProgress
+    ? todayProgress.reduce((sum, p) => sum + (p?.managed_clients ?? 0), 0)
+    : null
+  const todayRemaining = hasTodayProgress
+    ? todayProgress.reduce((sum, p) => sum + (p?.remaining_clients ?? 0), 0)
+    : null
+
   return (
-    <div className="stack-gap">
+    <div className="stack-gap driver-home">
+      <section className="driver-jornada" aria-label="Resumen de jornada">
+        <div className="driver-eyebrow">Jornada · {todayLabel}</div>
+        <h2>Mis despachos</h2>
+        <div className="driver-jornada-grid">
+          <div><strong>{buckets.today.length}</strong><span>Despachos hoy</span></div>
+          <div><strong>{todayManaged ?? "—"}</strong><span>Gestionados</span></div>
+          <div><strong>{todayRemaining ?? "—"}</strong><span>Por gestionar</span></div>
+        </div>
+        {!hasTodayProgress && buckets.today.length > 0 ? (
+          <p className="driver-small-note">Avance pendiente de consultar.</p>
+        ) : null}
+      </section>
       {syncNote ? (
         <p className="muted" role="status" style={{ margin: 0, fontSize: "0.78rem" }}>
           {syncNote}

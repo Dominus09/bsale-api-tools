@@ -109,8 +109,9 @@ export default function DespachoDetailPage() {
     <div className="stack-gap">
       <div className="card despacho-hero">
         <div className="despacho-hero-head">
-          <div>
-            <h2 style={{ margin: 0 }}>{plan.planning_code || `Plan #${plan.id}`}</h2>
+          <div className="driver-plan-title">
+            <span className="driver-eyebrow">{plan.planning_code || `Plan #${plan.id}`}</span>
+            <h2>{plan.route_name || "Despacho asignado"}</h2>
             <p className="muted" style={{ margin: "4px 0 0", fontSize: "0.8rem" }}>
               {formatDate(plan.planning_date)}
             </p>
@@ -135,22 +136,9 @@ export default function DespachoDetailPage() {
               {amount != null ? moneyCLP(amount) : "—"}
             </span>
           </div>
-          <div className="kpi">
-            <span className="kpi-label">Avance</span>
-            <span className="kpi-value" style={{ fontSize: "0.95rem" }}>
-              {progress ? `${progress.percent}%` : "—"}
-            </span>
-          </div>
         </div>
 
-        {progress ? (
-          <RouteProgressCard progress={progress} variant="compact" />
-        ) : null}
-
-        <div className="meta-row" style={{ marginTop: 12 }}>
-          <span className="muted">Ruta</span>
-          <span>{plan.route_name || "—"}</span>
-        </div>
+        {!progress ? <p className="driver-small-note">Avance no disponible. Consulta los clientes del despacho.</p> : null}
         <div className="meta-row">
           <span className="muted">Vehículo</span>
           <span>{plan.truck_name || "—"}</span>
@@ -163,7 +151,7 @@ export default function DespachoDetailPage() {
 
       <RouteProgressCard progress={progress} nextHref={nextHref} />
 
-      <div className="btn-row">
+      <div className="btn-row driver-route-actions">
         <AppLink
           href={`/despachos/${planId}/clientes`}
           className="btn btn-secondary"
