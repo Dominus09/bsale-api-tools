@@ -167,6 +167,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
         label: "Editor Maestro de Bodegas",
         icon: Warehouse,
       },
+      { href: "/inteligencia-bodega/pallets", label: "Registro de pallets", icon: Package },
     ],
   },
   {
@@ -404,7 +405,7 @@ export function Sidebar({ compact = false, onToggleCompact, onCloseDrawer }: Sid
             const isActive =
               !item.disabled &&
               item.href !== "#" &&
-              (pathname === item.href || pathname.startsWith(item.href + "/"))
+              (pathname === item.href || (item.href !== "/inteligencia-bodega" && pathname.startsWith(item.href + "/")))
             const isDisabled = item.disabled
 
             if (isDisabled) {
