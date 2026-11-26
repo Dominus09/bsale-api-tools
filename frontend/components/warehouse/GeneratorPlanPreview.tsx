@@ -31,7 +31,7 @@ function Shape({ b, fill, stroke, code, dash = false, fontSize = 0.24 }: {
   return (
     <g>
       <rect x={b.x} y={b.y} width={b.w} height={b.h} fill={fill} stroke={stroke} strokeWidth={0.035} strokeDasharray={dash ? "0.10 0.07" : undefined} transform={rotation} />
-      {code ? <><title>{code}</title><text x={b.cx} y={b.cy} textAnchor="middle" dominantBaseline="central" fontSize={fontSize} fontWeight={600} fill="#334155" pointerEvents="none">{code}</text></> : null}
+      {code ? <><title>{code}</title><text x={b.cx} y={b.cy} textAnchor="middle" dominantBaseline="central" fontSize={fontSize} fontWeight={600} fill="var(--foreground)" pointerEvents="none">{code}</text></> : null}
     </g>
   )
 }
@@ -66,22 +66,22 @@ export function GeneratorPlanPreview({ parent, existing, preview, large }: {
   const height = large ? Math.max(420, Math.min(1300, h * 53)) : 350
   return (
     <div className="space-y-2">
-      <div className="max-h-[430px] overflow-auto rounded-lg border border-slate-200 bg-slate-100 p-1">
+      <div className="max-h-[430px] overflow-auto rounded-lg border border-border bg-muted p-1">
         <svg role="img" aria-label="Vista métrica de posiciones propuestas y estructuras existentes" viewBox={`${x0} ${y0} ${w} ${h}`} width="100%" height={height} preserveAspectRatio="xMidYMid meet" className="block">
-          <Shape b={parentBox} fill="#f8fafc" stroke="#64748b" dash />
+          <Shape b={parentBox} fill="var(--card)" stroke="var(--muted-foreground)" dash />
           {context.map(e => <Shape key={e.code} b={e.b} code={e.type === "circulation" ? undefined : e.code}
-            fill={e.type === "circulation" ? "#e2e8f0" : e.type === "loose_storage" ? "#fde7b3" : e.type === "position" ? "#cbd5e1" : "#ddd6fe"}
-            stroke={e.type === "loose_storage" ? "#b45309" : "#64748b"} fontSize={fontSize} />)}
+            fill={e.type === "circulation" ? "var(--muted)" : e.type === "loose_storage" ? "color-mix(in srgb, var(--lq-warning) 18%, var(--card))" : e.type === "position" ? "var(--secondary)" : "color-mix(in srgb, var(--chart-5) 20%, var(--card))"}
+            stroke={e.type === "loose_storage" ? "var(--lq-warning)" : "var(--muted-foreground)"} fontSize={fontSize} />)}
           {positions.map(p => <g key={p.code}><title>{p.code}</title><Shape b={p.b}
             code={p.code.startsWith(prefix) ? p.code.slice(prefix.length) : p.code}
-            fill={danger.has(p.code) ? "#fecaca" : caution.has(p.code) ? "#fde68a" : "#bbf7d0"}
-            stroke={danger.has(p.code) ? "#dc2626" : caution.has(p.code) ? "#b45309" : "#15803d"}
+            fill={danger.has(p.code) ? "color-mix(in srgb, var(--destructive) 18%, var(--card))" : caution.has(p.code) ? "color-mix(in srgb, var(--lq-warning) 25%, var(--card))" : "color-mix(in srgb, var(--lq-success) 20%, var(--card))"}
+            stroke={danger.has(p.code) ? "var(--destructive)" : caution.has(p.code) ? "var(--lq-warning)" : "var(--lq-success)"}
             dash fontSize={Math.min(fontSize, p.b.w / 5)} /></g>)}
         </svg>
       </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-600">
-        {[["#bbf7d0", "Propuesta"], ["#fecaca", "Conflicto"], ["#fde68a", "Advertencia"], ["#fde7b3", "Sueltos"], ["#cbd5e1", "Existente"]].map(([color, label]) =>
-          <span className="inline-flex items-center gap-1" key={label}><span className="h-3 w-3 rounded-sm border border-slate-400" style={{ backgroundColor: color }} />{label}</span>)}
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+        {[["color-mix(in srgb, var(--lq-success) 20%, var(--card))", "Propuesta"], ["color-mix(in srgb, var(--destructive) 18%, var(--card))", "Conflicto"], ["color-mix(in srgb, var(--lq-warning) 25%, var(--card))", "Advertencia"], ["color-mix(in srgb, var(--lq-warning) 18%, var(--card))", "Sueltos"], ["var(--secondary)", "Existente"]].map(([color, label]) =>
+          <span className="inline-flex items-center gap-1" key={label}><span className="h-3 w-3 rounded-sm border border-border" style={{ backgroundColor: color }} />{label}</span>)}
       </div>
     </div>
   )

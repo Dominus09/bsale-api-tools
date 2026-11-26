@@ -59,32 +59,32 @@ export function SymbologyDialog({ open, onOpenChange, catalog }: Props) {
               {Object.entries(nomenclature).map(([code, meaning]) => (
                 <div
                   key={code}
-                  className="flex items-start gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm"
+                  className="flex items-start gap-2 rounded-md border border-border px-3 py-2 text-sm"
                 >
-                  <code className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-800">
+                  <code className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-semibold text-foreground">
                     {code}
                   </code>
-                  <span className="text-slate-600">{meaning}</span>
+                  <span className="text-muted-foreground">{meaning}</span>
                 </div>
               ))}
             </div>
             {examples.length > 0 ? (
               <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-slate-800">Ejemplos gráficos</h4>
+                <h4 className="text-sm font-semibold text-foreground">Ejemplos gráficos</h4>
                 {examples.map((ex) => (
-                  <div key={ex.code} className="rounded-lg border border-slate-200 p-3">
+                  <div key={ex.code} className="rounded-lg border border-border p-3">
                     <div className="mb-2 flex flex-wrap items-center gap-1">
                       {ex.parts.map((p, i) => (
                         <span key={p.token} className="flex items-center gap-1">
-                          {i > 0 ? <span className="text-slate-400">-</span> : null}
-                          <span className="rounded bg-sky-100 px-2 py-1 text-sm font-bold text-sky-900">
+                          {i > 0 ? <span className="text-muted-foreground">-</span> : null}
+                          <span className="rounded bg-lq-info/10 px-2 py-1 text-sm font-bold text-lq-info">
                             {p.token}
                           </span>
                         </span>
                       ))}
-                      <span className="ml-2 font-mono text-slate-500">→ {ex.code}</span>
+                      <span className="ml-2 font-mono text-muted-foreground">→ {ex.code}</span>
                     </div>
-                    <ul className="space-y-1 text-sm text-slate-600">
+                    <ul className="space-y-1 text-sm text-muted-foreground">
                       {ex.parts.map((p) => (
                         <li key={p.token}>
                           <strong>{p.token}</strong>: {p.meaning}
@@ -110,12 +110,12 @@ export function SymbologyDialog({ open, onOpenChange, catalog }: Props) {
               return (
                 <div
                   key={s.type}
-                  className="flex items-center gap-3 rounded-md border border-slate-200 px-3 py-2 text-sm"
+                  className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-sm"
                 >
                   <Swatch fill={c.fill} stroke={c.stroke} />
                   <div>
-                    <div className="font-medium text-slate-800">{s.label_es}</div>
-                    <div className="text-xs text-slate-500">
+                    <div className="font-medium text-foreground">{s.label_es}</div>
+                    <div className="text-xs text-muted-foreground">
                       tipo `{s.type}` · forma {s.shape}
                     </div>
                   </div>
@@ -128,7 +128,7 @@ export function SymbologyDialog({ open, onOpenChange, catalog }: Props) {
             {Object.entries(colors).map(([key, val]) => (
               <div
                 key={key}
-                className="flex items-center gap-3 rounded-md border border-slate-200 px-3 py-2 text-sm"
+                className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-sm"
               >
                 <Swatch
                   fill={val.fill || LAYOUT_COLORS.background}
@@ -136,8 +136,8 @@ export function SymbologyDialog({ open, onOpenChange, catalog }: Props) {
                   dash={Boolean(val.dash)}
                 />
                 <div>
-                  <div className="font-medium text-slate-800">{val.label_es}</div>
-                  <div className="text-xs text-slate-500">{key}</div>
+                  <div className="font-medium text-foreground">{val.label_es}</div>
+                  <div className="text-xs text-muted-foreground">{key}</div>
                 </div>
               </div>
             ))}
@@ -146,7 +146,7 @@ export function SymbologyDialog({ open, onOpenChange, catalog }: Props) {
                 "Evolución futura: ocupación, productos, vencimientos y FIFO/FEFO en otras vistas."}
             </p>
             {catalog?.colors_future_views?.length ? (
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-muted-foreground">
                 Vistas previstas: {catalog.colors_future_views.join(" · ")}
               </p>
             ) : null}
