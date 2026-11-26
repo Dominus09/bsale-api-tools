@@ -205,14 +205,15 @@ def post_planificacion_ors_routes(body: OrsRoutesRequestBody):
         )
     except Exception as exc:
         log_error("POST /planificacion/ors-routes", exc)
+        # No exponer mensajes internos/proxies o posibles HTML de terceros.
         raise HTTPException(
             status_code=502,
-            detail=f"Error al calcular rutas ORS: {exc}",
+            detail="No fue posible calcular las rutas ORS. Intente nuevamente.",
         ) from exc
     if not result.get("ok"):
         raise HTTPException(
             status_code=502,
-            detail=result.get("error") or "Error ORS",
+            detail="No fue posible calcular las rutas ORS. Intente nuevamente.",
         )
     depot = result.get("depot") or depot_base()
     return {
