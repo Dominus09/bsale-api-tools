@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 import requests
+from fastapi import HTTPException
 
 from backend.utils.ors_client import (
     ORS_CONNECT_TIMEOUT_S,
@@ -48,6 +49,44 @@ def test_ors_html_502_never_leaks_to_user():
     assert "<html>" not in str(exc.value)
 
 
+def test_ors_http_503_is_unavailable_without_body_leak():
+    response = requests.Response()
+    response.status_code = 503
+    response._content = b"<html>Service Unavailable token=abc</html>"
+    with patch("backend.utils.ors_client.requests.post", return_value=response):
+        with pytest.raises(OrsServiceError) as exc:
+            get_route(COORDS)
+    assert "HTTP 503" in str(exc.value)
+    assert "no está disponible temporalmente" in str(exc.value)
+    assert "<html>" not in str(exc.value)
+    assert "token=abc" not in str(exc.value)
+
+
+def test_ors_connection_error_is_safe():
+    with patch(
+        "backend.utils.ors_client.requests.post",
+        side_effect=requests.exceptions.ConnectionError("proxy leaked Authorization: secret"),
+    ):
+        with pytest.raises(OrsServiceError, match="No fue posible conectar") as exc:
+            get_route(COORDS)
+    assert "Authorization" not in str(exc.value)
+    assert "secret" not in str(exc.value)
+
+
+def test_ors_retry_after_error_can_succeed():
+    fail = requests.Response()
+    fail.status_code = 502
+    fail._content = b"<html>Cloudflare</html>"
+    ok = requests.Response()
+    ok.status_code = 200
+    ok._content = b'{"routes":[{"summary":{"distance":2500,"duration":300}}]}'
+    with patch("backend.utils.ors_client.requests.post", side_effect=[fail, ok]):
+        with pytest.raises(OrsServiceError):
+            get_route(COORDS)
+        out = get_route(COORDS)
+    assert out["routes"][0]["summary"]["distance"] == 2500
+
+
 @pytest.mark.parametrize("payload", [b"<html>bad gateway</html>", b"{}",
                                      b'{"routes":[]}', b'{"routes":"bad"}'])
 def test_ors_rejects_invalid_success_response(payload):
@@ -57,3 +96,30 @@ def test_ors_rejects_invalid_success_response(payload):
     with patch("backend.utils.ors_client.requests.post", return_value=response):
         with pytest.raises(OrsServiceError):
             get_route(COORDS)
+
+
+def test_planificacion_ors_routes_http_hides_upstream_exception_detail():
+    from backend.routers.distribuidora_planificacion import (
+        OrsRoutesRequestBody,
+        post_planificacion_ors_routes,
+    )
+
+    body = OrsRoutesRequestBody(
+        routes=[
+            {
+                "camion": "T1",
+                "truck_id": 1,
+                "stops": [{"document_id": 1, "lat": -43.13, "lng": -73.64}],
+            }
+        ]
+    )
+    with patch(
+        "backend.routers.distribuidora_planificacion.compute_planificacion_ors_routes",
+        side_effect=OrsServiceError("ORS no está disponible temporalmente. (HTTP 502)."),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            post_planificacion_ors_routes(body)
+    assert exc.value.status_code == 502
+    assert exc.value.detail == "No fue posible calcular las rutas ORS. Intente nuevamente."
+    assert "HTTP 502" not in str(exc.value.detail)
+    assert "<html>" not in str(exc.value.detail)
