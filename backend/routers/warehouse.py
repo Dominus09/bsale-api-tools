@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from backend.auth.permissions import require_management_access
@@ -15,7 +15,7 @@ from backend.services.warehouse.errors import (
     WarehouseValidationError,
 )
 from backend.services.warehouse.service import WarehouseLayoutService, default_service
-from backend.services.warehouse.pallet_models import PalletRegisterIn, PalletLocationIn, PalletVoidIn, PalletDetailsIn, PalletBatchIn
+from backend.services.warehouse.pallet_models import PalletRegisterIn, PalletLocationIn, PalletVoidIn, PalletDetailsIn, PalletBatchIn, PalletLabelsIn
 from backend.services.warehouse.pallets import default_pallet_service, PalletSchemaUnavailable
 
 router = APIRouter(prefix="/warehouse", tags=["inteligencia-bodega"])
@@ -386,6 +386,14 @@ def pallet_register(body: PalletRegisterIn, user: dict = Depends(require_managem
 def pallet_register_batch(body: PalletBatchIn, user: dict = Depends(require_management_access)):
     actor,uid = _actor(user)
     return _pallet_call(default_pallet_service().register_batch,body.model_dump(mode="json"),actor=actor or "ERP",uid=uid)
+
+
+@router.post("/pallets/labels/preview")
+def pallet_labels_preview(body: PalletLabelsIn, response: Response,
+                          _user: dict = Depends(require_management_access)):
+    """Consulta de etiquetas. No registra impresiones ni cambia inventario."""
+    response.headers["Cache-Control"] = "no-store"
+    return _pallet_call(default_pallet_service().labels,body.floor_id,body.pallet_ids)
 
 
 @router.get("/pallets/{pallet_id}")
