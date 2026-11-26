@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it, beforeEach } from "node:test"
+import { claimOutboxOpForSync, getOutboxBlob, getOutboxOp, putOutboxOp, saveUnsentOutboxOp, settleOutboxSync } from "./offline-outbox-store.ts"
 
 import {
   OFFLINE_OUTBOX_RETENTION,
@@ -134,6 +135,63 @@ describe("offline-outbox 2A.2", () => {
     assert.equal(again.op.localUuid, first.op.localUuid)
     assert.equal(again.op.idempotency_key, first.op.idempotency_key)
     assert.equal(again.op.payment?.method, "cash")
+  })
+
+  it("solo permite reanudar pending antes del primer intento", async () => {
+    const input = {
+      userId: "42", planId: 910, customerKey: "id:9201", clientId: 9201, clientName: "X",
+      fichaPayload: sampleFicha(), picking: { pickingId: 501, pickingVersion: "3" },
+      payment: { method: "cash" }, gps: null,
+    }
+    const initial = await saveCompleteDeliveryLocal(input)
+    assert.equal(initial.ok, true)
+    const claim = await claimOutboxOpForSync(initial.op.localUuid, "42")
+    assert.ok(claim)
+    const stale = { ...initial.op, note: "stale edit" }
+    assert.equal(await saveUnsentOutboxOp(stale, initial.op), false)
+    await settleOutboxSync(claim, { status: "pending", last_error: "timeout" })
+    const retryPending = await saveCompleteDeliveryLocal({ ...input, note: "edit", resumeLocalUuid: initial.op.localUuid })
+    assert.equal(retryPending.ok, false)
+    assert.equal(retryPending.code, "DUPLICATE_PENDING")
+    for (const status of ["syncing", "synced", "conflict", "failed_needs_action"]) {
+      await putOutboxOp({ ...initial.op, status, attempt_count: 1 })
+      const res = await saveCompleteDeliveryLocal({ ...input, resumeLocalUuid: initial.op.localUuid })
+      assert.equal(res.ok, false)
+    }
+    await putOutboxOp({ ...initial.op, status: "pending", server_confirmed: true })
+    assert.equal((await saveCompleteDeliveryLocal({ ...input, resumeLocalUuid: initial.op.localUuid })).ok, false)
+  })
+
+  it("dos guardados simultáneos de un cliente conservan una sola operación", async () => {
+    const input = {
+      userId: "42", planId: 910, customerKey: "id:9201", clientId: 9201, clientName: "X",
+      fichaPayload: sampleFicha(), picking: { pickingId: 501, pickingVersion: "3" },
+      payment: { method: "cash" }, gps: null,
+    }
+    const results = await Promise.all([saveCompleteDeliveryLocal(input), saveCompleteDeliveryLocal(input)])
+    assert.equal(results.filter(r => r.ok).length, 1)
+    assert.equal(await countPendingOutboxOps("42"), 1)
+  })
+
+  it("local cerrado pending puede reanudarse sin sobrescribir evidencia anterior", async () => {
+    const input = {
+      userId: "42", planId: 910, customerKey: "id:9201", clientId: 9201, clientName: "X",
+      picking: { pickingId: 501, pickingVersion: "3" }, note: "Local cerrado", gps: null,
+      photo: { bytes: new Uint8Array(64).fill(7).buffer, contentType: "image/jpeg", capturedAt: "2026-11-20T11:00:00-03:00" },
+    }
+    const first = await saveClosedStoreLocal(input)
+    assert.equal(first.ok, true)
+    const second = await saveClosedStoreLocal({ ...input, resumeLocalUuid: first.op.localUuid,
+      photo: { ...input.photo, bytes: new Uint8Array(64).fill(8).buffer } })
+    assert.equal(second.ok, true)
+    assert.equal(second.op.idempotency_key, first.op.idempotency_key)
+    assert.notEqual(second.op.evidence.localBlobId, first.op.evidence.localBlobId)
+    assert.equal((await getOutboxBlob(first.op.evidence.localBlobId)).sha256, first.op.evidence.content_sha256)
+    assert.equal((await getOutboxOp(first.op.localUuid)).evidence.content_sha256, second.op.evidence.content_sha256)
+    const claim = await claimOutboxOpForSync(first.op.localUuid, "42")
+    assert.ok(claim)
+    const blocked = await saveClosedStoreLocal({ ...input, resumeLocalUuid: first.op.localUuid })
+    assert.equal(blocked.ok, false)
   })
 
   it("bloquea duplicado pendiente mismo plan/cliente", async () => {

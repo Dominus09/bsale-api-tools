@@ -56,3 +56,45 @@ describe("offline-outbox-sync 2A.3 policy", () => {
     assert.match(src, /DOCUMENT_MISMATCH/)
   })
 })
+
+
+describe("Choferes 2.1: leases and visible state", () => {
+  it("reclaims an expired syncing operation, never a review or confirmed operation", async () => {
+    const { canClaimOutboxSync, outboxUiGroup, OUTBOX_SYNC_LEASE_MS } = await import("./offline-outbox-types.ts")
+    const now = Date.now()
+    const row = { status: "syncing", updated_at: new Date(now).toISOString(), server_confirmed: false }
+    assert.equal(canClaimOutboxSync(row, now), false)
+    assert.equal(outboxUiGroup(row, now), "sending")
+    assert.equal(canClaimOutboxSync(row, now + OUTBOX_SYNC_LEASE_MS), true)
+    assert.equal(outboxUiGroup(row, now + OUTBOX_SYNC_LEASE_MS), "local")
+    for (const status of ["conflict", "failed_needs_action", "draft", "synced"]) {
+      assert.equal(canClaimOutboxSync({ ...row, status }, now + OUTBOX_SYNC_LEASE_MS), false)
+    }
+    assert.equal(outboxUiGroup({ ...row, status: "synced", server_confirmed: true }, now), "confirmed")
+    assert.equal(outboxUiGroup({ ...row, status: "synced", server_confirmed: false }, now), "review")
+  })
+
+  it("claims once, keeps idempotency, rejects a late settlement and isolates users", async () => {
+    const { claimOutboxOpForSync, settleOutboxSync, putOutboxOp, getOutboxOp, useOutboxMemoryStoreForTests } = await import("./offline-outbox-store.ts")
+    useOutboxMemoryStoreForTests(true)
+    try {
+      const now = Date.now()
+      const row = { localUuid: "op1", userId: "42", idempotency_key: "stable-key", status: "pending", updated_at: new Date(now).toISOString(), attempt_count: 0, server_confirmed: false }
+      await putOutboxOp(row)
+      assert.equal(await claimOutboxOpForSync("op1", "99", now), null)
+      const first = await claimOutboxOpForSync("op1", "42", now)
+      assert.ok(first)
+      assert.equal(await claimOutboxOpForSync("op1", "42", now + 1), null)
+      const second = await claimOutboxOpForSync("op1", "42", now + 120_001)
+      assert.ok(second)
+      assert.equal(second.idempotency_key, "stable-key")
+      assert.equal(second.attempt_count, 2)
+      assert.equal(await settleOutboxSync(first, { status: "pending", last_error: "late" }), null)
+      await settleOutboxSync(second, { status: "synced", server_confirmed: true, last_error: null })
+      assert.equal((await getOutboxOp("op1")).status, "synced")
+      assert.equal(await claimOutboxOpForSync("op1", "42", now + 240_002), null)
+    } finally {
+      useOutboxMemoryStoreForTests(false)
+    }
+  })
+})

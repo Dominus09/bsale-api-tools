@@ -17,6 +17,7 @@ export type OutboxLocalStatus = (typeof OUTBOX_LOCAL_STATUSES)[number]
 export const OUTBOX_ACTIVE_LOCAL_STATUSES: ReadonlyArray<OutboxLocalStatus> = [
   "draft",
   "pending",
+  "syncing",
   "failed_needs_action",
   "conflict",
 ]
@@ -118,4 +119,38 @@ export function outboxResultLabelEs(op: Pick<OutboxOperation, "op_type">): strin
   return op.op_type === "complete_delivery"
     ? "Entrega completa (local)"
     : "Local cerrado (local)"
+}
+
+
+/** Upload timeout is 60 s. A 2-minute lease avoids stealing a live request. */
+export const OUTBOX_SYNC_LEASE_MS = 120_000
+
+export function canClaimOutboxSync(
+  op: Pick<OutboxOperation, "status" | "updated_at" | "server_confirmed">,
+  now = Date.now(),
+): boolean {
+  if (op.server_confirmed) return false
+  if (op.status === "pending") return true
+  if (op.status !== "syncing") return false
+  const updated = Date.parse(op.updated_at)
+  return !Number.isFinite(updated) || now - updated >= OUTBOX_SYNC_LEASE_MS
+}
+
+export type OutboxUiGroup = "local" | "sending" | "confirmed" | "review"
+
+export function outboxUiGroup(
+  op: Pick<OutboxOperation, "status" | "updated_at" | "server_confirmed">,
+  now = Date.now(),
+): OutboxUiGroup {
+  if (op.status === "synced") return op.server_confirmed ? "confirmed" : "review"
+  if (op.status === "conflict" || op.status === "failed_needs_action") return "review"
+  if (op.status === "syncing" && !canClaimOutboxSync(op, now)) return "sending"
+  return "local"
+}
+
+export const OUTBOX_UI_LABELS: Record<OutboxUiGroup, string> = {
+  local: "Pendiente local",
+  sending: "Enviando",
+  confirmed: "Confirmada",
+  review: "Requiere revisión",
 }
