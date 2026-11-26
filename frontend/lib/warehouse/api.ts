@@ -300,3 +300,17 @@ export type PalletDetailsInput = {
 export function updateWarehousePalletDetails(id: number, body: PalletDetailsInput): Promise<PalletRecord> {
   return warehouseFetch(`/warehouse/pallets/${id}/details`, {method:"PATCH",body:JSON.stringify(body)})
 }
+
+
+export type PalletBatchItemInput = {
+  position_id:number; pallet_kind:PalletRegisterInput["pallet_kind"]
+  received_on:string|null; notes:string|null; lines:PalletLineInput[]
+}
+export type PalletBatchInput = {
+  batch_key:string; floor_id:number; layout_revision_id:number; layout_row_version:number
+  observed_level:number; observed_ack:boolean; items:PalletBatchItemInput[]
+}
+export type PalletBatchResult = {batch_key:string;replayed:boolean;items:PalletRecord[]}
+export function registerWarehousePalletBatch(body:PalletBatchInput):Promise<PalletBatchResult>{
+  return warehouseFetch("/warehouse/pallets/batch",{method:"POST",body:JSON.stringify(body)})
+}
