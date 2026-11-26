@@ -2952,10 +2952,11 @@ export async function confirmDispatchPlan(body: {
   assistant_count: number
   driver_cost_clp: number
   assistant_cost_clp: number
-  diesel_price_per_liter: number
-  km_total: number
-  duration_min: number
-  liters_estimated: number
+  confirm_without_ors?: boolean
+  diesel_price_per_liter: number | null
+  km_total: number | null
+  duration_min: number | null
+  liters_estimated: number | null
   fuel_cost_clp: number
   ferry_cost_clp: number
   toll_cost_clp: number

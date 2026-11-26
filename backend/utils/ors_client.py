@@ -1,3 +1,4 @@
+import logging
 import os
 
 import requests
@@ -6,6 +7,7 @@ from backend.utils.config import ORS_API_KEY
 from backend.utils.ruta_zonas import haversine_m
 
 BASE_URL = "https://api.openrouteservice.org/v2/directions/driving-car"
+logger = logging.getLogger(__name__)
 
 # Cada tramo debe terminar antes de que el proxy del ERP alcance su timeout.
 # Sin timeout, una llamada ORS puede bloquear indefinidamente un worker FastAPI.
@@ -94,14 +96,29 @@ def get_route(coordinates: list[list[float]]) -> dict:
             timeout=(ORS_CONNECT_TIMEOUT_S, ORS_READ_TIMEOUT_S),
         )
     except requests.exceptions.Timeout as exc:
+        logger.warning("ORS_REQUEST_FAILED kind=timeout waypoints=%s", len(coordinates))
         raise OrsServiceError("ORS excedió el tiempo máximo de respuesta.") from exc
     except requests.exceptions.RequestException as exc:
+        logger.warning("ORS_REQUEST_FAILED kind=connection waypoints=%s", len(coordinates))
         raise OrsServiceError("No fue posible conectar con el servicio ORS.") from exc
 
     # Nunca propagar response.text: proveedores y proxies pueden devolver HTML
     # completo (como la página 502 de Cloudflare) o información interna.
     if response.status_code != 200:
         status = response.status_code
+        remote_code = None
+        try:
+            payload = response.json()
+            err = payload.get("error") if isinstance(payload, dict) else None
+            value = err.get("code") if isinstance(err, dict) else None
+            if type(value) is int and 0 <= value <= 99999:
+                remote_code = value
+        except (ValueError, TypeError):
+            pass
+        category = ("quota" if status == 429 else "authorization" if status in (401, 403)
+                    else "upstream" if status >= 500 else "request_rejected")
+        logger.warning("ORS_REQUEST_FAILED kind=%s http_status=%s ors_code=%s waypoints=%s key_configured=%s",
+                       category, status, remote_code, len(coordinates), bool(ORS_API_KEY))
         if status == 429:
             reason = "ORS alcanzó su límite temporal de solicitudes."
         elif status in (401, 403):
@@ -115,8 +132,10 @@ def get_route(coordinates: list[list[float]]) -> dict:
     try:
         data = response.json()
     except ValueError as exc:
+        logger.warning("ORS_REQUEST_FAILED kind=invalid_json http_status=200 waypoints=%s", len(coordinates))
         raise OrsServiceError("ORS devolvió una respuesta no JSON.") from exc
     if not isinstance(data, dict) or not isinstance(data.get("routes"), list) or not data["routes"]:
+        logger.warning("ORS_REQUEST_FAILED kind=empty_routes http_status=200 waypoints=%s", len(coordinates))
         raise OrsServiceError("ORS devolvió una respuesta sin rutas válidas.")
     _debug_log_distancia_despues(coordinates, data)
     return data

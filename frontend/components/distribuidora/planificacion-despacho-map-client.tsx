@@ -225,7 +225,7 @@ export function PlanificacionDespachoMapClient({
             </Tooltip>
           </Marker>
         ) : null}
-        {routes.map((r) => (
+        {routes.filter((r) => r.positions.length >= 2).map((r) => (
           <Polyline
             key={r.camion}
             positions={r.positions}

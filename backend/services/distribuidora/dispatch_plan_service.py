@@ -442,6 +442,29 @@ def collect_stale_plan_order_warnings(cur, plan_id: int) -> list[str]:
     ]
 
 
+def _validate_ors_contingency_capacity(
+    frozen_orders: list[dict[str, Any]], truck_max_weight_kg: int | None,
+) -> None:
+    """Sin ORS no se omite el control de peso y capacidad."""
+    import math
+
+    if truck_max_weight_kg is None or truck_max_weight_kg <= 0:
+        raise ValueError("Capacidad del camión desconocida. Registre su capacidad antes de confirmar sin ORS.")
+    weights = [float(o.get("peso_total_kg") or 0) for o in frozen_orders]
+    if any(not math.isfinite(w) or w < 0 for w in weights):
+        raise ValueError("Peso de OC inválido. Recalcule los pesos.")
+    if sum(weights) > truck_max_weight_kg:
+        raise ValueError("Camión sobrecargado. Redistribuya la carga antes de confirmar sin ORS.")
+    if not frozen_orders or any(
+        float(o.get("cobertura_logistica") or 0) < 100
+        or not math.isfinite(float(o.get("cobertura_logistica") or 0))
+        or int(o.get("productos_sin_peso") or 0) > 0
+        or weight <= 0
+        for o, weight in zip(frozen_orders, weights)
+    ):
+        raise ValueError("Peso incompleto o no verificable. Recalcule los pesos o use Planificación simplificada con su revisión manual expresa. No autoriza salida a ruta.")
+
+
 def confirm_dispatch_plan(
     *,
     plan_session_id: str,
@@ -467,6 +490,7 @@ def confirm_dispatch_plan(
     planning_date: date | None = None,
     planning_origin: str = "ors",
     ors_metrics_calculated: bool = True,
+    allow_ors_without_metrics: bool = False,
     conn: Any | None = None,
     run_auto_picking: bool = True,
 ) -> dict[str, Any]:
@@ -490,9 +514,11 @@ def confirm_dispatch_plan(
     if origin not in ("ors", "simple_list"):
         raise ValueError(f"planning_origin inválido: {planning_origin!r}")
     metrics_ok = bool(ors_metrics_calculated)
-    if origin == "ors" and not metrics_ok:
-        # ORS tradicional siempre calcula; evitar inconsistencias accidentales.
-        metrics_ok = True
+    if origin == "ors" and not metrics_ok and not allow_ors_without_metrics:
+        raise ValueError("La confirmación ORS sin métricas requiere autorización explícita de contingencia.")
+    contingency = origin == "ors" and not metrics_ok
+    if contingency and (route_geometry is not None or any(v is not None for v in (km_total, duration_min, liters_estimated))):
+        raise ValueError("No se pueden registrar métricas o geometría ficticias sin ORS.")
     if metrics_ok:
         if diesel_price_per_liter is None:
             raise ValueError("diesel_price_per_liter es obligatorio cuando ORS calculó métricas")
@@ -591,6 +617,8 @@ def confirm_dispatch_plan(
         }
         enriched = _enrich_orders_snapshot(cur, orders)
         frozen_orders = freeze_orders_weight(cur, enriched, calculated_at=now)
+        if contingency:
+            _validate_ors_contingency_capacity(frozen_orders, truck_max_weight_kg)
         stops = build_stop_snapshots(frozen_orders)
         weight_fields = aggregate_plan_weight(
             frozen_orders,
@@ -605,6 +633,9 @@ def confirm_dispatch_plan(
             planning_code,
             origin,
         )
+        if contingency:
+            logger.warning("ORS_CONTINGENCY_CONFIRMED plan_id=%s truck_id=%s orders=%s metrics_calculated=false",
+                           plan_id, truck_id, len(frozen_orders))
         repo.insert_plan_orders(cur, plan_id, frozen_orders)
         repo.insert_plan_stop_snapshots(cur, plan_id, stops)
         if owns_conn:

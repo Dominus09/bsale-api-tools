@@ -23,6 +23,7 @@ type OrsOperationalCostsPanelProps = {
   planSessionId: string | null
   truckId: number | null
   fuelCostClp: number
+  routeUnavailable?: boolean
   loading?: boolean
   onCostsChange?: (costs: RouteOperationalCosts) => void
   onDieselChange?: (dieselClpPerLiter: number) => void
@@ -42,6 +43,7 @@ export function OrsOperationalCostsPanel({
   planSessionId,
   truckId,
   fuelCostClp,
+  routeUnavailable = false,
   loading,
   onCostsChange,
   onDieselChange,
@@ -208,7 +210,7 @@ export function OrsOperationalCostsPanel({
         <div className="flex items-center justify-between gap-2">
           <dt className="text-muted-foreground">Combustible</dt>
           <dd className="font-medium tabular-nums text-foreground">
-            {busy ? "—" : formatClp(fuelCostClp)}
+            {busy || routeUnavailable ? "—" : formatClp(fuelCostClp)}
           </dd>
         </div>
         <div className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-1">
@@ -255,7 +257,7 @@ export function OrsOperationalCostsPanel({
         <div className="flex items-center justify-between gap-2 border-t border-border/60 pt-2">
           <dt className="font-semibold text-foreground">Costo operacional</dt>
           <dd className="font-semibold tabular-nums text-foreground">
-            {busy ? "—" : formatClp(operationalTotal)}
+            {busy || routeUnavailable ? "—" : formatClp(operationalTotal)}
           </dd>
         </div>
       </dl>

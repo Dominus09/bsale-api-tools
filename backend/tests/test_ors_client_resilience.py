@@ -123,3 +123,63 @@ def test_planificacion_ors_routes_http_hides_upstream_exception_detail():
     assert exc.value.detail == "No fue posible calcular las rutas ORS. Intente nuevamente."
     assert "HTTP 502" not in str(exc.value.detail)
     assert "<html>" not in str(exc.value.detail)
+
+
+def test_ors_logs_only_safe_provider_diagnostics(caplog):
+    response = requests.Response()
+    response.status_code = 404
+    response._content = b'{"error":{"code":2010,"message":"SECRET_COORDS_OR_TOKEN"}}'
+    with patch("backend.utils.ors_client.requests.post", return_value=response):
+        with pytest.raises(OrsServiceError):
+            get_route(COORDS)
+    assert "http_status=404" in caplog.text
+    assert "ors_code=2010" in caplog.text
+    assert "SECRET_COORDS_OR_TOKEN" not in caplog.text
+
+
+def test_ors_contingency_http_explicit_null_metrics():
+    from backend.routers.distribuidora_dispatch_plan import ConfirmDispatchPlanBody, confirm_plan
+    body = ConfirmDispatchPlanBody(
+        plan_session_id="test-session", truck_id=2, route_name="T2",
+        diesel_price_per_liter=None, km_total=None, duration_min=None,
+        liters_estimated=None, confirm_without_ors=True,
+        orders=[{"oc_document_id": 1, "route_order": 1}],
+    )
+    with patch("backend.routers.distribuidora_dispatch_plan.svc.confirm_dispatch_plan", return_value={"plan": {"id": 1}}) as confirm:
+        confirm_plan(body, _ops={})
+    kwargs = confirm.call_args.kwargs
+    assert kwargs["planning_origin"] == "ors"
+    assert kwargs["ors_metrics_calculated"] is False
+    assert kwargs["allow_ors_without_metrics"] is True
+    assert kwargs["km_total"] is None
+    assert kwargs["route_geometry"] is None
+
+
+def test_ors_contingency_rejects_fabricated_metrics():
+    from backend.routers.distribuidora_dispatch_plan import ConfirmDispatchPlanBody, confirm_plan
+    body = ConfirmDispatchPlanBody(
+        plan_session_id="test-session", truck_id=2, route_name="T2",
+        diesel_price_per_liter=1600, km_total=12, duration_min=None,
+        liters_estimated=None, confirm_without_ors=True,
+        orders=[{"oc_document_id": 1}],
+    )
+    with patch("backend.routers.distribuidora_dispatch_plan.svc.confirm_dispatch_plan") as confirm:
+        with pytest.raises(HTTPException) as exc:
+            confirm_plan(body, _ops={})
+        assert exc.value.status_code == 400
+        confirm.assert_not_called()
+
+
+@pytest.mark.parametrize("capacity,weights,expected", [
+    (5600, [{"peso_total_kg": 4413.5, "cobertura_logistica": 100, "productos_sin_peso": 0}], None),
+    (5600, [{"peso_total_kg": 6257.2, "cobertura_logistica": 100, "productos_sin_peso": 0}], "sobrecargado"),
+    (5600, [{"peso_total_kg": 4413.5, "cobertura_logistica": 50, "productos_sin_peso": 1}], "Peso incompleto"),
+    (None, [{"peso_total_kg": 100, "cobertura_logistica": 100}], "Capacidad"),
+])
+def test_ors_contingency_capacity(capacity, weights, expected):
+    from backend.services.distribuidora.dispatch_plan_service import _validate_ors_contingency_capacity
+    if expected:
+        with pytest.raises(ValueError, match=expected):
+            _validate_ors_contingency_capacity(weights, capacity)
+    else:
+        _validate_ors_contingency_capacity(weights, capacity)

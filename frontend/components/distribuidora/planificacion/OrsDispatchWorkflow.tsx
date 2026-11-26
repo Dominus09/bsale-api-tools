@@ -23,8 +23,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 type OrsDispatchWorkflowProps = {
   plan: DispatchPlanSummary | null | undefined
   canConfirm: boolean
+  canConfirmWithoutOrs?: boolean
+  contingencyBlockedReason?: string | null
   defaultPlanningName?: string
-  onConfirm: (planningName: string) => Promise<void>
+  onConfirm: (planningName: string, withoutOrs?: boolean) => Promise<void>
   onPlanUpdated: () => void
   onRecalculateWeights?: () => Promise<void>
 }
@@ -32,6 +34,8 @@ type OrsDispatchWorkflowProps = {
 export function OrsDispatchWorkflow({
   plan,
   canConfirm,
+  canConfirmWithoutOrs = false,
+  contingencyBlockedReason,
   defaultPlanningName = "",
   onConfirm,
   onPlanUpdated,
@@ -99,6 +103,30 @@ export function OrsDispatchWorkflow({
           )}
           Confirmar planificación
         </Button>
+          {canConfirmWithoutOrs ? (
+            <div className="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-2">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-300">Contingencia: ruta sin calcular</p>
+              <p className="text-[11px] text-muted-foreground">Conserva las OC, el camión y las paradas. Kilómetros, duración y costo total quedarán pendientes. El servidor verifica capacidad y peso completo. No autoriza la salida física.</p>
+              {contingencyBlockedReason ? <p className="text-xs text-destructive">{contingencyBlockedReason}</p> : null}
+              <Button type="button" variant="outline" size="sm" className="w-full text-xs" disabled={!!contingencyBlockedReason || busy != null}
+                onClick={() => {
+                  if (!window.confirm("¿Confirmar planificación sin cálculo ORS? Los costos y la ruta quedarán pendientes. Esta acción no autoriza la salida física.")) return
+                  void run("confirm-without-ors", async () => {
+                    try {
+                      const el = document.getElementById("ors-planning-name") as HTMLInputElement | null
+                      await onConfirm(el?.value?.trim() || defaultPlanningName || "Ruta", true)
+                      setInvoiceMsg("Planificación guardada. Ruta y métricas ORS pendientes.")
+                      setInvoiceAlert("default")
+                    } catch (e: unknown) {
+                      setInvoiceMsg(e instanceof Error ? e.message : "Error al confirmar")
+                      setInvoiceAlert("destructive")
+                    }
+                  })
+                }}>
+                {busy === "confirm-without-ors" ? "Confirmando…" : "Confirmar sin cálculo ORS"}
+              </Button>
+            </div>
+          ) : null}
           {onRecalculateWeights ? (
             <Button
               type="button"
@@ -130,6 +158,7 @@ export function OrsDispatchWorkflow({
         </>
       ) : plan?.planning_code ? (
         <p className="text-[11px] text-muted-foreground">
+          {plan.ors_metrics_calculated === false ? <span className="block text-amber-700 dark:text-amber-300">Ruta y métricas ORS pendientes.</span> : null}
           Guardado como{" "}
           <span className="font-mono font-medium text-foreground">{plan.planning_code}</span>
           {plan.id ? (

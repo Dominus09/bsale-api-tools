@@ -398,6 +398,7 @@ export default function PlanificacionDespachoPage() {
 
   const orsRoutes = orsPayload?.routes ?? []
   const activeRoute = orsRoutes.find((r) => r.camion === selectedCamion) ?? null
+  const routeReady = !error && !!activeRoute
   const depot = orsPayload?.depot ?? null
 
   const truckColorMap = useMemo(() => {
@@ -481,17 +482,17 @@ export default function PlanificacionDespachoPage() {
   }, [routeClientRows, ordersForTruck])
 
   const mapRoutes: PlanificacionMapRoute[] = useMemo(() => {
-    if (!selectedCamion || !activeRoute) return []
+    if (!selectedCamion) return []
     const byT = groupOrdersByTruck(orders)
-    const r = activeRoute
+    const r = routeReady ? activeRoute : null
     const color = truckColorMap.get(selectedCamion) ?? TRUCK_COLORS[0]!
-    const stopsOrdered = r.stops_ordered ?? []
+    const stopsOrdered = r?.stops_ordered ?? []
     const stopsFromOrder =
       stopsOrdered.length > 0
         ? stopsOrdered.map((s) => {
-            const o = (byT.get(r.camion) ?? []).find((x) => x.document_id === s.document_id)
+            const o = (byT.get(selectedCamion) ?? []).find((x) => x.document_id === s.document_id)
             const clientRow = clientByDocumentId.get(s.document_id)
-            const stopKey = `${r.camion}-${s.stop_index}`
+            const stopKey = `${selectedCamion}-${s.stop_index}`
             return {
               lat: s.lat,
               lng: s.lng,
@@ -505,12 +506,12 @@ export default function PlanificacionDespachoPage() {
               popup: buildStopPopupData(o, clientRow),
             }
           })
-        : (byT.get(r.camion) ?? [])
+        : (byT.get(selectedCamion) ?? [])
             .filter(orderHasGeo)
             .sort((a, b) => a.stop_index - b.stop_index)
             .map((s) => {
               const clientRow = clientByDocumentId.get(s.document_id)
-              const stopKey = `${r.camion}-${s.stop_index}`
+              const stopKey = `${selectedCamion}-${s.stop_index}`
               return {
                 lat: Number(s.lat),
                 lng: Number(s.lng),
@@ -526,13 +527,13 @@ export default function PlanificacionDespachoPage() {
             })
     return [
       {
-        camion: r.camion,
+        camion: selectedCamion,
         color,
-        positions: lineStringToLatLngs(r.geometry),
+        positions: r ? lineStringToLatLngs(r.geometry) : [],
         stops: stopsFromOrder,
       },
     ]
-  }, [orders, activeRoute, selectedCamion, truckColorMap, clientByDocumentId])
+  }, [orders, activeRoute, routeReady, selectedCamion, truckColorMap, clientByDocumentId])
 
   const handleDieselChange = useCallback(
     (diesel: number) => {
@@ -693,23 +694,38 @@ export default function PlanificacionDespachoPage() {
     [fetchRoutes],
   )
 
-  const handleConfirmPlan = useCallback(async (planningName: string) => {
+  const handleConfirmPlan = useCallback(async (planningName: string, withoutOrs = false) => {
     if (!selectedCamion || !planSessionId) return
     const truckOrders = orders.filter((o) => o.camion === selectedCamion)
     const truckId = truckOrders[0]?.truck_id
     if (!truckId) throw new Error("Camión sin truck_id")
     const { routable, pendingGeoref } = splitOrdersByGeo(truckOrders)
     if (routable.length === 0 && pendingGeoref.length === 0) return
-    if (routable.length > 0 && (loading || error || !activeRoute)) {
-      throw new Error("Primero debe calcular correctamente la ruta ORS antes de confirmar.")
+    if (loading || (!withoutOrs && !routeReady)) {
+      throw new Error("Primero debe calcular la ruta ORS o elegir explícitamente la confirmación sin ORS.")
     }
+    if (withoutOrs && routeReady) throw new Error("La ruta ORS ya está disponible; confirme normalmente.")
     const crew = crewByCamion.get(selectedCamion) ?? { driverCount: 1, assistantCount: 0 }
-    const bd = activeRoute?.cost_breakdown
+    const route = withoutOrs ? null : activeRoute
+    const bd = route?.cost_breakdown
     const maxRoutedStop = routable.reduce(
       (m, o) => Math.max(m, o.stop_index ?? 0),
       0,
     )
-    const planOrders = [
+    const planOrders = withoutOrs ? [...truckOrders]
+      .sort((a, b) => a.stop_index - b.stop_index)
+      .map((o, i) => ({
+        oc_document_id: o.document_id,
+        oc_number: o.oc ?? null,
+        route_order: i + 1,
+        client_id: o.client_id ?? null,
+        client_name: o.nombre_fantasia ?? null,
+        address: o.direccion ?? null,
+        city: o.municipality ?? null,
+        oc_total_amount: o.total_amount ?? null,
+        lat: orderHasGeo(o) ? o.lat ?? null : null,
+        lng: orderHasGeo(o) ? o.lng ?? null : null,
+      })) : [
       ...routable.map((o) => ({
         oc_document_id: o.document_id,
         oc_number: o.oc ?? null,
@@ -732,8 +748,8 @@ export default function PlanificacionDespachoPage() {
       })),
     ]
     const extrasClp = operationalCosts.per_diem_clp + operationalCosts.other_clp
-    const fuelClp = activeRoute?.fuel_cost_clp ?? 0
-    const crewClp = activeRoute?.crew_cost_clp ?? 0
+    const fuelClp = route?.fuel_cost_clp ?? 0
+    const crewClp = route?.crew_cost_clp ?? 0
     await confirmDispatchPlan({
       plan_session_id: planSessionId,
       truck_id: truckId,
@@ -741,26 +757,24 @@ export default function PlanificacionDespachoPage() {
       planning_name: planningName.trim() || selectedCamion,
       driver_count: crew.driverCount,
       assistant_count: crew.assistantCount,
-      driver_cost_clp: activeRoute?.driver_cost_clp ?? 0,
-      assistant_cost_clp: activeRoute?.assistant_cost_clp ?? 0,
-      diesel_price_per_liter:
+      confirm_without_ors: withoutOrs,
+      driver_cost_clp: route?.driver_cost_clp ?? 0,
+      assistant_cost_clp: route?.assistant_cost_clp ?? 0,
+      diesel_price_per_liter: withoutOrs ? null : (
         operationalCosts.diesel_clp_per_liter ??
         orsPayload?.diesel_price_per_liter ??
-        1500,
-      km_total: activeRoute?.distance_km ?? 0,
-      duration_min: activeRoute?.duration_min ?? 0,
-      liters_estimated: activeRoute?.liters_estimated ?? 0,
+        1500),
+      km_total: route?.distance_km ?? null,
+      duration_min: route?.duration_min ?? null,
+      liters_estimated: route?.liters_estimated ?? null,
       fuel_cost_clp: fuelClp,
-      ferry_cost_clp: operationalCosts.ferry_clp,
+      ferry_cost_clp: withoutOrs ? 0 : operationalCosts.ferry_clp,
       toll_cost_clp: bd?.toll_clp ?? 0,
-      extras_cost_clp: extrasClp,
+      extras_cost_clp: withoutOrs ? 0 : extrasClp,
       crew_cost_clp: crewClp,
-      total_route_cost_clp:
-        fuelClp +
-        crewClp +
-        operationalCosts.ferry_clp +
-        extrasClp,
-      route_geometry: activeRoute?.geometry ?? null,
+      total_route_cost_clp: withoutOrs ? 0 : (
+        fuelClp + crewClp + operationalCosts.ferry_clp + extrasClp),
+      route_geometry: route?.geometry ?? null,
       orders: planOrders,
     })
     invalidateSessionPlansCache(planSessionId)
@@ -768,8 +782,8 @@ export default function PlanificacionDespachoPage() {
   }, [
     selectedCamion,
     activeRoute,
+    routeReady,
     loading,
-    error,
     planSessionId,
     orders,
     crewByCamion,
@@ -882,7 +896,7 @@ export default function PlanificacionDespachoPage() {
             dieselPricePerLiter={totals.diesel}
             loading={loading}
             routeSalesLoading={false}
-            routeUnavailable={!!error && routableForTruck.length > 0}
+            routeUnavailable={!routeReady || activePlan?.ors_metrics_calculated === false}
           />
           <OrsCommercialKpiStrip counts={commercialCounts} loading={loading} />
         </div>
@@ -939,6 +953,7 @@ export default function PlanificacionDespachoPage() {
             planSessionId={planSessionId}
             truckId={activeTruckId}
             fuelCostClp={totals.fuelClp}
+            routeUnavailable={!routeReady || activePlan?.ors_metrics_calculated === false}
             loading={loading}
             onCostsChange={setOperationalCosts}
             onDieselChange={handleDieselChange}
@@ -991,14 +1006,11 @@ export default function PlanificacionDespachoPage() {
           />
           </div>
           <OrsDispatchWorkflow
+            key={selectedCamion ?? "none"}
             plan={activePlan}
-            canConfirm={
-              !loading &&
-              !error &&
-              !activePlan &&
-              ordersForTruck.length > 0 &&
-              (routableForTruck.length === 0 || !!activeRoute)
-            }
+            canConfirm={!loading && routeReady && !activePlan && ordersForTruck.length > 0}
+            canConfirmWithoutOrs={!loading && !routeReady && !activePlan && !!planSessionId && ordersForTruck.length > 0}
+            contingencyBlockedReason={truckSidebarRows.find(t => t.camion === selectedCamion)?.overloaded ? "Camión sobrecargado según el peso estimado. Redistribuya la carga." : null}
             defaultPlanningName={selectedCamion ?? ""}
             onConfirm={handleConfirmPlan}
             onPlanUpdated={() => {

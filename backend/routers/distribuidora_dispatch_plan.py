@@ -71,10 +71,11 @@ class ConfirmDispatchPlanBody(BaseModel):
     assistant_count: int = Field(0, ge=0, le=10)
     driver_cost_clp: int = Field(0, ge=0)
     assistant_cost_clp: int = Field(0, ge=0)
-    diesel_price_per_liter: float = Field(..., gt=0)
-    km_total: float = Field(0, ge=0)
-    duration_min: float = Field(0, ge=0)
-    liters_estimated: float = Field(0, ge=0)
+    confirm_without_ors: bool = False
+    diesel_price_per_liter: float | None = Field(..., gt=0)
+    km_total: float | None = Field(0, ge=0)
+    duration_min: float | None = Field(0, ge=0)
+    liters_estimated: float | None = Field(0, ge=0)
     fuel_cost_clp: int = Field(0, ge=0)
     ferry_cost_clp: int = Field(0, ge=0)
     toll_cost_clp: int = Field(0, ge=0)
@@ -274,6 +275,9 @@ def confirm_plan(
         OcDocumentStateError,
     )
 
+    without_ors = body.confirm_without_ors
+    if without_ors and any(value is not None for value in (body.km_total, body.duration_min, body.liters_estimated, body.route_geometry)):
+        raise HTTPException(status_code=400, detail="La confirmación sin ORS requiere métricas y geometría nulas.")
     try:
         return svc.confirm_dispatch_plan(
             plan_session_id=body.plan_session_id,
@@ -298,7 +302,8 @@ def confirm_plan(
             orders=[o.model_dump() for o in body.orders],
             planning_date=body.planning_date,
             planning_origin="ors",
-            ors_metrics_calculated=True,
+            ors_metrics_calculated=not without_ors,
+            allow_ors_without_metrics=without_ors,
         )
     except OcConfirmConflictError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
