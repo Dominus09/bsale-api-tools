@@ -213,13 +213,16 @@ export default function ClientesPage() {
     if (!origin || !Number.isFinite(planId)) return
     if (isDeviceOffline()) return
     let cancelled = false
-    void getMyDespachoProgress(planId, origin)
-      .then((res) => {
-        if (!cancelled && res.progress) setProgress(res.progress)
-      })
-      .catch(() => undefined)
+    const timer = window.setTimeout(() => {
+      void getMyDespachoProgress(planId, origin)
+        .then((res) => {
+          if (!cancelled && res.progress) setProgress(res.progress)
+        })
+        .catch(() => undefined)
+    }, 1500)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [origin, planId])
 

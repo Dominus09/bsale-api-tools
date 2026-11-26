@@ -5,11 +5,12 @@
 
 import { isOutboxSyncWritesEnabled } from "./offline-outbox-policy.ts"
 import {
+  canResumeLocalOutboxOp,
   getOutboxOp,
   listOutboxOpsForPlanCustomer,
   listOutboxOpsForUser,
   putOutboxBlob,
-  putOutboxOp,
+  saveUnsentOutboxOp,
   verifyOutboxBlobPersisted,
 } from "./offline-outbox-store.ts"
 import {
@@ -255,14 +256,11 @@ export async function saveCompleteDeliveryLocal(
     input.customerKey,
   )
   if (existing && existing.localUuid !== input.resumeLocalUuid) {
-    if (existing.op_type !== "complete_delivery" || existing.status === "pending") {
-      return {
-        ok: false,
-        code: "DUPLICATE_PENDING",
-        message:
-          "Ya existe una operación pendiente para este cliente. Ábrala desde el panel de pendientes.",
-        existing,
-      }
+    return {
+      ok: false,
+      code: "DUPLICATE_PENDING",
+      message: "Ya existe una operación pendiente para este cliente. Ábrala desde el panel de pendientes.",
+      existing,
     }
   }
 
@@ -276,6 +274,15 @@ export async function saveCompleteDeliveryLocal(
       code: "USER_ISOLATION",
       message: "No se puede modificar una operación de otro usuario.",
     }
+  }
+  if (input.resumeLocalUuid && !prior) {
+    return { ok: false, code: "DUPLICATE_PENDING", message: "No se encontró el registro original. Vuelva a abrir la ficha." }
+  }
+  if (prior && !canResumeLocalOutboxOp(prior, {
+    userId: String(input.userId), planId: Number(input.planId), customerKey: input.customerKey,
+    op_type: "complete_delivery",
+  })) {
+    return { ok: false, code: "DUPLICATE_PENDING", message: "La entrega ya inició su envío o requiere revisión. No puede modificarse.", existing: prior }
   }
   const idem =
     prior?.idempotency_key ||
@@ -325,7 +332,10 @@ export async function saveCompleteDeliveryLocal(
   }
 
   try {
-    await putOutboxOp(op)
+    if (!(await saveUnsentOutboxOp(op, prior))) {
+      const latest = await findActiveOutboxForCustomer(input.userId, input.planId, input.customerKey)
+      return { ok: false, code: "DUPLICATE_PENDING", message: "El registro cambió o comenzó a enviarse. Revise su estado.", existing: latest ?? undefined }
+    }
   } catch (e) {
     return {
       ok: false,
@@ -409,6 +419,15 @@ export async function saveClosedStoreLocal(
       message: "No se puede modificar una operación de otro usuario.",
     }
   }
+  if (input.resumeLocalUuid && !prior) {
+    return { ok: false, code: "DUPLICATE_PENDING", message: "No se encontró el registro original. Vuelva a abrir la ficha." }
+  }
+  if (prior && !canResumeLocalOutboxOp(prior, {
+    userId: String(input.userId), planId: Number(input.planId), customerKey: input.customerKey,
+    op_type: "closed_store",
+  })) {
+    return { ok: false, code: "DUPLICATE_PENDING", message: "La entrega ya inició su envío o requiere revisión. No puede modificarse.", existing: prior }
+  }
   const localUuid = prior?.localUuid || newLocalUuid()
   const idem =
     prior?.idempotency_key ||
@@ -421,7 +440,9 @@ export async function saveClosedStoreLocal(
     })
 
   const sha = await sha256Hex(input.photo.bytes)
-  const blobId = prior?.evidence?.localBlobId || `blob-${localUuid}`
+  // Stage a new immutable blob. An active sync may still reference the previous photo.
+  // Do not erase or overwrite evidence belonging to an earlier payload.
+  const blobId = `blob-${localUuid}-${newLocalUuid()}`
   try {
     await putOutboxBlob({
       id: blobId,
@@ -488,7 +509,10 @@ export async function saveClosedStoreLocal(
   }
 
   try {
-    await putOutboxOp(op)
+    if (!(await saveUnsentOutboxOp(op, prior))) {
+      const latest = await findActiveOutboxForCustomer(input.userId, input.planId, input.customerKey)
+      return { ok: false, code: "DUPLICATE_PENDING", message: "El registro cambió o comenzó a enviarse. Revise su estado.", existing: latest ?? undefined }
+    }
   } catch {
     return {
       ok: false,

@@ -10,11 +10,11 @@ import { multipartAuthHeaders } from "./multipart-headers.ts"
 import { isOutboxSyncWritesEnabled } from "./offline-outbox-policy.ts"
 import {
   getOutboxBlob,
-  getOutboxOp,
+  claimOutboxOpForSync,
   listOutboxOpsForUser,
-  putOutboxOp,
+  settleOutboxSync,
 } from "./offline-outbox-store.ts"
-import type { OutboxOperation } from "./offline-outbox-types.ts"
+import { canClaimOutboxSync, type OutboxOperation } from "./offline-outbox-types.ts"
 import { isActiveOutboxStatus } from "./offline-outbox.ts"
 import { isDeviceOffline } from "./offline-store.ts"
 import { refreshOfflineV2PilotAuthorization } from "./offline-v2-pilot-auth.ts"
@@ -136,12 +136,14 @@ function classifyError(
   err: unknown,
 ): "auth" | "forbidden" | "conflict" | "validation" | "retry" | "fatal" {
   if (!(err instanceof ApiError)) return "retry"
+  if (err.code === "OFFLINE_SYNC_WRITES_DISABLED") return "fatal"
   if (err.status === 401) return "auth"
   if (err.status === 403) return "forbidden"
   if (err.status === 409) return "conflict"
   if (err.status === 422) return "validation"
   if (err.status === 429 || err.status >= 500 || err.status === 0) return "retry"
-  if (err.code === "OFFLINE_SYNC_WRITES_DISABLED") return "fatal"
+  // Other 4xx responses require intervention, not endless retries.
+  if (err.status >= 400 && err.status < 500) return "validation"
   return "retry"
 }
 
@@ -151,6 +153,20 @@ class OutboxSyncRuntime {
   private inFlightKeys = new Set<string>()
   private planCustomerLocks = new Set<string>()
   private backoffUntil = 0
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+
+  private scheduleRetry(delay: number) {
+    if (this.retryTimer) clearTimeout(this.retryTimer)
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      void this.kick("retry").catch(() => undefined)
+    }, delay + 50)
+  }
+
+  stopRetryTimer() {
+    if (this.retryTimer) clearTimeout(this.retryTimer)
+    this.retryTimer = null
+  }
   private state: OutboxSyncState = {
     phase: "disabled",
     message: null,
@@ -188,6 +204,7 @@ class OutboxSyncRuntime {
 
   /** Kick seguro: solo si el servidor tiene writes ON (o lab hint no-Quillotana). */
   async kick(reason: string): Promise<void> {
+    if (this.running) return
     if (getToken() && !isDeviceOffline()) {
       await refreshOfflineV2PilotAuthorization()
     }
@@ -216,22 +233,23 @@ class OutboxSyncRuntime {
     this.running = true
     this.emit({
       phase: "syncing",
-      message: `Sincronizando entregas pendientes… (${reason})`,
+      message: "Enviando entregas a La Quillotana…",
     })
     try {
       await this.drainQueue()
     } finally {
       this.running = false
       const pending = await this.refreshPendingCount()
-      this.emit({
-        phase: pending > 0 ? "idle" : "idle",
-        message: pending > 0 ? `${pending} pendientes` : "Sin pendientes",
-        inFlightCount: 0,
-      })
+      if (this.state.phase === "paused_auth" || this.state.phase === "disabled") {
+        this.emit({ inFlightCount: 0 })
+      } else {
+        this.emit({ phase: "idle", message: pending > 0 ? `${pending} por resolver` : "Sin entregas pendientes", inFlightCount: 0 })
+      }
     }
   }
 
   async syncNow(): Promise<void> {
+    this.stopRetryTimer()
     this.backoffUntil = 0
     await this.kick("manual")
   }
@@ -240,7 +258,7 @@ class OutboxSyncRuntime {
     const uid = getSessionUserId()
     if (!uid) return
     const ops = (await listOutboxOpsForUser(uid)).filter(
-      (o) => o.status === "pending" || o.status === "failed_needs_action",
+      (o) => canClaimOutboxSync(o),
     )
     // Orden FIFO por captura
     ops.sort((a, b) => a.captured_at.localeCompare(b.captured_at))
@@ -260,7 +278,7 @@ class OutboxSyncRuntime {
       this.emit({ inFlightCount: this.inFlightKeys.size })
       try {
         const result = await this.processOne(op)
-        if (result === "auth") return
+        if (result === "auth" || this.state.phase === "disabled") return
         if (result === "retry") transientFails += 1
       } finally {
         this.planCustomerLocks.delete(pcKey)
@@ -274,25 +292,18 @@ class OutboxSyncRuntime {
         BASE_BACKOFF_MS * Math.pow(2, Math.min(5, transientFails - 1)),
       )
       this.backoffUntil = Date.now() + delay
+      this.scheduleRetry(delay)
     }
   }
 
   private async processOne(
     op: OutboxOperation,
   ): Promise<"ok" | "auth" | "retry" | "stop"> {
-    const fresh = await getOutboxOp(op.localUuid)
-    if (!fresh || fresh.userId !== String(getSessionUserId())) return "stop"
-    if (fresh.status === "synced") return "ok"
-    if (fresh.status === "conflict") return "stop"
-
-    const syncing: OutboxOperation = {
-      ...fresh,
-      status: "syncing",
-      attempt_count: (fresh.attempt_count || 0) + 1,
-      updated_at: new Date().toISOString(),
-      last_error: null,
-    }
-    await putOutboxOp(syncing)
+    const uid = getSessionUserId()
+    if (!uid || String(uid) !== op.userId) return "stop"
+    const syncing = await claimOutboxOpForSync(op.localUuid, String(uid))
+    if (!syncing) return "stop"
+    const fresh = syncing
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("lq-outbox-changed"))
     }
@@ -304,7 +315,8 @@ class OutboxSyncRuntime {
           throw new ApiError(422, "Fotografía local ausente", "PHOTO_REQUIRED")
         }
         const blob = await getOutboxBlob(fresh.evidence.localBlobId)
-        if (!blob || blob.sha256 !== fresh.evidence.content_sha256) {
+        if (!blob || blob.userId !== fresh.userId || blob.sha256 !== fresh.evidence.content_sha256 ||
+          blob.sizeBytes !== fresh.evidence.size_bytes || blob.data.byteLength !== fresh.evidence.size_bytes) {
           throw new ApiError(422, "Fotografía corrupta o ausente", "PHOTO_CORRUPT")
         }
         evidenceBlob = new Blob([blob.data], {
@@ -312,19 +324,25 @@ class OutboxSyncRuntime {
         })
       }
 
+      if (String(getSessionUserId()) !== fresh.userId || !getToken()) {
+        throw new ApiError(401, "Sesión expirada", "UNAUTHORIZED")
+      }
       const payload = buildSyncPayload(fresh)
       const res = await postOfflineOp(fresh.planId, payload, evidenceBlob)
       const visit = (res.visit || null) as { id?: number; status?: string } | null
-      const synced: OutboxOperation = {
-        ...fresh,
-        status: "synced",
-        attempt_count: syncing.attempt_count,
-        updated_at: new Date().toISOString(),
-        last_error: null,
-        server_confirmed: true,
-        sync_enabled: true,
+      // An HTTP 2xx alone is not an acknowledgement of a closed visit.
+      const expected = fresh.op_type === "complete_delivery" ? "completed" : "not_delivered"
+      if (!visit || !Number.isFinite(Number(visit.id)) || Number(visit.id) <= 0 ||
+        !Number.isFinite(Number(res.offline_op_id)) || Number(res.offline_op_id) <= 0) {
+        throw new Error("Respuesta incompleta; se conserva la entrega para verificarla de nuevo")
       }
-      await putOutboxOp(synced)
+      if (visit.status !== expected) {
+        throw new ApiError(409, "El resultado del servidor requiere revisión", "VISIT_ACK_MISMATCH")
+      }
+      const synced = await settleOutboxSync(syncing, {
+        status: "synced", last_error: null, server_confirmed: true, sync_enabled: true,
+      })
+      if (!synced) return "stop"
       this.emit({
         lastResult: visit?.id
           ? `Entrega confirmada por el servidor (visita #${visit.id})`
@@ -338,27 +356,16 @@ class OutboxSyncRuntime {
       const kind = classifyError(err)
       const message = err instanceof Error ? err.message : "Error de sincronización"
       if (kind === "auth") {
-        await putOutboxOp({
-          ...fresh,
-          status: "pending",
-          attempt_count: syncing.attempt_count,
-          last_error: message,
-          updated_at: new Date().toISOString(),
-        })
+        await settleOutboxSync(syncing, { status: "pending", last_error: message })
         this.emit({
           phase: "paused_auth",
-          message: "401 — outbox conservada. Inicie sesión de nuevo.",
+          message: "Inicia sesión nuevamente. Tus entregas siguen guardadas.",
         })
+        if (typeof window !== "undefined") window.dispatchEvent(new Event("lq-outbox-changed"))
         return "auth"
       }
       if (kind === "conflict" || kind === "forbidden" || kind === "validation") {
-        await putOutboxOp({
-          ...fresh,
-          status: kind === "conflict" ? "conflict" : "failed_needs_action",
-          attempt_count: syncing.attempt_count,
-          last_error: message,
-          updated_at: new Date().toISOString(),
-        })
+        await settleOutboxSync(syncing, { status: kind === "conflict" ? "conflict" : "failed_needs_action", last_error: message })
         this.emit({
           lastResult:
             kind === "conflict" ? "Requiere revisión" : `Error: ${message}`,
@@ -369,27 +376,16 @@ class OutboxSyncRuntime {
         return "stop"
       }
       if (kind === "fatal") {
-        await putOutboxOp({
-          ...fresh,
-          status: "pending",
-          attempt_count: syncing.attempt_count,
-          last_error: message,
-          updated_at: new Date().toISOString(),
-        })
+        await settleOutboxSync(syncing, { status: "pending", last_error: message })
         this.emit({
           phase: "disabled",
-          message: message,
+          message: "El envío está pausado. Tus entregas siguen guardadas.",
         })
+        if (typeof window !== "undefined") window.dispatchEvent(new Event("lq-outbox-changed"))
         return "stop"
       }
       // retry: no asumir fallo de servidor (timeout / 5xx)
-      await putOutboxOp({
-        ...fresh,
-        status: "pending",
-        attempt_count: syncing.attempt_count,
-        last_error: message,
-        updated_at: new Date().toISOString(),
-      })
+      await settleOutboxSync(syncing, { status: "pending", last_error: message })
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("lq-outbox-changed"))
       }
@@ -418,7 +414,13 @@ export function bindOutboxSyncTriggers(): () => void {
 
   window.addEventListener("online", onOnline)
   document.addEventListener("visibilitychange", onVis)
+  const onQueue = () => { void outboxSyncRuntime.refreshPendingCount() }
   window.addEventListener("focus", onFocus)
+  window.addEventListener("lq-outbox-changed", onQueue)
+  // Recover a lease even when the user keeps this screen open.
+  const interval = window.setInterval(() => {
+    void outboxSyncRuntime.kick("foreground-check").catch(() => undefined)
+  }, 60_000)
   void outboxSyncRuntime.refreshPendingCount()
   void outboxSyncRuntime.kick("startup")
 
@@ -426,5 +428,8 @@ export function bindOutboxSyncTriggers(): () => void {
     window.removeEventListener("online", onOnline)
     document.removeEventListener("visibilitychange", onVis)
     window.removeEventListener("focus", onFocus)
+    window.removeEventListener("lq-outbox-changed", onQueue)
+    window.clearInterval(interval)
+    outboxSyncRuntime.stopRetryTimer()
   }
 }

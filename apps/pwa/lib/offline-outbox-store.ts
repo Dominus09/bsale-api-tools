@@ -3,7 +3,7 @@
  * Nunca se limpia desde clearOfflineForUser / logout / 401 / BUILD_ID.
  */
 
-import type { OutboxOperation } from "./offline-outbox-types.ts"
+import { canClaimOutboxSync, OUTBOX_ACTIVE_LOCAL_STATUSES, type OutboxOperation } from "./offline-outbox-types.ts"
 
 const DB_NAME = "quillotana-ops-outbox-v2"
 const DB_VERSION = 1
@@ -198,4 +198,125 @@ export async function verifyOutboxBlobPersisted(
  */
 export function outboxClearApiBlocked(): string {
   return "Borrado de outbox no disponible en 2A.2 sin procedimiento autorizado"
+}
+
+
+/** Read/compare/write in one IDB transaction, including across tabs. */
+async function mutateOutboxOp(
+  localUuid: string,
+  mutate: (current: OutboxOperation | null) => OutboxOperation | null,
+): Promise<OutboxOperation | null> {
+  if (memoryDb) {
+    const current = memoryDb.ops.get(localUuid)
+    const next = mutate(current ? structuredClone(current) : null)
+    if (next) memoryDb.ops.set(localUuid, structuredClone(next))
+    return next
+  }
+  const db = await openDb()
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_OPS, "readwrite")
+      const store = tx.objectStore(STORE_OPS)
+      const req = store.get(localUuid)
+      let result: OutboxOperation | null = null
+      req.onsuccess = () => {
+        result = mutate((req.result as OutboxOperation | undefined) ?? null)
+        if (result) store.put(result)
+      }
+      tx.oncomplete = () => resolve(result)
+      tx.onabort = () => reject(tx.error || new Error("outbox mutation aborted"))
+      tx.onerror = () => reject(tx.error || new Error("outbox mutation failed"))
+    })
+  } finally {
+    db.close()
+  }
+}
+
+export function claimOutboxOpForSync(
+  localUuid: string,
+  userId: string,
+  now = Date.now(),
+): Promise<OutboxOperation | null> {
+  return mutateOutboxOp(localUuid, (current) => {
+    if (!current || current.userId !== String(userId) || !canClaimOutboxSync(current, now)) return null
+    return {
+      ...current,
+      status: "syncing",
+      attempt_count: (current.attempt_count || 0) + 1,
+      updated_at: new Date(now).toISOString(),
+      last_error: null,
+    }
+  })
+}
+
+/** A late response from an expired lease cannot overwrite a newer attempt. */
+export function settleOutboxSync(
+  claim: OutboxOperation,
+  changes: Pick<OutboxOperation, "status" | "last_error"> & Partial<Pick<OutboxOperation, "server_confirmed" | "sync_enabled">>,
+): Promise<OutboxOperation | null> {
+  return mutateOutboxOp(claim.localUuid, (current) => {
+    if (!current || current.userId !== claim.userId || current.idempotency_key !== claim.idempotency_key ||
+      current.status !== "syncing" || current.attempt_count !== claim.attempt_count ||
+      current.updated_at !== claim.updated_at) return null
+    return { ...current, ...changes, updated_at: new Date().toISOString() }
+  })
+}
+
+
+/** Only an operation that has never been sent can have its payload edited. */
+export function canResumeLocalOutboxOp(
+  current: OutboxOperation,
+  next: Pick<OutboxOperation, "userId" | "planId" | "customerKey" | "op_type">,
+): boolean {
+  return current.userId === next.userId && current.planId === next.planId &&
+    current.customerKey === next.customerKey && current.op_type === next.op_type &&
+    (current.status === "draft" || current.status === "pending") &&
+    current.attempt_count === 0 && !current.server_confirmed
+}
+
+/** Serialize local saves with sync claims and other tabs. Never overwrite a claimed payload.
+ * A new record also checks the plan/customer index in the same transaction.
+ */
+export async function saveUnsentOutboxOp(
+  op: OutboxOperation,
+  prior: OutboxOperation | null,
+): Promise<boolean> {
+  const allowed = (rows: OutboxOperation[], current: OutboxOperation | null) => {
+    if (rows.some(row => row.localUuid !== op.localUuid && OUTBOX_ACTIVE_LOCAL_STATUSES.includes(row.status))) return false
+    if (!prior) return current === null
+    return !!current && current.idempotency_key === prior.idempotency_key &&
+      current.updated_at === prior.updated_at &&
+      canResumeLocalOutboxOp(current, op)
+  }
+  if (memoryDb) {
+    const rows = [...memoryDb.ops.values()].filter(row =>
+      row.userId === op.userId && row.planId === op.planId && row.customerKey === op.customerKey)
+    const current = memoryDb.ops.get(op.localUuid) ?? null
+    if (!allowed(rows, current)) return false
+    memoryDb.ops.set(op.localUuid, structuredClone(op))
+    return true
+  }
+  const db = await openDb()
+  try {
+    return await new Promise<boolean>((resolve, reject) => {
+      const tx = db.transaction(STORE_OPS, "readwrite")
+      const store = tx.objectStore(STORE_OPS)
+      let saved = false
+      const req = store.index("byUserPlanCustomer").getAll([op.userId, op.planId, op.customerKey])
+      req.onsuccess = () => {
+        const rows = req.result as OutboxOperation[]
+        const own = store.get(op.localUuid)
+        own.onsuccess = () => {
+          if (!allowed(rows, (own.result as OutboxOperation | undefined) ?? null)) return
+          store.put(op)
+          saved = true
+        }
+      }
+      tx.oncomplete = () => resolve(saved)
+      tx.onabort = () => reject(tx.error || new Error("outbox save aborted"))
+      tx.onerror = () => reject(tx.error || new Error("outbox save failed"))
+    })
+  } finally {
+    db.close()
+  }
 }
