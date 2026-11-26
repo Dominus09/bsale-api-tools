@@ -15,7 +15,7 @@ from backend.services.warehouse.errors import (
     WarehouseValidationError,
 )
 from backend.services.warehouse.service import WarehouseLayoutService, default_service
-from backend.services.warehouse.pallet_models import PalletRegisterIn, PalletLocationIn, PalletVoidIn, PalletDetailsIn
+from backend.services.warehouse.pallet_models import PalletRegisterIn, PalletLocationIn, PalletVoidIn, PalletDetailsIn, PalletBatchIn
 from backend.services.warehouse.pallets import default_pallet_service, PalletSchemaUnavailable
 
 router = APIRouter(prefix="/warehouse", tags=["inteligencia-bodega"])
@@ -380,6 +380,12 @@ def pallet_list(floor_id: int = Query(gt=0), q: str = Query(default="",max_lengt
 def pallet_register(body: PalletRegisterIn, user: dict = Depends(require_management_access)):
     actor,uid = _actor(user)
     return _pallet_call(default_pallet_service().register,body.model_dump(mode="json"),actor=actor or "ERP",uid=uid)
+
+
+@router.post("/pallets/batch", status_code=201)
+def pallet_register_batch(body: PalletBatchIn, user: dict = Depends(require_management_access)):
+    actor,uid = _actor(user)
+    return _pallet_call(default_pallet_service().register_batch,body.model_dump(mode="json"),actor=actor or "ERP",uid=uid)
 
 
 @router.get("/pallets/{pallet_id}")
