@@ -292,12 +292,12 @@ export function PalletRegister(){
   return <div className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h1 className="text-xl font-semibold tracking-tight">Registro de pallets</h1><p className="text-sm text-slate-500">Levantamiento físico · Identidades persistentes, sin movimientos de stock comercial</p></div>
-      <Button type="button" disabled={!locations||loading} onClick={()=>{setNotice("");setOpen(true)}}><Plus className="mr-2 h-4 w-4"/>Registrar pallet</Button>
+      <Button type="button" disabled={!locations||locations.floor.floor_id!==floor||loading} onClick={()=>{setNotice("");setOpen(true)}}><Plus className="mr-2 h-4 w-4"/>Registrar pallet</Button>
     </div>
     <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950"><AlertTriangle className="h-4 w-4 shrink-0"/>Las ubicaciones y niveles registran observaciones. No autorizan uso de circulación, espacios bajo escalera ni apilamiento. No se calculan existencias de Bsale ni capacidad disponible a partir de registros parciales.</div>
     <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-white p-3">
-      <label className="min-w-[180px] space-y-1 text-xs font-medium">Bodega<select className={selectClass} value={facility??""} disabled={open||!!selected} onChange={e=>{setOffset(0);setFacility(Number(e.target.value)||null)}}><option value="">Seleccionar</option>{facilities.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
-      <label className="min-w-[160px] space-y-1 text-xs font-medium">Piso<select className={selectClass} value={floor??""} disabled={open||!!selected} onChange={e=>{setOffset(0);setFloor(Number(e.target.value)||null)}}><option value="">Seleccionar</option>{floors.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
+      <label className="min-w-[180px] space-y-1 text-xs font-medium">Bodega<select className={selectClass} value={facility??""} disabled={open||!!selected} onChange={e=>{setOffset(0);setFacility(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{facilities.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
+      <label className="min-w-[160px] space-y-1 text-xs font-medium">Piso<select className={selectClass} value={floor??""} disabled={open||!!selected} onChange={e=>{setOffset(0);setFloor(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{floors.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
       <form className="flex min-w-[250px] flex-1 gap-2" onSubmit={e=>{e.preventDefault();setOffset(0);setFilter(query.trim())}}>
         <Input placeholder="Buscar PAL, producto, lote, ubicación..." value={query} maxLength={120} onChange={e=>setQuery(e.target.value)}/>
         <Button variant="outline" type="submit"><Search className="h-4 w-4"/></Button>
@@ -323,7 +323,7 @@ export function PalletRegister(){
               <td className="p-3"><button type="button" className="font-semibold text-red-800 underline-offset-2 hover:underline" onClick={()=>setSelected(p)}>{p.code}</button><p className="text-slate-500">{kindLabels[p.pallet_kind]}</p></td>
               <td className="p-3">{p.position_code_snap?p.position_code_snap+" · N"+p.observed_level:"Sin verificar"}{p.location_in_current_layout===false?<p className="text-amber-800">No figura en plano vigente</p>:p.current_position_code&&p.current_position_code!==p.position_code_snap?<p className="text-amber-800">Código actual: {p.current_position_code}</p>:null}</td>
               <td className="max-w-[360px] p-3">{p.lines.slice(0,2).map(l=><div key={l.id}><strong>{l.product_name_snap}</strong> · {l.variant_name_snap||"Variante sin nombre"}<p className="text-[11px] text-slate-500">{l.product_type_snap||"Sin tipo"} · {l.barcode_snap||"ID "+l.variant_id}</p></div>)}{p.lines.length>2?<p className="text-slate-500">+{p.lines.length-2} líneas</p>:null}</td>
-              <td className="p-3">{known?num(p.lines.reduce((n,l)=>n+(l.total_units??0),0))+" un.":"Pendiente"}</td>
+              <td className="p-3">{p.pallet_kind==="mixed"?(known?"Ver cantidades por variante":"Conteo parcial · ver líneas"):known?num(p.lines.reduce((n,l)=>n+(l.total_units??0),0))+" un.":"Pendiente"}</td>
               <td className="p-3">{expiry?dateText(expiry):unknownExpiry?"Sin verificar":"No aplica"}{expiry&&unknownExpiry?<p className="text-amber-800">Otras fechas pendientes</p>:null}</td>
               <td className="p-3">{p.status==="voided"?<span className="text-slate-500">Anulado</span>:<span className="text-slate-800">Registrado</span>}</td>
             </tr>

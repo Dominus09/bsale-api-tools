@@ -6,8 +6,8 @@ DO $guard$
 DECLARE missing text;
 BEGIN
     IF current_database() <> 'analytics' AND NOT (
-        current_database() LIKE 'warehouse_pallets_test%'
-        AND current_setting('warehouse.pallets_lab', true) = 'on'
+        left(current_database(),length('warehouse_pallets_test')) = 'warehouse_pallets_test'
+        AND COALESCE(current_setting('warehouse.pallets_lab', true),'off') = 'on'
     ) THEN
         RAISE EXCEPTION 'Destino no autorizado para warehouse 008: %', current_database();
     END IF;
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS warehouse.pallet_lines (
     quantity_status TEXT NOT NULL CHECK (quantity_status IN ('verified','unknown')),
     boxes INTEGER CHECK (boxes >= 0),
     loose_units INTEGER CHECK (loose_units >= 0),
-    total_units BIGINT CHECK (total_units > 0),
+    total_units BIGINT CHECK (total_units > 0 AND total_units <= 9007199254740991),
     expiry_status TEXT NOT NULL CHECK (expiry_status IN ('dated','unknown','not_applicable')),
     expires_on DATE,
     lot TEXT,

@@ -15,6 +15,8 @@ from backend.services.warehouse.errors import (
     WarehouseValidationError,
 )
 from backend.services.warehouse.service import WarehouseLayoutService, default_service
+from backend.services.warehouse.pallet_models import PalletRegisterIn, PalletLocationIn, PalletVoidIn
+from backend.services.warehouse.pallets import default_pallet_service, PalletSchemaUnavailable
 
 router = APIRouter(prefix="/warehouse", tags=["inteligencia-bodega"])
 
@@ -345,8 +347,6 @@ def warehouse_create_draft_from_revision(
 
 
 # Fase 2A — registro físico; mismas credenciales gerenciales ERP que layout.
-from backend.services.warehouse.pallet_models import PalletRegisterIn, PalletLocationIn, PalletVoidIn
-from backend.services.warehouse.pallets import default_pallet_service, PalletSchemaUnavailable
 
 
 def _pallet_call(method, *args, **kwargs):

@@ -58,8 +58,8 @@ def normalize_line(line: dict, product: dict) -> dict:
         if boxes and (pack is None or line.get("expected_units_per_box") != pack):
             raise WarehouseConflictError("Unidades por caja no verificadas o cambiaron. Consulte la variante nuevamente.", code="pack_changed")
         total = boxes * (pack or 0) + loose
-        if total <= 0:
-            raise WarehouseValidationError("La cantidad verificada debe ser mayor que cero.")
+        if total <= 0 or total > 9007199254740991:
+            raise WarehouseValidationError("Cantidad verificada fuera del rango representable.")
     else:
         raise WarehouseValidationError("Estado de cantidad inválido.")
     expires = line.get("expires_on")
@@ -172,8 +172,8 @@ class PalletService:
         position_id = data.get("position_id")
         level = data.get("observed_level")
         if position_id is None:
-            if level is not None:
-                raise WarehouseValidationError("Sin ubicación no corresponde indicar nivel.")
+            if level is not None or data.get("layout_revision_id") is not None or data.get("layout_row_version") is not None:
+                raise WarehouseValidationError("Sin ubicación no corresponde indicar nivel ni revisión.")
             return (None, None, None, None, None)
         if not data.get("observed_ack") or type(level) is not int or not 1 <= level <= 100:
             raise WarehouseValidationError("Confirme que posición y nivel son observados, no autorizados.")
