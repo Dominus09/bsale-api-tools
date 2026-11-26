@@ -235,7 +235,7 @@ export type PalletLocations = {
   floor: { floor_id: number; floor_code: string; facility_id: number; facility_code: string; company_id: number }
   revision: { id: number; status: string; row_version: number } | null
   items: PalletLocation[]
-  observed_slots: { position_id: number; observed_level: number }[]
+  observed_slots: { position_id: number; observed_level: number; pallet_id?: number; pallet_code?: string }[]
 }
 export type PalletLineInput = {
   variant_id: number; quantity_status: "verified" | "unknown"; boxes: number | null
@@ -289,4 +289,14 @@ export function observeWarehousePalletLocation(id: number, body: ObservedLocatio
 }
 export function voidWarehousePallet(id: number, body: {expected_row_version: number; reason: string}): Promise<PalletRecord> {
   return warehouseFetch(`/warehouse/pallets/${id}/void`, {method: "POST", body: JSON.stringify(body)})
+}
+
+
+export type PalletDetailsInput = {
+  expected_row_version: number; reason: string; pallet_kind: PalletRegisterInput["pallet_kind"]
+  received_on: string | null; notes: string | null
+  lines: (PalletLineInput & {line_id: number | null})[]; remove_line_ids: number[]
+}
+export function updateWarehousePalletDetails(id: number, body: PalletDetailsInput): Promise<PalletRecord> {
+  return warehouseFetch(`/warehouse/pallets/${id}/details`, {method:"PATCH",body:JSON.stringify(body)})
 }
