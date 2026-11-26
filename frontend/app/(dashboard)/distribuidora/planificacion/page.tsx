@@ -882,6 +882,7 @@ export default function PlanificacionDespachoPage() {
             dieselPricePerLiter={totals.diesel}
             loading={loading}
             routeSalesLoading={false}
+            routeUnavailable={!!error && routableForTruck.length > 0}
           />
           <OrsCommercialKpiStrip counts={commercialCounts} loading={loading} />
         </div>
