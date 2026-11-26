@@ -8,8 +8,9 @@ import {
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { SymbologyCatalog } from "@/lib/warehouse/types"
-import { LAYOUT_COLORS, colorsForType, ELEMENT_TYPE_LABELS_ES } from "@/lib/warehouse/style"
+import { layoutColorsForTheme, colorsForType, ELEMENT_TYPE_LABELS_ES } from "@/lib/warehouse/style"
 import type { WarehouseElementType } from "@/lib/warehouse/types"
+import { useAppearance } from "@/components/layout/appearance-context"
 
 type Props = {
   open: boolean
@@ -32,6 +33,8 @@ function Swatch({ fill, stroke, dash }: { fill?: string; stroke?: string; dash?:
 }
 
 export function SymbologyDialog({ open, onOpenChange, catalog }: Props) {
+  const {isDarkActive}=useAppearance()
+  const palette=layoutColorsForTheme(isDarkActive)
   const nomenclature = catalog?.nomenclature || {}
   const examples = catalog?.nomenclature_examples || []
   const symbols = catalog?.symbols || []
@@ -106,7 +109,7 @@ export function SymbologyDialog({ open, onOpenChange, catalog }: Props) {
                   shape: "filled_rect",
                 }))
             ).map((s) => {
-              const c = colorsForType(s.type as WarehouseElementType)
+              const c = colorsForType(s.type as WarehouseElementType,undefined,isDarkActive)
               return (
                 <div
                   key={s.type}
@@ -125,14 +128,17 @@ export function SymbologyDialog({ open, onOpenChange, catalog }: Props) {
           </TabsContent>
 
           <TabsContent value="colors" className="space-y-3 pt-3">
-            {Object.entries(colors).map(([key, val]) => (
+            {Object.entries(colors).map(([key, val]) => {
+              const sample=palette[key as keyof typeof palette]
+              const themed=typeof sample==="object"&&sample!==null?sample as {fill?:string;stroke?:string;badge?:string}:undefined
+              return (
               <div
                 key={key}
                 className="flex items-center gap-3 rounded-md border border-border px-3 py-2 text-sm"
               >
                 <Swatch
-                  fill={val.fill || LAYOUT_COLORS.background}
-                  stroke={val.stroke || val.badge}
+                  fill={themed?.fill || val.fill || palette.background}
+                  stroke={themed?.stroke || themed?.badge || val.stroke || val.badge}
                   dash={Boolean(val.dash)}
                 />
                 <div>
@@ -140,7 +146,7 @@ export function SymbologyDialog({ open, onOpenChange, catalog }: Props) {
                   <div className="text-xs text-muted-foreground">{key}</div>
                 </div>
               </div>
-            ))}
+            )})}
             <p className="text-sm text-muted-foreground">
               {catalog?.colors_note ||
                 "Evolución futura: ocupación, productos, vencimientos y FIFO/FEFO en otras vistas."}

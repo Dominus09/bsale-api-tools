@@ -9,6 +9,7 @@ import { getWarehouseRevision, getWarehousePallet, listPalletLocations, type Pal
 import { metricToScreen, type ViewportTransform } from "@/lib/warehouse/coords"
 import type { RevisionBundle } from "@/lib/warehouse/types"
 import { isUnderStairMeta } from "@/lib/warehouse/style"
+import { observedSlotState, slotsAtLevel } from "@/lib/warehouse/palletMap"
 
 export type ObservedLocationForm = {id:string;level:string;ack:boolean}
 type Props = {
@@ -56,12 +57,12 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
     return()=>{cancelled=true}
   },[floorId,revisionId,revisionVersion,refresh])
   const validLevel=Number.isInteger(Number(level))&&Number(level)>=1&&Number(level)<=100
-  const slotByPosition=useMemo(()=>new Map((fresh?.observed_slots??[]).filter(s=>s.observed_level===Number(level)).map(s=>[s.position_id,s])),[fresh,level])
+  const slotByPosition=useMemo(()=>slotsAtLevel(fresh?.observed_slots??[],Number(level)),[fresh,level])
   const chosen=fresh?.items.find(p=>p.id===Number(picked))
   const slot=chosen?slotByPosition.get(chosen.id):undefined
-  const own=!!slot&&!!exclude&&slot.pallet_id===exclude.id
-  // Compatibilidad con API 2A: si no hay pallet_id, no asumir que el slot está libre.
-  const blocked=!!slot&&!own
+  const state=observedSlotState(slot,exclude?.id)
+  const own=state==="own"
+  const blocked=state==="occupied"
   const palletId=slot?.pallet_id
   useEffect(()=>{
     let cancelled=false
@@ -87,7 +88,8 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
   const known=new Map((fresh?.items??[]).map(p=>[p.id,p]))
   const matches=(code:string)=>!search.trim()||code.toLowerCase().includes(search.trim().toLowerCase())
   const levels=[...new Set([1,...(fresh?.observed_slots??[]).map(s=>s.observed_level),...(validLevel?[Number(level)]:[])])].sort((a,b)=>a-b)
-  const numberOccupied=validLevel?slotByPosition.size:0
+  const numberOccupied=validLevel?[...slotByPosition.keys()].filter(id=>known.has(id)).length:0
+  const missingOccupied=validLevel?slotByPosition.size-numberOccupied:0
   return <Dialog open onOpenChange={v=>{if(!v)onClose()}}>
     <DialogContent className="flex max-h-[94vh] w-[97vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[1320px]">
       <DialogHeader className="shrink-0 border-b bg-card px-5 py-4 pr-14">
@@ -123,7 +125,7 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
         {error?<p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>:!fresh||!bundle?<div className="flex items-center justify-center gap-2 p-12 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin"/>Cargando plano y ocupación…</div>:
           <div className="grid min-w-0 gap-3 xl:grid-cols-[minmax(0,1fr)_285px]">
             <div className="min-w-0 rounded-xl border bg-card p-2">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground"><span>Fondo ←</span><span>{validLevel?numberOccupied+" ubicaciones registradas en N"+level:"Nivel inválido"}</span><span>→ Entrada</span></div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground"><span>Fondo ←</span><span>{validLevel?numberOccupied+" posiciones registradas en N"+level+(missingOccupied?" · "+missingOccupied+" fuera del plano":""):"Nivel inválido"}</span><span>→ Entrada</span></div>
               <div className="max-h-[56vh] overflow-auto rounded-lg border bg-background">
                 <svg role="group" aria-label="Plano métrico interactivo: selecciona una posición" viewBox={`0 0 ${length*scale+48} ${width*scale+48}`} width="100%" className="block" style={{width:`${zoom*100}%`,minWidth:760*zoom}}>
                   {elements.map(e=>{
@@ -143,8 +145,9 @@ export function PalletLocationMap({locations,value,exclude,onClose,onSelect}:Pro
                       className={active?"cursor-pointer focus-visible:outline-none focus-visible:[&_rect]:stroke-[var(--primary)]":undefined} opacity={faded ? .25 : 1}>
                       <title>{shapeLabel}</title>
                       <rect x={b.x} y={b.y} width={b.width} height={b.height} transform={`rotate(${b.rotation} ${cx} ${cy})`}
-                        fill={fill} fillOpacity={selected ? .72 : occ ? .36 : isPosition ? 1 : p.element_type==="stair"||p.element_type==="office" ? .18 : .45}
+                        fill={fill} fillOpacity={selected ? .24 : occ ? .23 : isPosition ? (pos?1:.28) : p.element_type==="stair"||p.element_type==="office" ? .18 : .45}
                         stroke={stroke} strokeWidth={selected?2.6:restricted?1.8:1} strokeDasharray={restricted?"4 2":p.element_type==="aisle"?"4 3":undefined}/>
+                      {p.element_type==="aisle"?<text x={cx} y={cy-b.height/2-7} fontSize={12} fontWeight={600} fill="var(--foreground)" textAnchor="middle" pointerEvents="none">{p.code}</text>:null}
                       {(isPosition||["office","gate","stair","circulation","loose_storage"].includes(p.element_type))?
                         <text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" pointerEvents="none"
                           fontSize={isPosition?Math.max(6,Math.min(9,Math.min(b.width,b.height)*.21)):10} fontWeight={selected||isPosition?600:400}
