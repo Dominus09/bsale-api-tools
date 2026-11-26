@@ -4,8 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 from psycopg2 import errors
 
@@ -25,6 +26,14 @@ class PalletSchemaUnavailable(WarehouseError):
 
 def pallet_code(pallet_id: int) -> str:
     return f"PAL-{pallet_id:06d}"
+
+
+def chile_business_date(now: datetime | None = None) -> date:
+    """Fecha civil de Chile continental, independiente de tzdata de PostgreSQL."""
+    instant = now if now is not None else datetime.now(timezone.utc)
+    if instant.tzinfo is None or instant.utcoffset() is None:
+        raise ValueError("Se requiere una fecha/hora con zona horaria.")
+    return instant.astimezone(ZoneInfo("America/Santiago")).date()
 
 
 def _rows(cur) -> list[dict[str, Any]]:
@@ -256,8 +265,7 @@ class PalletService:
             if (kind == "mixed" and len(variants) < 2) or (kind != "mixed" and len(variants) != 1):
                 raise WarehouseValidationError("Mixto requiere distintas variantes; completo/molido admite varios lotes de una variante.")
             if data.get("received_on"):
-                cur.execute("SELECT (now() AT TIME ZONE 'America/Santiago')::date")
-                if date.fromisoformat(str(data["received_on"])) > cur.fetchone()[0]:
+                if date.fromisoformat(str(data["received_on"])) > chile_business_date():
                     raise WarehouseValidationError("Fecha de ingreso futura.")
             loc = self._location(cur, floor["floor_id"], data)
             normalized = [(normalize_line(line, product), product) for line in lines

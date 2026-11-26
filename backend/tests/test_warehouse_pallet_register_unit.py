@@ -1,8 +1,10 @@
 """Pruebas puras; no conectan PostgreSQL."""
+from datetime import date, datetime, timezone
+
 import pytest
 from pydantic import ValidationError
 
-from backend.services.warehouse.pallets import normalize_line, pallet_code
+from backend.services.warehouse.pallets import chile_business_date, normalize_line, pallet_code
 from backend.services.warehouse.pallet_models import PalletLineIn, PalletRegisterIn
 from backend.services.warehouse.errors import WarehouseConflictError, WarehouseValidationError
 
@@ -57,3 +59,18 @@ def test_strict_payload_rejects_user_totals_and_fractional_quantities():
         PalletLineIn(**{**BASE, "boxes": 1.5})
     with pytest.raises(ValidationError):
         PalletRegisterIn(registration_key="not-a-uuid",floor_id=1,pallet_kind="complete",lines=[BASE])
+
+
+@pytest.mark.parametrize("instant,expected", [
+    (datetime(2026, 1, 15, 2, 30, tzinfo=timezone.utc), date(2026, 1, 14)),
+    (datetime(2026, 1, 15, 3, 30, tzinfo=timezone.utc), date(2026, 1, 15)),
+    (datetime(2026, 7, 15, 3, 30, tzinfo=timezone.utc), date(2026, 7, 14)),
+    (datetime(2026, 7, 15, 4, 30, tzinfo=timezone.utc), date(2026, 7, 15)),
+])
+def test_chile_business_date_handles_summer_and_winter(instant, expected):
+    assert chile_business_date(instant) == expected
+
+
+def test_chile_business_date_rejects_naive_datetime():
+    with pytest.raises(ValueError):
+        chile_business_date(datetime(2026, 1, 15, 2, 30))

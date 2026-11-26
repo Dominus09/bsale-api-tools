@@ -4,6 +4,7 @@ Crear una BD VACÍA llamada warehouse_pallets_test_<sufijo>; definir
 WAREHOUSE_PALLETS_TEST_DSN para esa BD. No elimina schemas ni usa datos reales.
 """
 import os
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,7 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.services.warehouse.pallets import PalletService
+from backend.services.warehouse.pallets import PalletService, chile_business_date
 from backend.services.warehouse.errors import WarehouseConflictError, WarehouseValidationError
 from backend.routers import warehouse as router_module
 
@@ -162,3 +163,28 @@ def test_routes_with_management_dependency_and_no_catalog_writes(service,monkeyp
             assert cur.fetchone()[0]==24
             cur.execute("SELECT row_version FROM warehouse.layout_revisions WHERE id=1")
             assert cur.fetchone()[0]==6
+
+
+def test_received_on_real_date_and_future_rejected(service, monkeypatch):
+    app = FastAPI()
+    app.include_router(router_module.router)
+    monkeypatch.setattr(router_module, "default_pallet_service", lambda: service)
+    app.dependency_overrides[router_module.require_management_access] = lambda: {"id": 1, "email": "lab"}
+    client = TestClient(app)
+    today = chile_business_date()
+    payload = body(received_on=today.isoformat())
+    response = client.post("/warehouse/pallets", json=payload)
+    assert response.status_code == 201, response.text
+    saved = response.json()
+    assert saved["received_on"] == today.isoformat()
+    assert client.get(f"/warehouse/pallets/{saved['id']}").json()["received_on"] == today.isoformat()
+    # Más de un día para evitar carrera si la prueba cruza medianoche.
+    future = body(received_on=(today + timedelta(days=2)).isoformat())
+    rejected = client.post("/warehouse/pallets", json=future)
+    assert rejected.status_code == 400, rejected.text
+    assert "Fecha de ingreso futura" in rejected.text
+    with psycopg2.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM warehouse.pallets WHERE registration_key=%s::uuid",
+                        (future["registration_key"],))
+            assert cur.fetchone()[0] == 0
