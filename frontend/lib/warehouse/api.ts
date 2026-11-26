@@ -219,3 +219,74 @@ export async function createDraftFromRevision(
     body: JSON.stringify({ label: label ?? null }),
   })
 }
+
+
+// Fase 2A — sólo levantamiento físico (no sincroniza stock Bsale).
+export type PalletProduct = {
+  variant_id: number; product_id: number; product_name: string; variant_name: string | null
+  product_type: string | null; barcode: string | null; sku: string | null; units_per_box: number | null
+}
+export type PalletLocation = {
+  id: number; code: string; name: string; validation_status: string
+  stack_levels_max: number | null; constraints_json: Record<string, unknown>
+  physical_meta_snap: Record<string, unknown>; meta_json: Record<string, unknown>
+}
+export type PalletLocations = {
+  floor: { floor_id: number; floor_code: string; facility_id: number; facility_code: string; company_id: number }
+  revision: { id: number; status: string; row_version: number } | null
+  items: PalletLocation[]
+  observed_slots: { position_id: number; observed_level: number }[]
+}
+export type PalletLineInput = {
+  variant_id: number; quantity_status: "verified" | "unknown"; boxes: number | null
+  loose_units: number | null; expected_units_per_box: number | null
+  expiry_status: "dated" | "unknown" | "not_applicable"; expires_on: string | null; lot: string | null
+}
+export type ObservedLocationInput = {
+  position_id: number | null; observed_level: number | null
+  layout_revision_id: number | null; layout_row_version: number | null; observed_ack: boolean
+}
+export type PalletRegisterInput = ObservedLocationInput & {
+  registration_key: string; floor_id: number; pallet_kind: "complete" | "partial" | "mixed"
+  received_on: string | null; notes: string | null; lines: PalletLineInput[]
+}
+export type PalletLine = {
+  id: number; variant_id: number; product_id: number; product_name_snap: string
+  variant_name_snap: string | null; product_type_snap: string | null
+  barcode_snap: string | null; sku_snap: string | null; units_per_box_snap: number | null
+  quantity_status: "verified" | "unknown"; boxes: number | null; loose_units: number | null
+  total_units: number | null; expiry_status: "dated" | "unknown" | "not_applicable"
+  expires_on: string | null; lot: string | null
+}
+export type PalletEvent = { id: number; action: string; actor_label: string; created_at: string; detail_json: Record<string, unknown> }
+export type PalletRecord = {
+  id: number; code: string; floor_id: number; pallet_kind: "complete" | "partial" | "mixed"
+  received_on: string | null; notes: string | null; position_id: number | null; position_code_snap: string | null
+  observed_level: number | null; layout_revision_id: number | null; layout_row_version: number | null
+  status: "active" | "voided"; row_version: number; created_at: string; created_by: string
+  lines: PalletLine[]; events?: PalletEvent[]; location_in_current_layout?: boolean | null
+  current_position_code?: string | null
+}
+
+export function listPalletLocations(floorId: number): Promise<PalletLocations> {
+  return warehouseFetch(`/warehouse/pallets/locations?floor_id=${floorId}`)
+}
+export async function searchPalletProducts(floorId: number, q: string): Promise<PalletProduct[]> {
+  const data = await warehouseFetch<{items: PalletProduct[]}>(`/warehouse/pallets/products?floor_id=${floorId}&q=${encodeURIComponent(q)}`)
+  return data.items
+}
+export function listWarehousePallets(floorId: number, q = "", offset = 0): Promise<{ items: PalletRecord[]; has_more: boolean; offset: number }> {
+  return warehouseFetch(`/warehouse/pallets?floor_id=${floorId}&q=${encodeURIComponent(q)}&offset=${offset}&limit=50`)
+}
+export function registerWarehousePallet(body: PalletRegisterInput): Promise<PalletRecord> {
+  return warehouseFetch("/warehouse/pallets", {method: "POST", body: JSON.stringify(body)})
+}
+export function getWarehousePallet(id: number): Promise<PalletRecord> {
+  return warehouseFetch(`/warehouse/pallets/${id}`)
+}
+export function observeWarehousePalletLocation(id: number, body: ObservedLocationInput & {expected_row_version: number; reason: string}): Promise<PalletRecord> {
+  return warehouseFetch(`/warehouse/pallets/${id}/observe-location`, {method: "POST", body: JSON.stringify(body)})
+}
+export function voidWarehousePallet(id: number, body: {expected_row_version: number; reason: string}): Promise<PalletRecord> {
+  return warehouseFetch(`/warehouse/pallets/${id}/void`, {method: "POST", body: JSON.stringify(body)})
+}
