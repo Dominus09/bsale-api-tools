@@ -41,6 +41,7 @@ export const DARK_THEME_ROUTE_PREFIXES = [
   "/distribuidora",
   "/gondolas",
   "/inteligencia-comercial",
+  "/inteligencia-bodega",
   "/logistica",
   "/margins",
   "/operaciones",

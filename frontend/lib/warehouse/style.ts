@@ -27,6 +27,32 @@ export const LAYOUT_COLORS = {
   marker: "#1e293b",
 } as const
 
+// Konva draws literal colors, not CSS variables. Preserve the light palette
+// and use legible equivalents in Graphite Dark.
+const DARK_LAYOUT_COLORS = {
+  ...LAYOUT_COLORS,
+  facility_boundary: {fill:"rgba(244,245,247,0.02)",stroke:"#94a3b8"},
+  sector: {fill:"rgba(75,108,205,0.08)",stroke:"#93b2ff"},
+  position: {fill:"rgba(56,189,248,0.23)",stroke:"#7dd3fc"},
+  loose_storage: {fill:"rgba(251,191,36,0.18)",stroke:"#fcd34d"},
+  special_storage: {fill:"rgba(251,146,60,0.20)",stroke:"#fdba74"},
+  aisle: {fill:"rgba(147,178,255,0.08)",stroke:"#a5b4fc"},
+  circulation: {fill:"rgba(148,163,184,0.10)",stroke:"#94a3b8"},
+  structure: {fill:"rgba(148,163,184,0.22)",stroke:"#cbd5e1"},
+  office: {fill:"rgba(212,160,60,0.15)",stroke:"#fcd34d"},
+  stair: {fill:"rgba(196,181,253,0.18)",stroke:"#c4b5fd"},
+  gate: {fill:"rgba(52,211,153,0.20)",stroke:"#6ee7b7"},
+  door: {fill:"rgba(52,211,153,0.16)",stroke:"#6ee7b7"},
+  selection: {stroke:"#fdba74",strokeWidth:2.5},
+  pending_validation: {dash:[6,4],badge:"#fbbf24"},
+  extends_outside: {stroke:"#f9a8d4",dash:[2,3]},
+  geom_conflict: {stroke:"#f87171",fill:"rgba(248,113,113,0.20)"},
+  grid:"#34404f",background:"#101318",label:"#f4f5f7",labelMuted:"#aeb7c4",marker:"#f4f5f7",
+}
+export function layoutColorsForTheme(dark = false) {
+  return dark ? DARK_LAYOUT_COLORS : LAYOUT_COLORS
+}
+
 const STRUCTURE_TYPES = new Set<WarehouseElementType>([
   "wall",
   "pillar",
@@ -39,28 +65,30 @@ const STRUCTURE_TYPES = new Set<WarehouseElementType>([
 export function colorsForType(
   type: WarehouseElementType,
   meta?: Record<string, unknown>,
+  dark = false,
 ): { fill: string; stroke: string; dash?: number[] } {
-  if (type === "facility_boundary") return LAYOUT_COLORS.facility_boundary
-  if (type === "sector") return LAYOUT_COLORS.sector
-  if (type === "loose_storage") return LAYOUT_COLORS.loose_storage
+  const palette = layoutColorsForTheme(dark)
+  if (type === "facility_boundary") return palette.facility_boundary
+  if (type === "sector") return palette.sector
+  if (type === "loose_storage") return palette.loose_storage
   if (type === "position") {
     const kind = meta?.storage_kind || (meta as { storage_kind?: string } | undefined)
     const sk =
       (typeof meta?.storage_kind === "string" && meta.storage_kind) ||
       (typeof kind === "string" ? kind : null)
     if (sk === "special_restricted" || meta?.under_stair === true) {
-      return { ...LAYOUT_COLORS.special_storage, dash: [4, 3] }
+      return { ...palette.special_storage, dash: [4, 3] }
     }
-    return LAYOUT_COLORS.position
+    return palette.position
   }
-  if (type === "aisle") return LAYOUT_COLORS.aisle
-  if (type === "circulation") return LAYOUT_COLORS.circulation
-  if (type === "office") return LAYOUT_COLORS.office
-  if (type === "stair") return LAYOUT_COLORS.stair
-  if (type === "gate") return LAYOUT_COLORS.gate
-  if (type === "door") return LAYOUT_COLORS.door
-  if (STRUCTURE_TYPES.has(type)) return LAYOUT_COLORS.structure
-  return LAYOUT_COLORS.structure
+  if (type === "aisle") return palette.aisle
+  if (type === "circulation") return palette.circulation
+  if (type === "office") return palette.office
+  if (type === "stair") return palette.stair
+  if (type === "gate") return palette.gate
+  if (type === "door") return palette.door
+  if (STRUCTURE_TYPES.has(type)) return palette.structure
+  return palette.structure
 }
 
 /** Prioridad de etiqueta: evita que sectores grandes tapen códigos de pasillos/estructuras. */

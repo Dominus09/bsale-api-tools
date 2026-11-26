@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Stage, Layer, Rect, Text, Line, Arrow, Transformer, Group } from "react-konva"
 import type Konva from "konva"
+import { useAppearance } from "@/components/layout/appearance-context"
 import type { WarehouseElement, EditorTool } from "@/lib/warehouse/types"
 import { clippedHatchLines, placeCanvasLabels, stairDecoration } from "@/lib/warehouse/canvasPresentation"
 import {
@@ -20,7 +21,7 @@ import {
   type ViewportTransform,
 } from "@/lib/warehouse/coords"
 import {
-  LAYOUT_COLORS,
+  layoutColorsForTheme,
   colorsForType,
   labelPriority,
 } from "@/lib/warehouse/style"
@@ -56,6 +57,8 @@ export function WarehouseCanvas({
   viewOrientationDeg = 0,
   onViewOrientationChange,
 }: Props) {
+  const { isDarkActive } = useAppearance()
+  const palette = layoutColorsForTheme(isDarkActive)
   const wrapRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<Konva.Stage>(null)
   const trRef = useRef<Konva.Transformer>(null)
@@ -233,7 +236,7 @@ export function WarehouseCanvas({
   }
 
   return (
-    <div ref={wrapRef} className="absolute inset-0 overflow-hidden bg-slate-100">
+    <div ref={wrapRef} className="absolute inset-0 overflow-hidden bg-muted">
       <Stage
         ref={stageRef}
         width={size.w}
@@ -294,13 +297,13 @@ export function WarehouseCanvas({
             y={vp.offsetY}
             width={content.contentW * vp.scale}
             height={content.contentH * vp.scale}
-            fill={LAYOUT_COLORS.background}
-            stroke="#94a3b8"
+            fill={palette.background}
+            stroke={isDarkActive?"#64748b":"#94a3b8"}
             strokeWidth={1.5}
             listening={false}
           />
           {gridLines.map((ln, i) => (
-            <Line key={`g-${i}`} points={ln.points} stroke={LAYOUT_COLORS.grid} strokeWidth={0.8 / scale} opacity={0.65} listening={false} />
+            <Line key={`g-${i}`} points={ln.points} stroke={palette.grid} strokeWidth={0.8 / scale} opacity={0.65} listening={false} />
           ))}
           {sorted.map((el) => {
             const scr = metricToScreen(
@@ -318,7 +321,7 @@ export function WarehouseCanvas({
               ...((el.geometry.constraints_json as Record<string, unknown>) || {}),
               ...((el.geometry.meta_json as Record<string, unknown>) || {}),
             }
-            const colors = colorsForType(el.physical.element_type, mergedMeta)
+            const colors = colorsForType(el.physical.element_type, mergedMeta, isDarkActive)
             const selected = el.clientKey === selectedKey
             const pending = el.geometry.validation_status === "pending_validation"
             const conflict = conflictKeys?.has(el.clientKey)
@@ -332,7 +335,7 @@ export function WarehouseCanvas({
             // Los colores semánticos de la simbología se mantienen. Sólo se
             // ajusta el peso visual del trazo y la superposición bajo ESC.
             const strokeW = (selected
-              ? LAYOUT_COLORS.selection.strokeWidth
+              ? palette.selection.strokeWidth
               : conflict ? 2
               : isStair ? 2.2
               : underStair ? 1.3
@@ -341,10 +344,10 @@ export function WarehouseCanvas({
             const dash = (underStair
               ? [3, 2]
               : pending
-                ? type === "position" ? [3, 2] : LAYOUT_COLORS.pending_validation.dash
+                ? type === "position" ? [3, 2] : palette.pending_validation.dash
                 : colors.dash)?.map(value => value / scale)
-            const fill = conflict ? LAYOUT_COLORS.geom_conflict.fill
-              : isStair ? "#ede9fe"
+            const fill = conflict ? palette.geom_conflict.fill
+              : isStair ? (isDarkActive?"#37294f":"#ede9fe")
               : underStair ? "rgba(251,191,36,0.12)"
               : colors.fill
             const stairs = isStair ? stairDecoration(scr.width, scr.height) : null
@@ -425,9 +428,9 @@ export function WarehouseCanvas({
                   fill={fill}
                   stroke={
                     selected
-                      ? LAYOUT_COLORS.selection.stroke
+                      ? palette.selection.stroke
                       : conflict
-                        ? LAYOUT_COLORS.geom_conflict.stroke
+                        ? palette.geom_conflict.stroke
                         : colors.stroke
                   }
                   strokeWidth={strokeW}
@@ -444,7 +447,7 @@ export function WarehouseCanvas({
                         <Arrow points={stairs.arrow} stroke="#f8fafc" fill="#f8fafc"
                           strokeWidth={3 / scale} pointerLength={Math.min(7 / scale, scr.width * 0.2)}
                           pointerWidth={Math.min(7 / scale, scr.width * 0.2)} listening={false} />
-                        <Arrow points={stairs.arrow} stroke="#4c1d95" fill="#4c1d95"
+                        <Arrow points={stairs.arrow} stroke={isDarkActive?"#ddd6fe":"#4c1d95"} fill={isDarkActive?"#ddd6fe":"#4c1d95"}
                           strokeWidth={1.6 / scale} pointerLength={Math.min(5 / scale, scr.width * 0.16)}
                           pointerWidth={Math.min(5 / scale, scr.width * 0.16)} listening={false} />
                       </Group>
@@ -461,16 +464,16 @@ export function WarehouseCanvas({
           {/* Textos en coordenadas de pantalla, fuera de grupos rotados y del Transformer. */}
           {markers?.map((marker) => (
             <Text key={marker.text} {...marker} align="center" verticalAlign="middle"
-              fontSize={11 / scale} fontStyle="bold" fill={LAYOUT_COLORS.marker} listening={false} />
+              fontSize={11 / scale} fontStyle="bold" fill={palette.marker} listening={false} />
           ))}
           {canvasLabels.map((label) => (
             <Group key={label.key} listening={false}>
               {label.callout && label.anchor ? (
                 <>
                   <Line points={[label.anchor.x, label.anchor.y, label.x + label.width / 2, label.y + label.height / 2]}
-                    stroke="#64748b" strokeWidth={0.9 / scale} listening={false} />
+                    stroke={isDarkActive?"#94a3b8":"#64748b"} strokeWidth={0.9 / scale} listening={false} />
                   <Rect x={label.x} y={label.y} width={label.width} height={label.height}
-                    fill="#f8fafc" stroke="#cbd5e1" strokeWidth={0.7 / scale}
+                    fill={isDarkActive?"#252b35":"#f8fafc"} stroke={isDarkActive?"#667085":"#cbd5e1"} strokeWidth={0.7 / scale}
                     cornerRadius={3 / scale} listening={false} />
                 </>
               ) : null}
@@ -478,18 +481,18 @@ export function WarehouseCanvas({
                 // El fondo compacto evita que los peldaños reduzcan legibilidad;
                 // pertenece a la capa de etiquetas, no al área seleccionable.
                 <Rect x={label.x} y={label.y} width={label.width} height={label.height}
-                  fill="#fff7ed" opacity={0.92} cornerRadius={2 / scale} listening={false} />
+                  fill={isDarkActive?"#3b2a18":"#fff7ed"} opacity={0.92} cornerRadius={2 / scale} listening={false} />
               ) : null}
               <Text x={label.x} y={label.y + label.paddingY} width={label.width}
                 height={label.fontSize * 1.3} text={label.text} align="center" verticalAlign="middle"
                 fontSize={label.fontSize} fontStyle={label.muted ? "normal" : "bold"}
-                fill={label.special ? "#9a3412" : label.muted ? LAYOUT_COLORS.labelMuted : LAYOUT_COLORS.label}
+                fill={label.special ? (isDarkActive?"#fdba74":"#9a3412") : label.muted ? palette.labelMuted : palette.label}
                 listening={false} />
               {label.subtitle ? (
                 <Text x={label.x} y={label.y + label.paddingY + label.fontSize * 1.3}
                   width={label.width} height={label.subtitleSize * 1.3}
                   text={label.subtitle} align="center" verticalAlign="middle"
-                  fontSize={label.subtitleSize} fill={LAYOUT_COLORS.labelMuted} listening={false} />
+                  fontSize={label.subtitleSize} fill={palette.labelMuted} listening={false} />
               ) : null}
             </Group>
           ))}
@@ -506,7 +509,7 @@ export function WarehouseCanvas({
                 y={(measureLine.y1 + measureLine.y2) / 2 - 14}
                 text={`${measureLine.distM.toFixed(2)} m`}
                 fontSize={12}
-                fill="#0369a1"
+                fill={isDarkActive?"#93c5fd":"#0369a1"}
               />
             </>
           ) : null}
@@ -528,14 +531,14 @@ export function WarehouseCanvas({
           />
         </Layer>
       </Stage>
-      <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-white/95 px-2 py-1 text-[11px] text-slate-600 shadow">
+      <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-card px-2 py-1 text-[11px] text-muted-foreground shadow">
         Zoom {(scale * 100).toFixed(0)}% · cuadrícula {gridM} m ·{" "}
         {viewOrientationLabel(viewOrientationDeg)}
       </div>
       {onViewOrientationChange ? (
         <button
           type="button"
-          className="absolute bottom-2 right-2 rounded border border-slate-300 bg-white/95 px-2 py-1 text-[11px] font-medium text-slate-700 shadow hover:bg-slate-50"
+          className="absolute bottom-2 right-2 rounded border border-border bg-card px-2 py-1 text-[11px] font-medium text-muted-foreground shadow hover:bg-muted"
           title="Girar solo la vista (no modifica geometría guardada)"
           onClick={() => onViewOrientationChange(nextViewOrientation(viewOrientationDeg))}
         >
