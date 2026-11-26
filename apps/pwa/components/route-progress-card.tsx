@@ -23,7 +23,9 @@ export function RouteProgressCard({
   const total = progress.total_clients ?? 0
   const managed = progress.managed_clients ?? 0
   const remaining = progress.remaining_clients ?? Math.max(0, total - managed)
-  const percent = typeof progress.percent === "number" ? progress.percent : 0
+  const percent = typeof progress.percent === "number" && Number.isFinite(progress.percent)
+    ? Math.min(100, Math.max(0, progress.percent))
+    : 0
   const by = progress.by_result || {
     completed: 0,
     partial: 0,
@@ -44,7 +46,7 @@ export function RouteProgressCard({
 
   if (variant === "compact") {
     return (
-      <div className={`route-progress-compact ${className}`.trim()} role="status">
+      <div className={`route-progress-compact ${className}`.trim()}>
         <div className="route-progress-compact-row">
           <span>
             {managed} de {total} gestionados
@@ -65,8 +67,14 @@ export function RouteProgressCard({
           />
         </div>
         <p className="muted" style={{ margin: "6px 0 0", fontSize: "0.78rem" }}>
-          Faltan {remaining} cliente{remaining === 1 ? "" : "s"}
+          {remaining === 0 && total > 0 ? "Recorrido gestionado" : `Faltan ${remaining} cliente${remaining === 1 ? "" : "s"}`}
         </p>
+        {next && nextHref ? (
+          <AppLink href={nextHref} className="driver-next-link">
+            <div><span className="driver-eyebrow">Siguiente pendiente</span><strong>{next.client_name || next.customer_key}</strong></div>
+            <span aria-hidden="true">→</span>
+          </AppLink>
+        ) : null}
       </div>
     )
   }

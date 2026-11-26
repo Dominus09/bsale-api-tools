@@ -2121,3 +2121,77 @@ input {
 .driver-sync-client { display: flex; justify-content: space-between; min-height: 44px; margin-top: 3px; }
 .driver-sync-metric:focus-visible, .driver-sync-close:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 @media (max-width: 360px) { .driver-sync-sheet { padding: 12px; } .driver-sync-metric { padding: 9px; } }
+
+
+/* Choferes 2.2 — visual finishing pass. Scoped to the driver module. */
+.driver-module { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.driver-module .driver-eyebrow { color: var(--muted); font-size: .69rem; font-weight: 750; letter-spacing: .08em; line-height: 1.4; text-transform: uppercase; }
+.driver-module .driver-jornada { padding: 16px; border: 1px solid rgba(196,41,60,.45); background: linear-gradient(145deg,#262029 0%,var(--surface) 72%); border-radius: 20px; }
+.driver-module .driver-jornada h2 { margin: 4px 0 16px; font-size: 1.6rem; letter-spacing: -.045em; }
+.driver-module .driver-jornada-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; }
+.driver-module .driver-jornada-grid > div { display: flex; flex-direction: column; min-width: 0; gap: 4px; background: rgba(11,13,18,.48); border: 1px solid var(--border); border-radius: 12px; padding: 10px 8px; }
+.driver-module .driver-jornada-grid strong { font-size: 1.55rem; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.driver-module .driver-jornada-grid span { font-size: .67rem; line-height: 1.35; color: var(--muted); overflow-wrap: anywhere; }
+.driver-module .driver-small-note { font-size: .77rem; line-height: 1.4; color: var(--muted); margin: 10px 0 0; }
+.driver-module .driver-plan-title { min-width: 0; flex: 1; }
+.driver-module .driver-plan-title h2 { font-size: 1.28rem; line-height: 1.25; margin: 4px 0 0; letter-spacing: -.025em; overflow-wrap: anywhere; }
+.driver-module .despacho-hero-head { align-items: flex-start; gap: 10px; }
+.driver-module .despacho-hero-head > .pill { flex-shrink: 0; max-width: 46%; white-space: normal; line-height: 1.2; text-align: center; }
+.driver-module .despacho-hero-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.driver-module .despacho-hero-grid .meta-value { overflow-wrap: anywhere; }
+.driver-module .driver-screen-heading { min-width: 0; }
+.driver-module .driver-screen-heading .section-title { margin: 3px 0 6px; font-size: 1.35rem; line-height: 1.15; letter-spacing: -.025em; }
+.driver-module .plan-tabs { gap: 5px; padding: 4px; }
+.driver-module .plan-tab { min-width: 0; min-height: 52px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: .71rem; font-weight: 700; }
+.driver-module .plan-tab.active { box-shadow: 0 2px 10px rgba(196,41,60,.18); }
+.driver-module .filter-chip { min-height: 44px; }
+.driver-module .driver-list-count { margin: 0; font-size: .76rem; color: var(--muted); }
+.driver-module .driver-client-card { padding: 13px; border-radius: 17px; text-decoration: none; }
+.driver-module .driver-client-card .client-card-name { display: flex; align-items: flex-start; gap: 9px; min-width: 0; flex: 1; color: var(--text); font-size: 1.02rem; line-height: 1.3; }
+.driver-module .driver-client-name-text { overflow-wrap: anywhere; min-width: 0; padding-top: 3px; }
+.driver-module .driver-client-card .client-stop { margin: 0; flex-shrink: 0; min-width: 29px; height: 29px; }
+.driver-module .driver-client-card .client-card-head > .pill { flex-shrink: 0; font-size: .69rem; }
+.driver-module .driver-client-card .client-card-meta { gap: 9px; flex-wrap: wrap; margin: 10px 0; }
+.driver-module .driver-card-link { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); color: #ff9ba7; font-size: .8rem; font-weight: 700; }
+.driver-module .driver-card-link span { font-size: 1.12rem; line-height: 1; }
+.driver-module .driver-client-card .obs-block, .driver-module .driver-ficha-obs { background: rgba(245,158,11,.075); border-color: rgba(245,158,11,.35); color: var(--text); font-size: .84rem; overflow-wrap: anywhere; line-height: 1.45; }
+.driver-module .driver-client-card .obs-block strong, .driver-module .driver-ficha-obs strong { display: block; color: #f6c46e; font-size: .73rem; margin-bottom: 4px; }
+.driver-module .driver-ficha-card .client-card-name { color: var(--text); overflow-wrap: anywhere; line-height: 1.3; }
+.driver-module .driver-ficha-card .ficha-compact-row > span:last-child { min-width: 0; text-align: right; overflow-wrap: anywhere; }
+.driver-module .driver-ficha-card .kpi { min-width: 0; }
+.driver-module .driver-ficha-card .kpi-value { overflow-wrap: anywhere; }
+.driver-module .route-progress-card { border-radius: 18px; }
+.driver-module .route-progress-sem { gap: 7px; }
+.driver-module .route-progress-next { align-items: center; }
+.driver-module .route-progress-next > div { min-width: 0; overflow-wrap: anywhere; }
+.driver-module .driver-next-link { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; padding: 10px 12px; min-height: 48px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.driver-module .driver-next-link > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.driver-module .driver-next-link strong { font-size: .84rem; overflow-wrap: anywhere; }
+.driver-module .driver-next-link > span { color: #ff9ba7; font-size: 1.2rem; }
+.driver-module .map-sheet { max-height: min(60%, 320px); overflow-y: auto; overscroll-behavior: contain; }
+.driver-module .map-sheet-title { color: var(--text); min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
+.driver-module .map-sheet .btn-compact { min-height: 44px; min-width: 44px; flex-shrink: 0; }
+.driver-module .map-sheet .obs-block { overflow-wrap: anywhere; }
+.driver-module .step-chrome-head { padding: 13px; border-radius: 17px; }
+.driver-module .step-chrome-client { gap: 3px; }
+.driver-module .step-chrome-client strong { white-space: normal; overflow-wrap: anywhere; font-size: .96rem; }
+.driver-module .step-chrome-top > .btn { min-height: 44px; flex-shrink: 0; }
+.driver-module .step-pills { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 5px; }
+.driver-module .step-pills > .pill { min-width: 0; border-radius: 10px; padding: 7px 4px; min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 5px; font-size: .69rem; font-weight: 650; }
+.driver-module .driver-step-number { display: inline-flex; flex-shrink: 0; width: 19px; height: 19px; border: 1px solid currentColor; border-radius: 50%; align-items: center; justify-content: center; font-size: .67rem; }
+.driver-module .step-chrome-footer { z-index: 8; border-top: 1px solid var(--border); }
+.driver-module .step-chrome-footer .btn { min-height: 50px; }
+.driver-module .pay-method-chip { position: relative; min-height: 74px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; padding: 10px 8px; line-height: 1.25; overflow-wrap: anywhere; font-size: .78rem; }
+.driver-module .pay-method-chip svg { color: var(--muted); flex-shrink: 0; }
+.driver-module .pay-method-chip.is-selected svg { color: #ffb4bc; }
+.driver-module .driver-pay-check { position: absolute; top: 5px; right: 8px; color: #73e2a0; }
+.driver-module .product-name { color: var(--text); overflow-wrap: anywhere; line-height: 1.4; }
+.driver-module .product-category { color: var(--muted); }
+.driver-module .guide-product-card { background: var(--surface-2); box-shadow: none; }
+.driver-module :is(button,a,input,textarea,select):focus-visible { outline: 2px solid #ff9ba7; outline-offset: 2px; }
+@media(max-width: 360px) {
+  .driver-module .driver-jornada { padding: 12px; }
+  .driver-module .driver-jornada-grid { gap: 5px; }
+  .driver-module .driver-jornada-grid > div { padding: 9px 6px; }
+  .driver-module .step-pills > .pill { font-size: .64rem; gap: 3px; }
+}
