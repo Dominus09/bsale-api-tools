@@ -74,3 +74,14 @@ def test_chile_business_date_handles_summer_and_winter(instant, expected):
 def test_chile_business_date_rejects_naive_datetime():
     with pytest.raises(ValueError):
         chile_business_date(datetime(2026, 1, 15, 2, 30))
+
+
+def test_edit_payload_does_not_accept_location_or_calculated_totals():
+    from backend.services.warehouse.pallet_models import PalletDetailsIn
+    payload={"expected_row_version":1,"reason":"Conteo físico","pallet_kind":"complete",
+             "lines":[{**BASE,"line_id":1}],"remove_line_ids":[]}
+    assert PalletDetailsIn(**payload).lines[0].line_id == 1
+    with pytest.raises(ValidationError):
+        PalletDetailsIn(**{**payload,"position_id":123})
+    with pytest.raises(ValidationError):
+        PalletDetailsIn(**{**payload,"lines":[{**BASE,"line_id":1,"total_units":500}]})

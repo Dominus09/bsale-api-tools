@@ -15,7 +15,7 @@ from backend.services.warehouse.errors import (
     WarehouseValidationError,
 )
 from backend.services.warehouse.service import WarehouseLayoutService, default_service
-from backend.services.warehouse.pallet_models import PalletRegisterIn, PalletLocationIn, PalletVoidIn
+from backend.services.warehouse.pallet_models import PalletRegisterIn, PalletLocationIn, PalletVoidIn, PalletDetailsIn
 from backend.services.warehouse.pallets import default_pallet_service, PalletSchemaUnavailable
 
 router = APIRouter(prefix="/warehouse", tags=["inteligencia-bodega"])
@@ -397,3 +397,9 @@ def pallet_observe_location(pallet_id: int, body: PalletLocationIn, user: dict =
 def pallet_void(pallet_id: int, body: PalletVoidIn, user: dict = Depends(require_management_access)):
     actor,uid = _actor(user)
     return _pallet_call(default_pallet_service().void,pallet_id,body.model_dump(mode="json"),actor=actor or "ERP",uid=uid)
+
+
+@router.patch("/pallets/{pallet_id}/details")
+def pallet_update_details(pallet_id: int, body: PalletDetailsIn, user: dict = Depends(require_management_access)):
+    actor,uid = _actor(user)
+    return _pallet_call(default_pallet_service().update_details,pallet_id,body.model_dump(mode="json"),actor=actor or "ERP",uid=uid)

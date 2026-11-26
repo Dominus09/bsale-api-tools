@@ -39,7 +39,7 @@ export function PrintLayoutSheet({
   const svgH = lengthM * scale
 
   return (
-    <div className="print-layout-sheet hidden print:block">
+    <div className="print-layout-sheet hidden bg-white text-slate-900 print:block">
       <header className="mb-3 border-b border-black pb-2">
         <div className="text-lg font-bold">Grupo La Quillotana</div>
         <div className="text-sm">

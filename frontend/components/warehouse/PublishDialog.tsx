@@ -26,7 +26,7 @@ function IssueList({
   return (
     <div className="space-y-1">
       <div className={`text-xs font-semibold ${tone}`}>{title} ({items.length})</div>
-      <ul className="max-h-28 space-y-0.5 overflow-y-auto text-xs text-slate-700">
+      <ul className="max-h-28 space-y-0.5 overflow-y-auto text-xs text-muted-foreground">
         {items.slice(0, 40).map((i, idx) => (
           <li key={idx}>• {String(i.message || i.code || "issue")}</li>
         ))}
@@ -51,25 +51,25 @@ export function PublishDialog({
       <div
         role="dialog"
         aria-modal
-        className="w-full max-w-lg rounded-lg border border-slate-200 bg-white shadow-xl"
+        className="w-full max-w-lg rounded-lg border border-border bg-card shadow-xl"
       >
-        <div className="border-b border-slate-100 px-4 py-3">
-          <h2 className="text-base font-semibold text-slate-900">Publicar plano</h2>
-          <p className="mt-1 text-xs text-slate-600">
+        <div className="border-b border-border px-4 py-3">
+          <h2 className="text-base font-semibold text-foreground">Publicar plano</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
             Congela la revisión como layout oficial del piso. No certifica seguridad ni autoriza
             apilamiento o almacenamiento especial (p. ej. BAE).
           </p>
         </div>
         <div className="space-y-3 px-4 py-3">
           {evaluating || !evaluation ? (
-            <div className="flex items-center gap-2 text-sm text-slate-600">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Validando plano persistido…
             </div>
           ) : (
             <>
               <div
                 className={`rounded-md px-3 py-2 text-sm ${
-                  can ? "bg-emerald-50 text-emerald-900" : "bg-rose-50 text-rose-900"
+                  can ? "bg-lq-success/10 text-lq-success" : "bg-destructive/10 text-destructive"
                 }`}
               >
                 {can
@@ -79,23 +79,23 @@ export function PublishDialog({
               <IssueList
                 title="Bloqueantes"
                 items={evaluation.blockers || []}
-                tone="text-rose-700"
+                tone="text-destructive"
               />
               <IssueList
                 title="Advertencias"
                 items={evaluation.warnings || []}
-                tone="text-amber-700"
+                tone="text-lq-warning"
               />
               <IssueList
                 title="Pendiente de validación"
                 items={evaluation.pending_validation || []}
-                tone="text-slate-600"
+                tone="text-muted-foreground"
               />
-              <p className="text-[11px] text-slate-500">{evaluation.note_es}</p>
+              <p className="text-[11px] text-muted-foreground">{evaluation.note_es}</p>
             </>
           )}
         </div>
-        <div className="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
+        <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
           <Button type="button" variant="outline" onClick={onClose} disabled={publishing}>
             Cancelar
           </Button>
@@ -103,7 +103,7 @@ export function PublishDialog({
             type="button"
             onClick={onConfirm}
             disabled={!can || evaluating || publishing}
-            className="bg-rose-700 hover:bg-rose-800"
+            className="bg-primary hover:bg-primary/90"
           >
             {publishing ? (
               <>

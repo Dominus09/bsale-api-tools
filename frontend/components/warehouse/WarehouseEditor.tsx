@@ -79,7 +79,7 @@ const WarehouseCanvas = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex h-full items-center justify-center text-sm text-slate-500">
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
         Cargando canvas…
       </div>
     ),
@@ -740,7 +740,7 @@ export function WarehouseEditor() {
 
   if (loading && !revision) {
     return (
-      <div className="flex h-[70vh] items-center justify-center gap-2 text-slate-600">
+      <div className="flex h-[70vh] items-center justify-center gap-2 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin" />
         Cargando Inteligencia de Bodega…
       </div>
@@ -751,10 +751,10 @@ export function WarehouseEditor() {
     <div
       className={cn(
         "flex flex-col gap-2",
-        wide ? "fixed inset-0 z-40 bg-white p-3" : "h-[calc(100vh-7rem)]",
+        wide ? "fixed inset-0 z-40 bg-card p-3" : "h-[calc(100vh-7rem)]",
       )}
     >
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 shadow-sm">
         <div className="min-w-[160px]">
           <Select
             value={facilityId != null ? String(facilityId) : undefined}
@@ -799,10 +799,10 @@ export function WarehouseEditor() {
           className={cn(
             "rounded-full px-2.5 py-1 text-xs font-medium",
             revision?.status === "draft"
-              ? "bg-amber-100 text-amber-900"
+              ? "bg-lq-warning/10 text-lq-warning"
               : revision?.status === "published"
-                ? "bg-emerald-100 text-emerald-900"
-                : "bg-slate-100 text-slate-700",
+                ? "bg-lq-success/10 text-lq-success"
+                : "bg-muted text-muted-foreground",
           )}
         >
           {revision ? `${revision.status} · v${revision.row_version}` : "sin revisión"}
@@ -811,7 +811,7 @@ export function WarehouseEditor() {
         <span
           className={cn(
             "rounded-full px-2.5 py-1 text-xs font-medium",
-            dirty ? "bg-orange-100 text-orange-800" : "bg-emerald-50 text-emerald-800",
+            dirty ? "bg-lq-warning/10 text-lq-warning" : "bg-lq-success/10 text-lq-success",
           )}
         >
           {dirty ? "Cambios sin guardar" : "Sin cambios pendientes"}
@@ -886,7 +886,7 @@ export function WarehouseEditor() {
         </div>
       </div>
 
-      <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-950">
+      <div className="rounded-md border border-lq-warning/30 bg-lq-warning/10 px-3 py-2 text-xs text-lq-warning">
         Plano provisional seed BC (pending_validation). Oficina, escalera y portón son referencias — no
         es un plano arquitectónico definitivo. Origen métrico SW (+X largo hacia el fondo, +Y ancho
         hacia DER). Vista canónica longitudinal: entrada abajo, IZ izquierda.
@@ -894,12 +894,12 @@ export function WarehouseEditor() {
       </div>
 
       {error ? (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </div>
       ) : null}
       {conflictMsg ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-orange-300 bg-orange-50 px-3 py-2 text-sm text-orange-900">
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-lq-warning/30 bg-lq-warning/10 px-3 py-2 text-sm text-lq-warning">
           <span>{conflictMsg}</span>
           <Button
             type="button"
@@ -913,7 +913,7 @@ export function WarehouseEditor() {
       ) : null}
 
       <div className="flex min-h-0 flex-1 gap-2">
-        <aside className="flex w-12 shrink-0 flex-col items-center gap-1 rounded-lg border border-slate-200 bg-white py-2 shadow-sm">
+        <aside className="flex w-12 shrink-0 flex-col items-center gap-1 rounded-lg border border-border bg-card py-2 shadow-sm">
           <ToolBtn label="Seleccionar" active={tool === "select"} onClick={() => setTool("select")}>
             <MousePointer2 className="h-4 w-4" />
           </ToolBtn>
@@ -996,7 +996,7 @@ export function WarehouseEditor() {
           </div>
         </aside>
 
-        <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
           <WarehouseCanvas
             elements={visibleElements}
             floorLengthM={floorLengthM}
@@ -1017,7 +1017,7 @@ export function WarehouseEditor() {
           />
         </main>
 
-        <aside className="w-72 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <aside className="w-72 shrink-0 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
           <PropertiesPanel
             element={selected}
             parents={visibleElements}
@@ -1025,13 +1025,13 @@ export function WarehouseEditor() {
             onChange={(patch) => selected && editable && patchElement(selected.clientKey, patch)}
           />
           {issues.length > 0 ? (
-            <div className="border-t border-slate-100 p-2 text-[11px] text-slate-600">
+            <div className="border-t border-border p-2 text-[11px] text-muted-foreground">
               <div className="mb-1 font-semibold">Validación local</div>
               <ul className="max-h-28 space-y-1 overflow-y-auto">
                 {issues.slice(0, 12).map((i, idx) => (
                   <li
                     key={`${i.code}-${idx}`}
-                    className={i.severity === "error" ? "text-red-700" : "text-amber-700"}
+                    className={i.severity === "error" ? "text-destructive" : "text-lq-warning"}
                   >
                     {i.message}
                   </li>
@@ -1040,7 +1040,7 @@ export function WarehouseEditor() {
             </div>
           ) : null}
           {serverIssues.length > 0 ? (
-            <div className="border-t border-slate-100 p-2 text-[11px] text-red-800">
+            <div className="border-t border-border p-2 text-[11px] text-destructive">
               <div className="mb-1 font-semibold">Validación servidor</div>
               <ul className="max-h-24 space-y-1 overflow-y-auto">
                 {serverIssues.map((m, idx) => (

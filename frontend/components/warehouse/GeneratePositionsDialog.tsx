@@ -151,8 +151,8 @@ function Field({ label, value, onChange, integer = false }: {
 }) {
   return (
     <label className="block min-w-0 space-y-1">
-      <span className="block text-xs font-medium text-slate-600">{label}</span>
-      <Input value={value} onChange={e => onChange(e.target.value)} inputMode={integer ? "numeric" : "decimal"} className="h-9 bg-white" />
+      <span className="block text-xs font-medium text-muted-foreground">{label}</span>
+      <Input value={value} onChange={e => onChange(e.target.value)} inputMode={integer ? "numeric" : "decimal"} className="h-9 bg-card" />
     </label>
   )
 }
@@ -160,7 +160,7 @@ function Field({ label, value, onChange, integer = false }: {
 function IssueList({ title, issues, danger }: { title: string; issues: GeneratePositionIssue[]; danger?: boolean }) {
   if (!issues.length) return null
   return (
-    <div className={`rounded-lg border p-3 text-xs ${danger ? "border-red-200 bg-red-50 text-red-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+    <div className={`rounded-lg border p-3 text-xs ${danger ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-lq-warning/30 bg-lq-warning/10 text-lq-warning"}`}>
       <div className="mb-1 flex items-center gap-2 font-semibold"><AlertTriangle className="h-4 w-4" />{title} ({issues.length})</div>
       <ul className="max-h-40 space-y-1 overflow-y-auto">
         {issues.map((issue, i) => (
@@ -259,16 +259,16 @@ export function GeneratePositionsDialog({ open, onOpenChange, parent, floorLengt
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="flex max-h-[94vh] w-[96vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[1080px]">
-        <DialogHeader className="shrink-0 border-b bg-white px-5 py-4">
+        <DialogHeader className="shrink-0 border-b bg-card px-5 py-4">
           <DialogTitle className="text-xl">Generar posiciones de almacenamiento</DialogTitle>
-          {parent ? <p className="text-sm text-slate-500">{parentLabel} · {fmt(parent.geometry.width_m)} × {fmt(parent.geometry.depth_m)} m</p> : null}
+          {parent ? <p className="text-sm text-muted-foreground">{parentLabel} · {fmt(parent.geometry.width_m)} × {fmt(parent.geometry.depth_m)} m</p> : null}
         </DialogHeader>
-        {!parent ? <p className="p-5 text-sm text-amber-800">Seleccione un sector o pasillo.</p> : (
-          <div className="min-h-0 flex-1 overflow-y-auto bg-slate-50 p-4">
+        {!parent ? <p className="p-5 text-sm text-lq-warning">Seleccione un sector o pasillo.</p> : (
+          <div className="min-h-0 flex-1 overflow-y-auto bg-muted p-4">
             <div className="grid min-w-0 gap-4 md:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.1fr)]">
               <div className="space-y-3">
-                <section className="space-y-3 rounded-xl border bg-white p-4">
-                  <div className="text-sm font-semibold text-slate-900">1. Distribución</div>
+                <section className="space-y-3 rounded-xl border bg-card p-4">
+                  <div className="text-sm font-semibold text-foreground">1. Distribución</div>
                   <div className="grid grid-cols-2 gap-2">
                     {(["x", "y"] as const).map(axis => (
                       <button type="button" key={axis} onClick={() => {
@@ -277,7 +277,7 @@ export function GeneratePositionsDialog({ open, onOpenChange, parent, floorLengt
                           setAck(false)
                           setError(null)
                         }
-                      }} className={`rounded-lg border p-3 text-left text-xs ${axis === form.axis ? "border-red-700 bg-red-50 text-red-900 ring-1 ring-red-700" : "border-slate-200 bg-white text-slate-600"}`}>
+                      }} className={`rounded-lg border p-3 text-left text-xs ${axis === form.axis ? "border-primary bg-destructive/10 text-destructive ring-1 ring-ring" : "border-border bg-card text-muted-foreground"}`}>
                         <span className="block font-semibold">{axis === "x" ? "Longitudinal" : "Transversal"}</span>
                         <span className="mt-1 block">{axis === "x" ? "Entrada → fondo (X)" : "Circulación → muro (Y)"}</span>
                       </button>
@@ -289,7 +289,7 @@ export function GeneratePositionsDialog({ open, onOpenChange, parent, floorLengt
                         <Field label="Fila delantera (D)" value={rows[0] ?? ""} onChange={v => setPair(0, v)} integer />
                         <Field label="Fila trasera (A, opcional)" value={rows[1] ?? ""} onChange={v => setPair(1, v)} integer />
                       </div>
-                      <p className="text-xs text-slate-500">D junto a circulación; A junto al muro izquierdo. Numeración emparejada desde la entrada. IZ-SU se conserva como zona de sueltos.</p>
+                      <p className="text-xs text-muted-foreground">D junto a circulación; A junto al muro izquierdo. Numeración emparejada desde la entrada. IZ-SU se conserva como zona de sueltos.</p>
                     </>
                   ) : (
                     <>
@@ -317,14 +317,14 @@ export function GeneratePositionsDialog({ open, onOpenChange, parent, floorLengt
                     <Field label="Pallet ancho (m)" value={form.palletW} onChange={v => patch("palletW", v)} />
                   </div>
                   <Field label="Separación entre pallets de una fila (m)" value={form.gapLong} onChange={v => patch("gapLong", v)} />
-                  <label className="flex items-start gap-2 text-xs text-slate-700">
+                  <label className="flex items-start gap-2 text-xs text-muted-foreground">
                     <input className="mt-0.5 accent-red-700" type="checkbox" checked={form.autoGap} onChange={e => patch("autoGap", e.target.checked)} />
                     <span>Distribuir filas en el ancho disponible (respetando márgenes)</span>
                   </label>
                   {!form.autoGap ? <Field label="Separación entre filas (m)" value={form.gapTrans} onChange={v => patch("gapTrans", v)} /> : null}
                 </section>
 
-                <details className="rounded-xl border bg-white p-4">
+                <details className="rounded-xl border bg-card p-4">
                   <summary className="cursor-pointer text-sm font-semibold">2. Configuración avanzada</summary>
                   <div className="mt-3 space-y-3">
                     <div className="grid grid-cols-2 gap-2">
@@ -353,23 +353,23 @@ export function GeneratePositionsDialog({ open, onOpenChange, parent, floorLengt
                       <Field label="Inicio numeración" value={form.startIndex} onChange={v => patch("startIndex", v)} integer />
                     </div>
                     <Field label="Altura libre de referencia (m, opcional)" value={form.height} onChange={v => patch("height", v)} />
-                    {!paired ? <label className="flex items-start gap-2 text-xs text-amber-900"><input type="checkbox" className="mt-0.5 accent-red-700" checked={form.allowOutside} onChange={e => patch("allowOutside", e.target.checked)} /><span>Permitir evaluar una extensión fuera del sector como propuesta pendiente (no autoriza ocupar circulación).</span></label> : null}
+                    {!paired ? <label className="flex items-start gap-2 text-xs text-lq-warning"><input type="checkbox" className="mt-0.5 accent-red-700" checked={form.allowOutside} onChange={e => patch("allowOutside", e.target.checked)} /><span>Permitir evaluar una extensión fuera del sector como propuesta pendiente (no autoriza ocupar circulación).</span></label> : null}
                   </div>
                 </details>
-                {paired ? <p className="px-1 text-xs text-slate-500">Propuesta inicial: 10 + 10, margen posterior de 1,26 m. Ajustar a la distribución física real; no es capacidad aprobada.</p> : null}
+                {paired ? <p className="px-1 text-xs text-muted-foreground">Propuesta inicial: 10 + 10, margen posterior de 1,26 m. Ajustar a la distribución física real; no es capacidad aprobada.</p> : null}
               </div>
 
-              <section className="min-w-0 space-y-3 rounded-xl border bg-white p-4">
+              <section className="min-w-0 space-y-3 rounded-xl border bg-card p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div><h3 className="text-sm font-semibold">3. Vista previa del plano</h3><p className="text-xs text-slate-500">Coordenadas reales de la propuesta, sin guardar</p></div>
+                  <div><h3 className="text-sm font-semibold">3. Vista previa del plano</h3><p className="text-xs text-muted-foreground">Coordenadas reales de la propuesta, sin guardar</p></div>
                   <Button type="button" size="sm" disabled={loading || !request} onClick={() => void runPreview()}>
                     {loading ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null} Vista previa
                   </Button>
                 </div>
-                {configError || error ? <p className="rounded-md bg-red-50 p-2 text-xs text-red-800">{configError || error}</p> : null}
-                {outdated ? <p className="rounded-md bg-amber-50 p-2 text-xs text-amber-900">Cambiaste los parámetros. Genera una nueva vista previa antes de incorporar.</p> : null}
+                {configError || error ? <p className="rounded-md bg-destructive/10 p-2 text-xs text-destructive">{configError || error}</p> : null}
+                {outdated ? <p className="rounded-md bg-lq-warning/10 p-2 text-xs text-lq-warning">Cambiaste los parámetros. Genera una nueva vista previa antes de incorporar.</p> : null}
                 <GeneratorPlanPreview parent={parent} existing={existing} preview={preview} large={large} />
-                <div className="flex items-center justify-between text-[11px] text-slate-500">
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                   <span>Fondo arriba · entrada abajo</span>
                   <Button size="sm" type="button" variant="ghost" onClick={() => setLarge(v => !v)}>{large ? "Ver completo" : "Ampliar"}</Button>
                 </div>
@@ -381,22 +381,22 @@ export function GeneratePositionsDialog({ open, onOpenChange, parent, floorLengt
                         ["Superficie ocupada", `${fmt(preview.occupied_area_m2)} m²`],
                         ["Separación entre filas", preview.interior_gap_m == null ? "—" : `${fmt(preview.interior_gap_m)} m`],
                         ["Fuera del límite", `${fmt(preview.extension_outside_parent_m)} m`],
-                      ].map(([title, value]) => <div className="rounded-lg border bg-slate-50 p-2" key={title}><p className="text-[11px] text-slate-500">{title}</p><p className="mt-0.5 text-lg font-semibold tabular-nums text-slate-900">{value}</p></div>)}
+                      ].map(([title, value]) => <div className="rounded-lg border bg-muted p-2" key={title}><p className="text-[11px] text-muted-foreground">{title}</p><p className="mt-0.5 text-lg font-semibold tabular-nums text-foreground">{value}</p></div>)}
                     </div>
                     <IssueList title="Conflictos de esta propuesta" issues={blockers} danger />
                     <IssueList title="Advertencias de esta propuesta" issues={warnings} />
-                    {preview.warnings.map((w, i) => <p key={i} className="text-xs text-amber-900">{w.message}</p>)}
-                    {preview.can_incorporate === true && !preview.requires_extension_ack ? <div className="flex items-center gap-2 rounded-md bg-emerald-50 p-2 text-xs text-emerald-800"><CheckCircle2 className="h-4 w-4 shrink-0" />Sin conflictos geométricos bloqueantes de las posiciones propuestas. Validación física pendiente.</div> : null}
-                    {preview.requires_extension_ack && preview.can_incorporate === true ? <label className="flex items-start gap-2 rounded-md bg-amber-50 p-2 text-xs text-amber-900"><input type="checkbox" className="mt-0.5" checked={ack} onChange={e => setAck(e.target.checked)} />Entiendo que esta extensión es solo una propuesta; no autoriza ocupar circulación ni almacenar.</label> : null}
-                    <details className="text-xs text-slate-600"><summary className="cursor-pointer font-medium">Ver códigos y coordenadas ({preview.position_count})</summary><div className="mt-2 max-h-40 overflow-y-auto font-mono text-[11px]">{preview.positions.map(p => <div key={p.code}>{p.code}: X {fmt(Number(p.geometry.x_m))} · Y {fmt(Number(p.geometry.y_m))}</div>)}</div></details>
+                    {preview.warnings.map((w, i) => <p key={i} className="text-xs text-lq-warning">{w.message}</p>)}
+                    {preview.can_incorporate === true && !preview.requires_extension_ack ? <div className="flex items-center gap-2 rounded-md bg-lq-success/10 p-2 text-xs text-lq-success"><CheckCircle2 className="h-4 w-4 shrink-0" />Sin conflictos geométricos bloqueantes de las posiciones propuestas. Validación física pendiente.</div> : null}
+                    {preview.requires_extension_ack && preview.can_incorporate === true ? <label className="flex items-start gap-2 rounded-md bg-lq-warning/10 p-2 text-xs text-lq-warning"><input type="checkbox" className="mt-0.5" checked={ack} onChange={e => setAck(e.target.checked)} />Entiendo que esta extensión es solo una propuesta; no autoriza ocupar circulación ni almacenar.</label> : null}
+                    <details className="text-xs text-muted-foreground"><summary className="cursor-pointer font-medium">Ver códigos y coordenadas ({preview.position_count})</summary><div className="mt-2 max-h-40 overflow-y-auto font-mono text-[11px]">{preview.positions.map(p => <div key={p.code}>{p.code}: X {fmt(Number(p.geometry.x_m))} · Y {fmt(Number(p.geometry.y_m))}</div>)}</div></details>
                   </>
-                ) : <p className="text-xs text-slate-500">Configura las filas y presiona Vista previa. Las posiciones candidatas aparecerán aquí.</p>}
-                <p className="border-t pt-2 text-xs text-slate-500">No representa inventario ni capacidad segura autorizada. Todas las posiciones se incorporan pendientes de validación, sin niveles de apilamiento.</p>
+                ) : <p className="text-xs text-muted-foreground">Configura las filas y presiona Vista previa. Las posiciones candidatas aparecerán aquí.</p>}
+                <p className="border-t pt-2 text-xs text-muted-foreground">No representa inventario ni capacidad segura autorizada. Todas las posiciones se incorporan pendientes de validación, sin niveles de apilamiento.</p>
               </section>
             </div>
           </div>
         )}
-        <DialogFooter className="shrink-0 border-t bg-white px-5 py-3">
+        <DialogFooter className="shrink-0 border-t bg-card px-5 py-3">
           <Button type="button" variant="outline" onClick={() => close(false)}>Cancelar</Button>
           <Button type="button" disabled={!canConfirm} onClick={() => { if (preview && canConfirm) onConfirm(preview) }}>Incorporar {preview ? preview.position_count + " posiciones" : "al borrador"}</Button>
         </DialogFooter>

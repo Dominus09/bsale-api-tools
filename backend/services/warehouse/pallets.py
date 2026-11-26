@@ -151,10 +151,12 @@ class PalletService:
             floor = self._floor(cur, floor_id)
             rev = self._revision(cur, floor_id)
             items = self._positions(cur, floor_id, rev["id"]) if rev else []
-            cur.execute("""SELECT position_id, observed_level FROM warehouse.pallets
+            cur.execute("""SELECT id AS pallet_id, position_id, observed_level FROM warehouse.pallets
                            WHERE floor_id=%s AND company_id=%s AND status='active' AND position_id IS NOT NULL""",
                         (floor_id, COMPANY_ID))
             occupied = _rows(cur)
+            for slot in occupied:
+                slot["pallet_code"] = pallet_code(slot["pallet_id"])
             return {"floor": floor, "revision": rev, "items": items, "observed_slots": occupied}
 
     def search_products(self, floor_id: int, query: str):
@@ -290,6 +292,81 @@ class PalletService:
             saved = self._get(cur, pid)
             self._event(cur,pid,"registered",actor,uid,saved)
             return saved
+
+    def update_details(self, pallet_id: int, data: dict, *, actor: str, uid: int | None):
+        """Corrección de levantamiento, no picking ni movimiento de inventario."""
+        with self._transaction() as cur:
+            before = self._get(cur, pallet_id, lock=True)
+            if before["status"] != "active" or before["row_version"] != data["expected_row_version"]:
+                raise WarehouseConflictError("El pallet cambió o está anulado. Recargue.")
+            self._floor(cur, before["floor_id"])
+            # 009 es manual; no permitir una edición sin posibilidad de auditarla.
+            cur.execute("""SELECT EXISTS (SELECT 1 FROM pg_constraint
+                WHERE conrelid='warehouse.pallet_events'::regclass AND contype='c'
+                  AND conname='pallet_events_action_check'
+                  AND strpos(pg_get_constraintdef(oid),'details_updated')>0)""")
+            if not cur.fetchone()[0]:
+                raise PalletSchemaUnavailable("Edición aún no habilitada: falta migración 009.", code="pallet_edit_schema_missing")
+            reason = str(data.get("reason") or "").strip()
+            if len(reason) < 3:
+                raise WarehouseValidationError("Motivo obligatorio.")
+            lines = data["lines"]
+            variants = {line["variant_id"] for line in lines}
+            kind = data["pallet_kind"]
+            if not 1 <= len(lines) <= 100 or kind not in ("complete","partial","mixed"):
+                raise WarehouseValidationError("Tipo o líneas del pallet inválidos.")
+            if (kind == "mixed" and len(variants) < 2) or (kind != "mixed" and len(variants) != 1):
+                raise WarehouseValidationError("Mixto requiere distintas variantes; completo/molido admite varios lotes de una variante.")
+            if data.get("received_on") and date.fromisoformat(str(data["received_on"])) > chile_business_date():
+                raise WarehouseValidationError("Fecha de ingreso futura.")
+            old = {line["id"]: line for line in before["lines"]}
+            retained = [line["line_id"] for line in lines if line.get("line_id") is not None]
+            removed = data.get("remove_line_ids") or []
+            if (len(set(retained)) != len(retained) or len(set(removed)) != len(removed)
+                or set(retained) & set(removed) or set(retained) | set(removed) != set(old)):
+                raise WarehouseValidationError("Incluya todas las líneas existentes o marque explícitamente las que corrige/elimina.")
+            # Resolver y validar todo antes de escribir. Las líneas existentes
+            # conservan variante y conversión histórica; otra variante = nueva línea.
+            normalized = []
+            for line in lines:
+                lid = line.get("line_id")
+                if lid is not None:
+                    existing = old[lid]
+                    if line["variant_id"] != existing["variant_id"]:
+                        raise WarehouseValidationError("Para corregir la variante, retire la línea y agregue la variante correcta.")
+                    n = normalize_line(line, {"units_per_box":existing["units_per_box_snap"]})
+                    normalized.append((lid, n, None))
+                else:
+                    product = self._product(cur, line["variant_id"])
+                    normalized.append((None, normalize_line(line, product), product))
+            for lid in removed:
+                cur.execute("DELETE FROM warehouse.pallet_lines WHERE id=%s AND pallet_id=%s", (lid,pallet_id))
+            next_number = max((line["line_number"] for line in before["lines"]),default=0)
+            for lid,n,product in normalized:
+                if lid is not None:
+                    cur.execute("""UPDATE warehouse.pallet_lines SET quantity_status=%s,boxes=%s,loose_units=%s,
+                        total_units=%s,expiry_status=%s,expires_on=%s,lot=%s WHERE id=%s AND pallet_id=%s""",
+                        (n["quantity_status"],n["boxes"],n["loose_units"],n["total_units"],n["expiry_status"],
+                         n.get("expires_on"),n.get("lot"),lid,pallet_id))
+                else:
+                    next_number += 1
+                    cur.execute("""INSERT INTO warehouse.pallet_lines
+                        (pallet_id,line_number,variant_id,product_id,product_name_snap,variant_name_snap,
+                         product_type_snap,barcode_snap,sku_snap,units_per_box_snap,quantity_status,boxes,
+                         loose_units,total_units,expiry_status,expires_on,lot)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (pallet_id,next_number,product["variant_id"],product["product_id"],product["product_name"],
+                         product["variant_name"],product["product_type"],product["barcode"],product["sku"],
+                         n["units_per_box_snap"],n["quantity_status"],n["boxes"],n["loose_units"],n["total_units"],
+                         n["expiry_status"],n.get("expires_on"),n.get("lot")))
+            cur.execute("""UPDATE warehouse.pallets SET pallet_kind=%s,received_on=%s,notes=%s,
+                           row_version=row_version+1,updated_at=now() WHERE id=%s""",
+                        (kind,data.get("received_on"),data.get("notes"),pallet_id))
+            after = self._get(cur, pallet_id)
+            self._event(cur,pallet_id,"details_updated",actor,uid,{
+                "reason":reason, "removed_line_ids":removed, "before":before, "after":after,
+                "note":"Corrección observada; sin movimientos de stock Bsale."})
+            return after
 
     def observe_location(self, pallet_id: int, data: dict, *, actor: str, uid: int | None):
         with self._transaction() as cur:

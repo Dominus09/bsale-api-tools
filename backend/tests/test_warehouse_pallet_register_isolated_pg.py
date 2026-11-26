@@ -188,3 +188,74 @@ def test_received_on_real_date_and_future_rejected(service, monkeypatch):
             cur.execute("SELECT count(*) FROM warehouse.pallets WHERE registration_key=%s::uuid",
                         (future["registration_key"],))
             assert cur.fetchone()[0] == 0
+
+
+def test_pallet_details_migration_edit_and_history(service, monkeypatch):
+    from backend.services.warehouse.pallets import PalletSchemaUnavailable
+    # Un pallet real de fixture; la ubicación nunca cambia durante la edición.
+    original = create(service, body(**loc(3), lines=[line(quantity_status="unknown",boxes=None,loose_units=None,
+        expiry_status="unknown",expires_on=None,lot=None)]))
+    old_line = original["lines"][0]["id"]
+    patch = {"expected_row_version":1,"reason":"Conteo físico verificado","pallet_kind":"complete",
+             "received_on":chile_business_date().isoformat(),"notes":"Fixture corrección",
+             "lines":[{**line(),"line_id":old_line}],"remove_line_ids":[]}
+    with pytest.raises(PalletSchemaUnavailable):
+        service.update_details(original["id"],patch,actor="lab",uid=1)
+    assert service.get(original["id"])["row_version"] == 1
+    with psycopg2.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET warehouse.pallets_lab='off'")
+            with pytest.raises(psycopg2.Error):
+                cur.execute((SQL/"009_pallet_details_audit_AWAITING_APPROVAL.sql").read_text(encoding="utf-8"))
+            conn.rollback()
+            cur.execute("SET warehouse.pallets_lab='on'")
+            for _ in range(2):
+                cur.execute((SQL/"009_pallet_details_audit_AWAITING_APPROVAL.sql").read_text(encoding="utf-8"))
+    app = FastAPI()
+    app.include_router(router_module.router)
+    monkeypatch.setattr(router_module,"default_pallet_service",lambda:service)
+    client=TestClient(app)
+    endpoint=f"/warehouse/pallets/{original['id']}/details"
+    assert client.patch(endpoint,json=patch).status_code in (401,403)
+    app.dependency_overrides[router_module.require_management_access]=lambda:{"id":1,"email":"lab"}
+    response=client.patch(endpoint,json=patch)
+    assert response.status_code==200,response.text
+    updated=response.json()
+    assert updated["id"]==original["id"] and updated["code"]==original["code"]
+    assert updated["position_id"]==original["position_id"] and updated["observed_level"]==original["observed_level"]
+    assert updated["lines"][0]["id"]==old_line and updated["lines"][0]["total_units"]==49
+    assert updated["row_version"]==2
+    assert client.patch(endpoint,json=patch).status_code==409
+    slots=client.get("/warehouse/pallets/locations?floor_id=1").json()["observed_slots"]
+    assert any(s["pallet_id"]==original["id"] and s["pallet_code"]==original["code"] for s in slots)
+    history=service.get(original["id"])["events"]
+    assert history[0]["action"]=="details_updated"
+    assert history[0]["detail_json"]["before"]["lines"][0]["total_units"] is None
+    assert history[0]["detail_json"]["after"]["lines"][0]["total_units"]==49
+    # Omisión accidental, cambio de variante bajo el mismo ID y fecha futura.
+    bad={**patch,"expected_row_version":2}
+    for payload in (
+        {**bad,"lines":[{**line(),"line_id":None}]},
+        {**bad,"lines":[{**line(101,boxes=0,loose_units=1,expected_units_per_box=None),"line_id":old_line}]},
+        {**bad,"received_on":(chile_business_date()+timedelta(days=2)).isoformat()},
+    ):
+        assert client.patch(endpoint,json=payload).status_code==400
+    assert service.get(original["id"])["row_version"]==2
+    # Corrección explícita: otra variante y lote, nueva línea y retiro auditado.
+    replacement={**bad,"pallet_kind":"partial","lines":[{**line(101,boxes=0,loose_units=8,
+        expected_units_per_box=None),"line_id":None}],"remove_line_ids":[old_line]}
+    replaced=client.patch(endpoint,json=replacement)
+    assert replaced.status_code==200,replaced.text
+    assert replaced.json()["code"]==original["code"]
+    assert replaced.json()["lines"][0]["id"]!=old_line
+    event=service.get(original["id"])["events"][0]
+    assert event["detail_json"]["removed_line_ids"]==[old_line]
+    assert event["detail_json"]["before"]["lines"][0]["id"]==old_line
+    with psycopg2.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT row_version FROM warehouse.layout_revisions WHERE id=1")
+            assert cur.fetchone()[0]==6
+            cur.execute("SELECT units_per_box FROM bsale.variants WHERE company_id=3 AND bsale_id=100")
+            assert cur.fetchone()[0]==24
+    service.void(original["id"],{"expected_row_version":3,"reason":"Fixture finalizado"},actor="lab",uid=1)
+    assert client.patch(endpoint,json={**replacement,"expected_row_version":4}).status_code==409

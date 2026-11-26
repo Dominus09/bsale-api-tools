@@ -52,3 +52,17 @@ class PalletLocationIn(ObservedLocation):
 class PalletVoidIn(StrictModel):
     expected_row_version: Positive
     reason: Reason
+
+
+class PalletEditLineIn(PalletLineIn):
+    line_id: Positive | None = None
+
+
+class PalletDetailsIn(StrictModel):
+    expected_row_version: Positive
+    reason: Reason
+    pallet_kind: Literal["complete","partial","mixed"]
+    received_on: date | None = None
+    notes: Note | None = None
+    lines: list[PalletEditLineIn] = Field(min_length=1,max_length=100)
+    remove_line_ids: list[Positive] = Field(default_factory=list,max_length=100)

@@ -40,27 +40,27 @@ function MetricPreview({ inspection, plan }: { inspection: SpacingInspection; pl
   const y0 = Math.min(...boxes.map(b => b.y)) - .9
   const y1 = Math.max(...boxes.map(b => b.y + b.height)) + .95
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+    <div className="rounded-lg border border-border bg-muted p-2">
       <svg role="img" aria-label="Propuesta métrica de separación entre filas, sin mover los límites de pasillos"
         viewBox={`${x0} ${y0} ${x1-x0} ${y1-y0}`} width="100%" className="block">
         {frames.map(e => {
           const b = box(e)
           return <g key={e.clientKey}>
-            <rect {...b} fill="#eef2ff" stroke="#94a3b8" strokeWidth={.045} strokeDasharray=".13 .08" />
-            <text x={b.x+b.width/2} y={b.y-.3} fontSize={.32} textAnchor="middle" fontWeight="600" fill="#334155">{e.physical.code}</text>
+            <rect {...b} fill="var(--secondary)" stroke="var(--muted-foreground)" strokeWidth={.045} strokeDasharray=".13 .08" />
+            <text x={b.x+b.width/2} y={b.y-.3} fontSize={.32} textAnchor="middle" fontWeight="600" fill="var(--foreground)">{e.physical.code}</text>
           </g>
         })}
         {positions.map(e => {
           const b = box(e), moving = changed.has(e.clientKey)
           return <g key={e.clientKey}>
             <title>{e.physical.code}{moving ? " · desplazada" : ""}</title>
-            <rect {...b} fill={moving ? (plan.errors.length ? "#fee2e2" : "#bfdbfe") : "#dbeafe"}
-              stroke={moving ? (plan.errors.length ? "#dc2626" : "#2563eb") : "#64748b"} strokeWidth={.035} />
+            <rect {...b} fill={moving ? (plan.errors.length ? "color-mix(in srgb, var(--destructive) 18%, var(--card))" : "color-mix(in srgb, var(--lq-info) 25%, var(--card))") : "color-mix(in srgb, var(--lq-info) 12%, var(--card))"}
+              stroke={moving ? (plan.errors.length ? "var(--destructive)" : "var(--lq-info)") : "var(--muted-foreground)"} strokeWidth={.035} />
           </g>
         })}
-        <text x={(x0+x1)/2} y={y1-.28} fontSize={.28} textAnchor="middle" fill="#64748b">CIRCULACIÓN CENTRAL · SIN CAMBIOS DE PROFUNDIDAD</text>
+        <text x={(x0+x1)/2} y={y1-.28} fontSize={.28} textAnchor="middle" fill="var(--muted-foreground)">CIRCULACIÓN CENTRAL · SIN CAMBIOS DE PROFUNDIDAD</text>
       </svg>
-      <div className="flex flex-wrap justify-between gap-2 border-t border-slate-200 pt-2 text-[11px] text-slate-600">
+      <div className="flex flex-wrap justify-between gap-2 border-t border-border pt-2 text-[11px] text-muted-foreground">
         <span>← Fondo</span>
         <span>Azul: posición propuesta · trazos: límite nominal</span>
         <span>Entrada →</span>
@@ -150,31 +150,31 @@ export function AisleSpacingDialog({ revisionId, sectorId, elements, floorLength
       <DialogContent className="flex max-h-[94vh] w-[96vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[1040px]">
         <DialogHeader className="shrink-0 border-b px-5 py-4">
           <DialogTitle className="text-xl">Separación entre pasillos (B)</DialogTitle>
-          <p className="text-sm text-slate-500">Ajustar la distancia libre entre filas de pallets de pasillos vecinos.</p>
+          <p className="text-sm text-muted-foreground">Ajustar la distancia libre entre filas de pallets de pasillos vecinos.</p>
         </DialogHeader>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-slate-50 p-4">
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-muted p-4">
+          <div className="rounded-lg border border-lq-warning/30 bg-lq-warning/10 p-3 text-xs text-lq-warning">
             Se mantienen los límites físicos de cada pasillo, oficina, escalera, circulación y códigos existentes.
             Al aumentar B se reduce la separación interior A. No cambia la profundidad ni autoriza almacenamiento, circulación o apilamiento.
           </div>
-          {error ? <p className="rounded-md bg-red-50 p-3 text-sm text-red-800">{error}</p> : null}
+          {error ? <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</p> : null}
           {inspection && plan ? (
             <div className="grid min-w-0 gap-4 md:grid-cols-[minmax(270px,.8fr)_minmax(0,1.2fr)]">
-              <section className="space-y-3 rounded-xl border bg-white p-4">
+              <section className="space-y-3 rounded-xl border bg-card p-4">
                 <h3 className="text-sm font-semibold">1. Separaciones B (cm)</h3>
-                <div className="flex items-end gap-2 rounded-lg border bg-slate-50 p-3">
+                <div className="flex items-end gap-2 rounded-lg border bg-muted p-3">
                   <label className="min-w-0 flex-1 space-y-1 text-xs font-medium">
                     <span>Aplicar a todos</span>
-                    <Input inputMode="decimal" value={uniform} disabled={busy} onChange={e => setUniform(e.target.value)} className="h-9 bg-white" />
+                    <Input inputMode="decimal" value={uniform} disabled={busy} onChange={e => setUniform(e.target.value)} className="h-9 bg-card" />
                   </label>
                   <Button type="button" variant="outline" size="sm" disabled={busy || !Number.isFinite(parseCm(uniform)) || parseCm(uniform) < 0} onClick={setAll}>Usar medida</Button>
                 </div>
                 <div className="grid grid-cols-[1fr_68px_90px] items-center gap-2 text-xs">
-                  <span className="text-slate-500">Par</span><span className="text-right text-slate-500">Actual</span><span className="text-slate-500">Deseada</span>
+                  <span className="text-muted-foreground">Par</span><span className="text-right text-muted-foreground">Actual</span><span className="text-muted-foreground">Deseada</span>
                   {inspection.gaps.map(g => (
                     <div key={g.key} className="contents">
                       <label htmlFor={"gap-"+g.key} className="font-medium">{g.left} ↔ {g.right}</label>
-                      <span className="text-right tabular-nums text-slate-600">{cm(g.currentM)}</span>
+                      <span className="text-right tabular-nums text-muted-foreground">{cm(g.currentM)}</span>
                       <Input id={"gap-"+g.key} inputMode="decimal" disabled={busy}
                         value={values[g.key] ?? String(Math.round(g.currentM*10000)/100)}
                         onChange={e => change(g.key,e.target.value)} className="h-9 tabular-nums" />
@@ -182,33 +182,33 @@ export function AisleSpacingDialog({ revisionId, sectorId, elements, floorLength
                   ))}
                 </div>
                 <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => { invalidate(); setValues({}) }}>Restaurar valores actuales</Button>
-                <p className="text-xs text-slate-500">Las medidas se calculan entre las huellas existentes, no entre las líneas de los marcos nominales.</p>
+                <p className="text-xs text-muted-foreground">Las medidas se calculan entre las huellas existentes, no entre las líneas de los marcos nominales.</p>
               </section>
-              <section className="min-w-0 space-y-3 rounded-xl border bg-white p-4">
+              <section className="min-w-0 space-y-3 rounded-xl border bg-card p-4">
                 <h3 className="text-sm font-semibold">2. Vista previa métrica</h3>
                 <MetricPreview inspection={inspection} plan={plan}/>
                 <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-lg border bg-slate-50 p-2">
-                    <p className="text-xs text-slate-500">Posiciones que cambian</p>
+                  <div className="rounded-lg border bg-muted p-2">
+                    <p className="text-xs text-muted-foreground">Posiciones que cambian</p>
                     <p className="text-xl font-semibold tabular-nums">{plan.changedKeys.length}</p>
                   </div>
-                  <div className="rounded-lg border bg-slate-50 p-2">
-                    <p className="text-xs text-slate-500">Menor separación interior A</p>
+                  <div className="rounded-lg border bg-muted p-2">
+                    <p className="text-xs text-muted-foreground">Menor separación interior A</p>
                     <p className="text-xl font-semibold tabular-nums">{cm(Math.min(...plan.interior.map(a => a.proposedM)))} cm</p>
                   </div>
                 </div>
-                <h4 className="text-xs font-semibold text-slate-700">Separación interior A (cm)</h4>
+                <h4 className="text-xs font-semibold text-muted-foreground">Separación interior A (cm)</h4>
                 <div className="grid grid-cols-[1fr_1fr_1fr] gap-x-3 gap-y-1 text-xs">
-                  <span className="text-slate-500">Pasillo</span><span className="text-right text-slate-500">Actual</span><span className="text-right text-slate-500">Propuesta</span>
+                  <span className="text-muted-foreground">Pasillo</span><span className="text-right text-muted-foreground">Actual</span><span className="text-right text-muted-foreground">Propuesta</span>
                   {plan.interior.map(a => (
                     <div key={a.code} className="contents">
                       <span className="font-medium">{a.code}</span>
                       <span className="text-right tabular-nums">{cm(a.currentM)}</span>
-                      <span className={`text-right tabular-nums font-medium ${a.proposedM < 0 ? "text-red-700" : ""}`}>{cm(a.proposedM)}</span>
+                      <span className={`text-right tabular-nums font-medium ${a.proposedM < 0 ? "text-destructive" : ""}`}>{cm(a.proposedM)}</span>
                     </div>
                   ))}
                 </div>
-                <details className="text-xs text-slate-600">
+                <details className="text-xs text-muted-foreground">
                   <summary className="cursor-pointer font-medium">Ver separación B efectiva propuesta</summary>
                   <div className="mt-2 space-y-1">{plan.gaps.map(g => <div key={g.key} className="flex justify-between"><span>{g.left} ↔ {g.right}</span><strong>{cm(g.proposedM)} cm</strong></div>)}</div>
                 </details>
@@ -216,13 +216,13 @@ export function AisleSpacingDialog({ revisionId, sectorId, elements, floorLength
             </div>
           ) : null}
           {plan?.errors.length || serverError.length ? (
-            <div className="space-y-1 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-900">
+            <div className="space-y-1 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
               <div className="flex items-center gap-2 font-semibold"><AlertTriangle className="h-4 w-4"/>Conflictos que impiden aplicar</div>
               <ul className="max-h-40 space-y-1 overflow-y-auto">{[...(plan?.errors ?? []), ...serverError].map((message,i) => <li key={i}>{message}</li>)}</ul>
             </div>
           ) : null}
           {plan?.circulationWarnings.length ? (
-            <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
+            <div className="space-y-2 rounded-lg border border-lq-warning/30 bg-lq-warning/10 p-3 text-xs text-lq-warning">
               <p>Persisten extensiones observadas hacia circulación en {plan.circulationWarnings.length} casos. Este ajuste no las elimina ni las autoriza.</p>
               <details><summary className="cursor-pointer">Ver posiciones</summary><ul className="mt-1 max-h-28 overflow-y-auto">{plan.circulationWarnings.map(w => <li key={w}>{w}</li>)}</ul></details>
               <label className="flex items-start gap-2"><input type="checkbox" className="mt-0.5" checked={ack} disabled={busy} onChange={e => setAck(e.target.checked)}/>Entiendo que se documenta un borrador pendiente de validación física.</label>
