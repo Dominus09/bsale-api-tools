@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { Box, ClipboardList, Loader2, Plus, Search, X, ArrowLeftRight, AlertTriangle, History, MapPin, Pencil, Layers } from "lucide-react"
+import { Box, ClipboardList, Loader2, Plus, Search, X, ArrowLeftRight, AlertTriangle, History, MapPin, Pencil, Layers, Printer, QrCode } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -13,6 +13,9 @@ import {
 } from "@/lib/warehouse/api"
 import { PalletLocationMap, type ObservedLocationForm, type BatchLocationForm } from "@/components/warehouse/PalletLocationMap"
 import { PalletBatchReview } from "@/components/warehouse/PalletBatchReview"
+import { PalletLabelsDialog } from "@/components/warehouse/PalletLabelsDialog"
+import { PalletLookupDialog } from "@/components/warehouse/PalletLookupDialog"
+import { labelGroups, MAX_LABEL_PALLETS } from "@/lib/warehouse/palletLabels"
 import { linePayload, type Line } from "@/lib/warehouse/palletForms"
 import { MAX_BATCH_LINES } from "@/lib/warehouse/palletMap"
 import type { WarehouseFacility, WarehouseFloor } from "@/lib/warehouse/types"
@@ -252,8 +255,8 @@ function RegisterDialog({floorId, locations: initialLocations, onClose, onSaved,
   </Dialog>
 }
 
-function DetailDialog({pallet, locations: initialLocations, onClose, onChanged, onEdit, onSimilar}:{
-  pallet:PalletRecord; locations:PalletLocations; onClose:()=>void; onChanged:()=>void;onEdit:(p:PalletRecord)=>void;onSimilar:(p:PalletRecord)=>void
+function DetailDialog({pallet, locations: initialLocations, onClose, onChanged, onEdit, onSimilar, onPrint}:{
+  pallet:PalletRecord; locations:PalletLocations; onClose:()=>void; onChanged:()=>void;onEdit:(p:PalletRecord)=>void;onSimilar:(p:PalletRecord)=>void;onPrint:(p:PalletRecord)=>void
 }) {
   const [locations,setLocations]=useState(initialLocations)
   const [data,setData]=useState(pallet)
@@ -299,8 +302,8 @@ function DetailDialog({pallet, locations: initialLocations, onClose, onChanged, 
         </div>
         {error?<p className="rounded bg-destructive/10 p-2 text-xs text-destructive">{error}</p>:null}
       </div>
-      <DialogFooter className="border-t px-5 py-3">
-        {mode==="view"?<>{data.status==="active"&&data.events?<><Button type="button" variant="outline" onClick={()=>onEdit(data)}><Pencil className="mr-1 h-4 w-4"/>Editar datos</Button><Button type="button" variant="outline" onClick={()=>onSimilar(data)}><Layers className="mr-1 h-4 w-4"/>Registrar similares</Button><Button type="button" variant="outline" onClick={()=>{setReason("");setMode("location")}}><ArrowLeftRight className="mr-1 h-4 w-4"/>Ubicación observada</Button><Button type="button" variant="outline" className="text-destructive" onClick={()=>{setReason("");setMode("void")}}>Anular registro</Button></>:null}<Button type="button" onClick={onClose}>Cerrar</Button></>:
+      <DialogFooter className="flex-wrap border-t px-5 py-3">
+        {mode==="view"?<>{data.status==="active"&&data.events?<><Button type="button" variant="outline" onClick={()=>onPrint(data)}><Printer className="mr-1 h-4 w-4"/>Etiqueta</Button><Button type="button" variant="outline" onClick={()=>onEdit(data)}><Pencil className="mr-1 h-4 w-4"/>Editar datos</Button><Button type="button" variant="outline" onClick={()=>onSimilar(data)}><Layers className="mr-1 h-4 w-4"/>Registrar similares</Button><Button type="button" variant="outline" onClick={()=>{setReason("");setMode("location")}}><ArrowLeftRight className="mr-1 h-4 w-4"/>Ubicación observada</Button><Button type="button" variant="outline" className="text-destructive" onClick={()=>{setReason("");setMode("void")}}>Anular registro</Button></>:null}<Button type="button" onClick={onClose}>Cerrar</Button></>:
           <><Button type="button" variant="outline" disabled={busy} onClick={()=>setMode("view")}>Volver</Button><Button type="button" disabled={busy||reason.trim().length<3} onClick={()=>void change()}>{busy?"Guardando…":mode==="void"?"Confirmar anulación":"Guardar observación"}</Button></>}
       </DialogFooter>
     </DialogContent>
@@ -327,6 +330,10 @@ export function PalletRegister(){
   const [selected,setSelected]=useState<PalletRecord|null>(null)
   const [editing,setEditing]=useState<PalletRecord|null>(null)
   const [reload,setReload]=useState(0)
+  const [labelIds,setLabelIds]=useState<number[]>([])
+  const [labelGroup,setLabelGroup]=useState("")
+  const [printing,setPrinting]=useState<{floorId:number;ids:number[]}|null>(null)
+  const [lookup,setLookup]=useState(false)
   useEffect(()=>{
     let cancelled=false
     listWarehouseFacilities().then(f=>{if(!cancelled){setFacilities(f);setFacility((f.find(x=>x.code==="BC")||f[0])?.id??null);if(!f.length)setLoading(false)}})
@@ -336,7 +343,7 @@ export function PalletRegister(){
   useEffect(()=>{
     if(facility==null)return
     let cancelled=false
-    setFloor(null);setFloors([]);setLocations(null);setRecords([]);setLoading(true);setError("")
+    setFloor(null);setFloors([]);setLocations(null);setRecords([]);setLabelIds([]);setLabelGroup("");setLoading(true);setError("")
     listWarehouseFloors(facility).then(f=>{if(!cancelled){setFloors(f);setFloor((f.find(x=>x.code==="PISO1")||f[0])?.id??null);if(!f.length)setLoading(false)}})
       .catch(e=>{if(!cancelled){setError(err(e));setLoading(false)}})
     return()=>{cancelled=true}
@@ -351,18 +358,25 @@ export function PalletRegister(){
     return()=>{cancelled=true}
   },[floor,filter,offset,reload])
   const refresh=useCallback(()=>setReload(x=>x+1),[])
+  const groups=locations?labelGroups(locations):[]
+  const currentGroup=groups.find(g=>String(g.id)===labelGroup)
+  const pageIds=records.filter(p=>p.status==="active").map(p=>p.id)
+  const pageSelected=pageIds.length>0&&pageIds.every(id=>labelIds.includes(id))
+  const selectLabels=(ids:number[])=>{if(ids.length>MAX_LABEL_PALLETS){setError("Máximo "+MAX_LABEL_PALLETS+" etiquetas por impresión. Selecciona grupos más pequeños.");return}setLabelIds(ids)}
+  const print=(ids:number[],floorId:number|null=floor)=>{if(floorId===null||!ids.length||ids.length>MAX_LABEL_PALLETS)return;setPrinting({floorId,ids:[...ids]})}
   return <div className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div><h1 className="text-xl font-semibold tracking-tight">Registro de pallets</h1><p className="text-sm text-muted-foreground">Levantamiento físico · Identidades persistentes, sin movimientos de stock comercial</p></div>
       <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="outline" onClick={()=>setLookup(true)}><QrCode className="mr-2 h-4 w-4"/>Consultar QR</Button>
         <Button type="button" variant="outline" disabled={!locations?.revision||locations.floor.floor_id!==floor||loading} onClick={()=>{setNotice("");setTemplate(null);setStartMultiple(true);setOpen(true)}}><Layers className="mr-2 h-4 w-4"/>Registro masivo</Button>
         <Button type="button" disabled={!locations||locations.floor.floor_id!==floor||loading} onClick={()=>{setNotice("");setTemplate(null);setStartMultiple(false);setOpen(true)}}><Plus className="mr-2 h-4 w-4"/>Registrar pallet</Button>
       </div>
     </div>
     <div className="flex items-start gap-2 rounded-lg border border-lq-warning/30 bg-lq-warning/10 p-3 text-xs text-lq-warning"><AlertTriangle className="h-4 w-4 shrink-0"/>Las ubicaciones y niveles registran observaciones. No autorizan uso de circulación, espacios bajo escalera ni apilamiento. No se calculan existencias de Bsale ni capacidad disponible a partir de registros parciales.</div>
     <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
-      <label className="min-w-[180px] space-y-1 text-xs font-medium">Bodega<select className={selectClass} value={facility??""} disabled={open||!!selected||!!editing} onChange={e=>{setOffset(0);setFacility(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{facilities.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
-      <label className="min-w-[160px] space-y-1 text-xs font-medium">Piso<select className={selectClass} value={floor??""} disabled={open||!!selected||!!editing} onChange={e=>{setOffset(0);setFloor(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{floors.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
+      <label className="min-w-[180px] space-y-1 text-xs font-medium">Bodega<select className={selectClass} value={facility??""} disabled={open||!!selected||!!editing||!!printing||lookup} onChange={e=>{setOffset(0);setFacility(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{facilities.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
+      <label className="min-w-[160px] space-y-1 text-xs font-medium">Piso<select className={selectClass} value={floor??""} disabled={open||!!selected||!!editing||!!printing||lookup} onChange={e=>{setOffset(0);setLabelIds([]);setLabelGroup("");setFloor(Number(e.target.value)||null)}}><option value="" disabled>Seleccionar</option>{floors.map(f=><option key={f.id} value={f.id}>{f.code} · {f.name}</option>)}</select></label>
       <form className="flex min-w-[250px] flex-1 gap-2" onSubmit={e=>{e.preventDefault();setOffset(0);setFilter(query.trim())}}>
         <Input placeholder="Buscar PAL, producto, lote, ubicación..." value={query} maxLength={120} onChange={e=>setQuery(e.target.value)}/>
         <Button variant="outline" type="submit"><Search className="h-4 w-4"/></Button>
@@ -376,15 +390,23 @@ export function PalletRegister(){
       <div className="rounded-lg border bg-card p-3"><p className="text-xs text-muted-foreground">Posiciones geométricas de referencia</p><p className="text-lg font-semibold">{locations.items.length}</p><p className="text-[11px] text-muted-foreground">Incluye posiciones provisionales; no es capacidad autorizada.</p></div>
       <div className="rounded-lg border bg-card p-3"><p className="text-xs text-muted-foreground">Ubicaciones/niveles registrados activos</p><p className="text-lg font-semibold">{locations.observed_slots.length}</p><p className="text-[11px] text-muted-foreground">Levantamiento parcial, no ocupación certificada.</p></div>
     </div>:null}
+    <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3">
+      <div className="mr-auto"><p className="text-sm font-semibold">Etiquetas QR</p><p className="text-xs text-muted-foreground">{labelIds.length} seleccionadas en este piso (incluye otras páginas). Sólo pallets activos.</p></div>
+      {groups.length?<><label className="min-w-[150px] space-y-1 text-xs font-medium">Pasillo / sector (todos los niveles)<select className={selectClass} value={labelGroup} onChange={e=>setLabelGroup(e.target.value)} disabled={loading}><option value="">Seleccionar</option>{groups.map(g=><option key={g.id} value={g.id}>{g.code} · {g.ids.length} pallets</option>)}</select></label>
+        <Button type="button" variant="outline" disabled={!currentGroup||loading} onClick={()=>{if(currentGroup)selectLabels(currentGroup.ids)}}>Seleccionar pasillo</Button></>:null}
+      <Button type="button" variant="ghost" disabled={!labelIds.length} onClick={()=>setLabelIds([])}>Limpiar</Button>
+      <Button type="button" disabled={!labelIds.length||loading||floor===null} onClick={()=>print(labelIds)}><Printer className="mr-1 h-4 w-4"/>Imprimir {labelIds.length||""} etiquetas</Button>
+    </div>
     <section className="overflow-hidden rounded-lg border bg-card">
       <div className="flex items-center justify-between border-b p-3"><h2 className="flex items-center gap-2 text-sm font-semibold"><ClipboardList className="h-4 w-4"/>Pallets registrados</h2><span className="text-xs text-muted-foreground">{records.length?offset+1+"–"+(offset+records.length):"Sin filas"}</span></div>
       {loading?<div className="flex items-center justify-center gap-2 p-10 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin"/>Cargando…</div>:!records.length?<div className="p-10 text-center text-sm text-muted-foreground"><Box className="mx-auto mb-2 h-8 w-8"/>No hay registros para esta búsqueda.</div>:<div className="overflow-x-auto">
-        <table className="w-full min-w-[850px] text-left text-xs"><thead className="bg-muted text-muted-foreground"><tr>{["Pallet","Ubicación observada","Productos / variantes","Cantidad","Vencimiento","Estado"].map(x=><th className="p-3 font-medium" key={x}>{x}</th>)}</tr></thead>
+        <table className="w-full min-w-[850px] text-left text-xs"><thead className="bg-muted text-muted-foreground"><tr><th className="w-10 p-3"><input type="checkbox" aria-label="Seleccionar pallets activos de esta página" checked={pageSelected} disabled={!pageIds.length} onChange={()=>selectLabels(pageSelected?labelIds.filter(id=>!pageIds.includes(id)):[...new Set([...labelIds,...pageIds])])}/></th>{["Pallet","Ubicación observada","Productos / variantes","Cantidad","Vencimiento","Estado"].map(x=><th className="p-3 font-medium" key={x}>{x}</th>)}</tr></thead>
           <tbody>{records.map(p=>{
             const known=p.lines.every(l=>l.total_units!==null)
             const expiry=p.lines.map(l=>l.expires_on).filter((x):x is string=>!!x).sort()[0]
             const unknownExpiry=p.lines.some(l=>l.expiry_status==="unknown")
             return <tr key={p.id} className="border-t hover:bg-muted">
+              <td className="p-3"><input type="checkbox" aria-label={"Seleccionar "+p.code} disabled={p.status!=="active"} checked={labelIds.includes(p.id)&&p.status==="active"} onChange={()=>selectLabels(labelIds.includes(p.id)?labelIds.filter(id=>id!==p.id):[...labelIds,p.id])}/></td>
               <td className="p-3"><button type="button" className="font-semibold text-destructive underline-offset-2 hover:underline" onClick={()=>setSelected(p)}>{p.code}</button><p className="text-muted-foreground">{kindLabels[p.pallet_kind]}</p></td>
               <td className="p-3">{p.position_code_snap?p.position_code_snap+" · N"+p.observed_level:"Sin verificar"}{p.location_in_current_layout===false?<p className="text-lq-warning">No figura en plano vigente</p>:p.current_position_code&&p.current_position_code!==p.position_code_snap?<p className="text-lq-warning">Código actual: {p.current_position_code}</p>:null}</td>
               <td className="max-w-[360px] p-3">{p.lines.slice(0,2).map(l=><div key={l.id}><strong>{l.product_name_snap}</strong> · {l.variant_name_snap||"Variante sin nombre"}<p className="text-[11px] text-muted-foreground">{l.product_type_snap||"Sin tipo"} · {l.barcode_snap||"ID "+l.variant_id}</p></div>)}{p.lines.length>2?<p className="text-muted-foreground">+{p.lines.length-2} líneas</p>:null}</td>
@@ -401,8 +423,10 @@ export function PalletRegister(){
       onBatchSaved={r=>{setOpen(false);setNotice(r.items.length+" pallets "+(r.replayed?"recuperados de la operación anterior":"registrados juntos")+". Identidades independientes; sin cambios en Bsale.");setOffset(0);setFilter("");setQuery("");refresh()}}
       onSaved={p=>{setOpen(false);setNotice(p.code+" registrado. No se modificó stock Bsale.");setOffset(0);setFilter("");setQuery("");refresh()}}/>:null}
     {selected&&locations?<DetailDialog pallet={selected} locations={locations} onClose={()=>setSelected(null)}
-      onEdit={p=>{setSelected(null);setEditing(p)}} onSimilar={p=>{setSelected(null);setTemplate(p);setStartMultiple(true);setOpen(true)}} onChanged={()=>{setSelected(null);setNotice("Observación registrada con historial.");refresh()}}/>:null}
+      onEdit={p=>{setSelected(null);setEditing(p)}} onSimilar={p=>{setSelected(null);setTemplate(p);setStartMultiple(true);setOpen(true)}} onPrint={p=>{setSelected(null);print([p.id],p.floor_id)}} onChanged={()=>{setSelected(null);setNotice("Observación registrada con historial.");refresh()}}/>:null}
     {editing&&locations&&floor!=null?<RegisterDialog key={"edit-"+editing.id} initial={editing} floorId={floor} locations={locations}
       onClose={()=>setEditing(null)} onSaved={p=>{setEditing(null);setNotice(p.code+" actualizado. Identidad e historial conservados.");refresh()}}/>:null}
+    {lookup?<PalletLookupDialog onClose={()=>setLookup(false)} onPrint={p=>{setLookup(false);print([p.id],p.floor_id)}}/>:null}
+    {printing?<PalletLabelsDialog floorId={printing.floorId} ids={printing.ids} onClose={()=>setPrinting(null)}/>:null}
   </div>
 }

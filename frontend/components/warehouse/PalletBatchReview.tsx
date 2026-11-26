@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { AlertTriangle, ArrowLeft, CheckCircle2, Layers, Loader2, Plus, X } from "lucide-react"
+import { AlertTriangle, ArrowLeft, CheckCircle2, Layers, Loader2, Plus, X, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -10,6 +10,7 @@ import { WarehouseApiError } from "@/lib/warehouse/types"
 import { validatePalletContents, type Line, type PalletKind } from "@/lib/warehouse/palletForms"
 import { MAX_BATCH_LINES, MAX_BATCH_PALLETS, batchSelectable, slotsAtLevel } from "@/lib/warehouse/palletMap"
 import type { BatchLocationForm } from "@/components/warehouse/PalletLocationMap"
+import { PalletLabelsDialog } from "@/components/warehouse/PalletLabelsDialog"
 
 type Common = {kind:PalletKind;received:string;notes:string;lines:Line[]}
 type Row = Common & {id:number;code:string}
@@ -32,6 +33,7 @@ export function PalletBatchReview({floorId,locations,selection,common,onBack,onF
   const [error,setError]=useState("")
   const [uncertain,setUncertain]=useState(false)
   const [receipt,setReceipt]=useState<PalletBatchResult|null>(null)
+  const [printing,setPrinting]=useState(false)
   const inFlight=useRef(false)
   // Después de una respuesta perdida, congelar el cuerpo completo y conservar
   // su UUID. Nunca crear otra clave automáticamente durante el reintento.
@@ -103,7 +105,7 @@ export function PalletBatchReview({floorId,locations,selection,common,onBack,onF
     }finally{inFlight.current=false;setBusy(false)}
   }
   const locked=busy||uncertain
-  return <Dialog open onOpenChange={v=>{if(!v){if(receipt)onFinished(receipt);else back()}}}>
+  return <Dialog open onOpenChange={v=>{if(!v&&!printing){if(receipt)onFinished(receipt);else back()}}}>
     <DialogContent showCloseButton={!locked} className="flex max-h-[94vh] w-[97vw] flex-col gap-0 overflow-hidden p-0 sm:max-w-[1420px]">
       <DialogHeader className="shrink-0 border-b bg-card px-5 py-4 pr-14">
         <DialogTitle className="flex items-center gap-2">{receipt?<CheckCircle2 className="h-5 w-5 text-lq-success"/>:<Layers className="h-5 w-5 text-primary"/>}{receipt?"Registro masivo confirmado":"Revisar "+rows.length+" pallets"}</DialogTitle>
@@ -154,11 +156,12 @@ export function PalletBatchReview({floorId,locations,selection,common,onBack,onF
         </>}
       </div>
       <DialogFooter className="shrink-0 border-t bg-card px-5 py-3">
-        {receipt?<Button type="button" onClick={()=>onFinished(receipt)}>Cerrar y actualizar listado</Button>:<>
+        {receipt?<><Button type="button" variant="outline" disabled={!receipt.items.some(p=>p.status==="active")} onClick={()=>setPrinting(true)}><Printer className="mr-1 h-4 w-4"/>Imprimir etiquetas activas</Button><Button type="button" onClick={()=>onFinished(receipt)}>Cerrar y actualizar listado</Button></>:<>
           <Button type="button" variant="outline" disabled={locked} onClick={back}><ArrowLeft className="mr-1 h-4 w-4"/>Volver a datos comunes</Button>
           <Button type="button" disabled={busy||(!confirmed&&!uncertain)} onClick={()=>void submit()}>{busy?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:null}{uncertain?"Reintentar misma operación":"Registrar "+rows.length+" pallets juntos"}</Button>
         </>}
       </DialogFooter>
+      {printing&&receipt?<PalletLabelsDialog floorId={floorId} ids={receipt.items.filter(p=>p.status==="active").map(p=>p.id)} onClose={()=>setPrinting(false)}/>:null}
     </DialogContent>
   </Dialog>
 }

@@ -100,3 +100,17 @@ class PalletBatchIn(StrictModel):
         if sum(len(p.lines) for p in self.items) > MAX_BATCH_LINES:
             raise ValueError(f"Máximo {MAX_BATCH_LINES} líneas por registro masivo.")
         return self
+
+
+MAX_LABEL_PALLETS = 120
+
+
+class PalletLabelsIn(StrictModel):
+    floor_id: Positive
+    pallet_ids: list[Positive] = Field(min_length=1,max_length=MAX_LABEL_PALLETS)
+
+    @model_validator(mode="after")
+    def unique_ids(self):
+        if len(set(self.pallet_ids)) != len(self.pallet_ids):
+            raise ValueError("Seleccione identidades de pallet distintas.")
+        return self

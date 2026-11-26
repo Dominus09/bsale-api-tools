@@ -15,7 +15,8 @@ from backend.services.warehouse.errors import (
     WarehouseConflictError, WarehouseError, WarehouseNotFoundError, WarehouseValidationError,
 )
 from backend.services.warehouse.service import _serialize_row
-from backend.services.warehouse.pallet_models import MAX_BATCH_PALLETS, MAX_BATCH_LINES
+from backend.services.warehouse.pallet_models import MAX_BATCH_PALLETS, MAX_BATCH_LINES, MAX_LABEL_PALLETS
+from backend.services.warehouse.pallet_labels import make_pallet_label
 
 # Mismo alcance de empresa que el Editor Maestro existente. No aceptar
 # company_id desde el cliente. Ampliar alcance mediante permisos explícitos.
@@ -139,10 +140,15 @@ class PalletService:
 
     def _positions(self, cur, floor_id, revision_id):
         cur.execute("""SELECT pe.id, le.code_snap AS code, le.name_snap AS name,
+                       parent.physical_element_id AS parent_id, parent.code_snap AS parent_code,
                        le.validation_status, le.stack_levels_max,
                        le.constraints_json, le.physical_meta_snap, le.meta_json
                        FROM warehouse.layout_elements le JOIN warehouse.physical_elements pe
                          ON pe.id=le.physical_element_id
+                       LEFT JOIN warehouse.layout_elements parent
+                         ON parent.revision_id=le.revision_id
+                         AND parent.physical_element_id=le.parent_physical_id_snap
+                         AND parent.element_type_snap IN ('aisle','sector')
                        WHERE le.revision_id=%s AND pe.floor_id=%s AND pe.status='active'
                          AND pe.element_type='position' AND le.element_type_snap='position'
                        ORDER BY le.code_snap""", (revision_id, floor_id))
@@ -160,6 +166,32 @@ class PalletService:
             for slot in occupied:
                 slot["pallet_code"] = pallet_code(slot["pallet_id"])
             return {"floor": floor, "revision": rev, "items": items, "observed_slots": occupied}
+
+    def labels(self, floor_id: int, pallet_ids: list[int]):
+        """Leer una selección de identidades activas del piso, sin escrituras.
+
+        Bloqueo compartido y orden estable: los editores de un pallet toman el
+        bloqueo de la misma fila antes de cambiar sus líneas. Rechazar la
+        selección completa si un pallet ya no está activo o no pertenece al piso.
+        Generar los QR después de cerrar la transacción.
+        """
+        if (not 1 <= len(pallet_ids) <= MAX_LABEL_PALLETS
+            or len(set(pallet_ids)) != len(pallet_ids)
+            or any(type(i) is not int or i <= 0 for i in pallet_ids)):
+            raise WarehouseValidationError("Seleccione pallets distintos dentro del límite permitido.")
+        with self._transaction() as cur:
+            self._floor(cur, floor_id)
+            cur.execute("""SELECT id FROM warehouse.pallets
+                WHERE company_id=%s AND floor_id=%s AND status='active'
+                  AND id=ANY(%s::bigint[]) ORDER BY id FOR SHARE""",
+                (COMPANY_ID,floor_id,pallet_ids))
+            found = {r[0] for r in cur.fetchall()}
+            if found != set(pallet_ids):
+                raise WarehouseConflictError("La selección contiene pallets anulados, inexistentes o de otro piso. Actualice el listado.",
+                                             code="labels_selection_changed")
+            records = [self._get(cur,i) for i in pallet_ids]
+        return {"items":[make_pallet_label(p) for p in records],
+                "generated_at":datetime.now(timezone.utc).isoformat()}
 
     def search_products(self, floor_id: int, query: str):
         query = query.strip()

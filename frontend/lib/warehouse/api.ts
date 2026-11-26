@@ -228,6 +228,7 @@ export type PalletProduct = {
 }
 export type PalletLocation = {
   id: number; code: string; name: string; validation_status: string
+  parent_id?: number | null; parent_code?: string | null
   stack_levels_max: number | null; constraints_json: Record<string, unknown>
   physical_meta_snap: Record<string, unknown>; meta_json: Record<string, unknown>
 }
@@ -313,4 +314,18 @@ export type PalletBatchInput = {
 export type PalletBatchResult = {batch_key:string;replayed:boolean;items:PalletRecord[]}
 export function registerWarehousePalletBatch(body:PalletBatchInput):Promise<PalletBatchResult>{
   return warehouseFetch("/warehouse/pallets/batch",{method:"POST",body:JSON.stringify(body)})
+}
+
+
+export type PalletLabelLine = Pick<PalletLine,
+  "variant_id"|"product_name_snap"|"variant_name_snap"|"product_type_snap"|"units_per_box_snap"|
+  "quantity_status"|"boxes"|"loose_units"|"total_units"|"expiry_status"|"expires_on"|"lot">
+export type PalletLabelData = Pick<PalletRecord,"id"|"code"|"pallet_kind"|"row_version"|"received_on"> & {
+  lines:PalletLabelLine[]; qr_value:string; qr_matrix:string[]
+}
+export type PalletLabelBatch = {items:PalletLabelData[];generated_at:string}
+export function previewPalletLabels(floorId:number,ids:number[]):Promise<PalletLabelBatch>{
+  return warehouseFetch("/warehouse/pallets/labels/preview",{
+    method:"POST",body:JSON.stringify({floor_id:floorId,pallet_ids:ids})
+  })
 }

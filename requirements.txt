@@ -15,3 +15,4 @@ pandas
 openpyxl
 pdfplumber
 tzdata
+qrcode==8.2
