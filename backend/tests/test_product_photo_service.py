@@ -101,3 +101,12 @@ def test_expired_preview_rejected(monkeypatch):
         with pytest.raises(HTTPException) as exc:
             p.verify_preview(token, **args)
         assert exc.value.status_code == 409
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, True), ("", True), ("/products/00123.webp", True),
+    ("https://cat.quillotana.cl/products/00123.webp", True),
+    ("/placeholder2.webp", True), ("/products/00456.webp", False),
+    ("https://example.com/product.jpg", False),
+])
+def test_catalog_image_mapping_must_be_compatible(raw, expected):
+    assert p.catalog_url_is_compatible(raw, "00123") is expected

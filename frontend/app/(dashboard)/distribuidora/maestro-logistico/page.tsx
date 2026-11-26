@@ -184,15 +184,15 @@ export default function MaestroLogisticoPage() {
   async function savePallet(row: ProductMasterRow, raw: string) {
     const clean = raw.trim()
     const value = clean === "" ? null : Number(clean)
-    if (value !== null && (!Number.isSafeInteger(value) || value < 1 || value > 2147483647)) {
-      setPalletError("Cajas por pallet debe ser un número entero positivo."); return
+    if (value !== null && (!/^\d+$/.test(clean) || !Number.isSafeInteger(value) || value < 1 || value > 2147483647)) {
+      setPalletError("Cajas por pallet debe ser un número entero positivo."); setPalletRevision(v => v + 1); return
     }
     if (!palletWrites || palletSaving !== null || palletRows[row.id]?.boxes_per_pallet === value) return
     setPalletSaving(row.id); setPalletError("")
     try {
       const result = await patchPalletBoxes(row.id, value)
       setPalletRows(prev => ({ ...prev, [row.id]: result })); setPalletRevision(v => v + 1)
-    } catch (e) { setPalletError(e instanceof Error ? e.message : "No se pudo guardar el pallet.") }
+    } catch (e) { setPalletError(e instanceof Error ? e.message : "No se pudo guardar el pallet."); setPalletRevision(v => v + 1) }
     finally { setPalletSaving(null) }
   }
 

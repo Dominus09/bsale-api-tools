@@ -15,6 +15,7 @@ import threading
 import time
 import warnings
 from functools import lru_cache
+from urllib.parse import urljoin, urlsplit
 
 import requests
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -31,6 +32,7 @@ SIZE = 1000
 TTL = 900
 _AI_LOCK = threading.Lock()
 _SHA = re.compile(r"[0-9a-f]{40}")
+_PLACEHOLDER = re.compile(r"(?:icon\.svg|logo-seal\.png|placeholder(?:2)?\.(?:png|webp)|(?:sin[-_]?foto|no[-_]?image|no[-_]?foto|default|generico|imagen[-_]?default|sin[-_]?imagen)\.(?:png|jpg|jpeg|webp|svg))", re.IGNORECASE)
 
 
 def flag(name: str) -> bool:
@@ -48,6 +50,19 @@ def safe_barcode(value: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", value):
         raise HTTPException(422, "Código de barras no válido para el nombre de archivo.")
     return value
+
+
+def catalog_url_is_compatible(raw: str | None, barcode: str) -> bool:
+    """Same policy as catalog static fallback: do not overwrite unrelated API images."""
+    value = (raw or "").strip()
+    if not value:
+        return True
+    try:
+        parsed = urlsplit(urljoin("https://cat.quillotana.cl/", value))
+        same = parsed.scheme == "https" and parsed.netloc == "cat.quillotana.cl" and parsed.path == f"/products/{safe_barcode(barcode)}.webp"
+        return bool(same or _PLACEHOLDER.fullmatch(parsed.path.rsplit("/", 1)[-1]))
+    except ValueError:
+        return False
 
 
 def digest(data: bytes) -> str:

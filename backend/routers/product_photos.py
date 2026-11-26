@@ -53,6 +53,8 @@ def _product(row_id: int) -> dict:
             elif len(variants) != 1 or catalog_ids != set(variants):
                 reason = "No se pudo verificar una variante única en el catálogo vigente."
             image_urls = sorted({str(r[1]) for r in catalog_rows if r[1]})
+            if reason is None and any(not photos.catalog_url_is_compatible(url, barcode) for url in image_urls):
+                reason = "El catálogo apunta a otra imagen. Revisa la asociación antes de reemplazarla."
             return {"row_id": int(row[0]), "barcode": barcode, "variant_id": row[2],
                     "product_name": row[3], "variant_name": row[4], "sku": row[5],
                     "catalog_variant_ids": sorted(catalog_ids), "catalog_image_urls": image_urls,

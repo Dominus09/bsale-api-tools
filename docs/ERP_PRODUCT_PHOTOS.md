@@ -23,3 +23,6 @@ Repositorio inspeccionado: Dominus09/cat-quillotana, main, public/products/{barc
 3. Preview JPG, PNG, HEIC, botellas transparentes y packs; sin llamadas PUT.
 4. Con repo/branch de pruebas aislado o mocked GitHub, verificar nueva foto y reemplazo; no probar escrituras sobre catálogo real sin autorización.
 5. Activación controlada: verificar URL de ERP test.quillotana.cl, token, flags, publicar solo SKU aprobado, verificar commit, despliegue del catálogo y foto de la variante en cat.quillotana.cl. No ejecutar migraciones, no deploy ni activación de flags por este PR. Si un commit se confirmó pero falla la actualización de auditoría, buscar referencia audit_id en GitHub y reconciliar la fila started; no repetir publicación.
+
+## Catalog companion PR
+The companion cat-quillotana branch `feat/catalog-verified-local-photos` builds a verified filename/content-version manifest. Enable `NEXT_PUBLIC_CATALOG_LOCAL_PHOTOS_ENABLED=1` only after catalog QA; confirm it is deployed before enabling ERP publication. ERP blocks an API image pointing to an unrelated file; no implicit override. Missing/known placeholder images may use a newly deployed local file. The catalog and ERP switches remain OFF by default.

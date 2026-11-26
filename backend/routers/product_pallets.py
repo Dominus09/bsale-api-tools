@@ -8,7 +8,7 @@ router = APIRouter(prefix="/products-master", tags=["product-pallets"])
 
 
 class PalletPatch(BaseModel):
-    boxes_per_pallet: int | None = Field(..., gt=0, strict=True)
+    boxes_per_pallet: int | None = Field(..., gt=0, le=2147483647, strict=True)
 
 
 @router.get("/pallets")
