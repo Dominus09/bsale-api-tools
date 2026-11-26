@@ -124,9 +124,10 @@ def _products_master_where(
     if search is not None and search.strip():
         term = f"%{search.strip()}%"
         where_parts.append(
-            "(product_name ILIKE %s OR variant_name ILIKE %s OR barcode ILIKE %s)"
+            "(product_name ILIKE %s OR variant_name ILIKE %s OR barcode ILIKE %s "
+            "OR sku ILIKE %s OR variant_id::text = %s)"
         )
-        params.extend([term, term, term])
+        params.extend([term, term, term, term, search.strip()])
 
     if logistics_incomplete:
         where_parts.append("logistics_completed = FALSE")
@@ -254,7 +255,7 @@ def list_products_master(
     data_sql = f"""
         SELECT {_PM_SELECT}
         {base}{where_sql}
-        ORDER BY product_name ASC NULLS LAST, barcode ASC
+        ORDER BY product_name ASC NULLS LAST, barcode ASC, id ASC
         LIMIT %s OFFSET %s
     """
     data_params = list(params) + [limit, offset]

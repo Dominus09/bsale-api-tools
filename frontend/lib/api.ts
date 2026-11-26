@@ -5242,6 +5242,7 @@ export async function patchProductMasterById(
 
 export async function getProductsMaster(
   params?: GetProductsMasterParams,
+  signal?: AbortSignal,
 ): Promise<ProductsMasterPage> {
   const qs = new URLSearchParams()
   if (params?.without_supplier) {
@@ -5263,6 +5264,7 @@ export async function getProductsMaster(
   const suffix = qs.toString() ? `?${qs.toString()}` : ""
   const res = await fetch(`${API_URL}/products-master${suffix}`, {
     headers: getAuthHeaders(),
+    signal,
   })
   if (!res.ok) {
     throw new Error("Error al cargar productos maestros")
