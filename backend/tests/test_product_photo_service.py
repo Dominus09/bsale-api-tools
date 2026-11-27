@@ -110,3 +110,14 @@ def test_expired_preview_rejected(monkeypatch):
 ])
 def test_catalog_image_mapping_must_be_compatible(raw, expected):
     assert p.catalog_url_is_compatible(raw, "00123") is expected
+
+def test_heic_can_be_converted_without_browser_support():
+    pillow_heif = pytest.importorskip("pillow_heif")
+    pillow_heif.register_heif_opener()
+    out = io.BytesIO()
+    Image.new("RGB", (320, 180), (180, 30, 40)).save(out, format="HEIF")
+    prepared = p.prepare_photo(out.getvalue(), "white")
+    p.validate_prepared(prepared)
+    with Image.open(io.BytesIO(prepared)) as img:
+        assert img.format == "WEBP"
+        assert img.size == (1000, 1000)
