@@ -294,6 +294,11 @@ export interface ProductMasterRow {
   variant_name: string | null
   product_type: string | null
   has_catalog_photo?: boolean
+  stock_consolidated?: number | null
+  stock_companies?: number | null
+  stock_partial?: boolean | null
+  stock_shared_barcode?: boolean | null
+  stock_updated_at?: string | null
   supplier_id: number | null
   units_per_box?: number | null
   weight_box_kg?: number | null
@@ -5185,9 +5190,21 @@ export interface ProductPhotoInventoryStatus {
   source: "github_webp"
 }
 
+export type ProductStockFilter = "all" | "with" | "without" | "unknown"
+export interface ProductStockInventoryStatus {
+  available: boolean
+  companies_total: number | null
+  companies_with_data: number | null
+  latest_sync_at: string | null
+  source: string
+  scope: string
+  reason?: string
+}
+
 export interface ProductsMasterPage {
   items: ProductMasterRow[]
   photo_inventory?: ProductPhotoInventoryStatus
+  stock_inventory?: ProductStockInventoryStatus
   total: number
   limit: number
   offset: number
@@ -5196,6 +5213,8 @@ export interface ProductsMasterPage {
 export interface GetProductsMasterParams {
   product_type?: string
   photo_status?: ProductPhotoFilter
+  stock_status?: ProductStockFilter
+  include_stock?: boolean
   management_page?: boolean
   without_supplier?: boolean
   supplier_id?: number
@@ -5262,7 +5281,11 @@ export async function getProductsMaster(
     qs.set("without_supplier", "true")
   }
   if (params?.product_type?.trim()) qs.set("product_type", params.product_type.trim())
-  if (params?.management_page) qs.set("photo_status", params.photo_status ?? "all")
+  if (params?.management_page) {
+    qs.set("photo_status", params.photo_status ?? "all")
+    if (params.include_stock) qs.set("include_stock", "true")
+    if (params.stock_status) qs.set("stock_status", params.stock_status)
+  }
   if (params?.supplier_id != null && Number.isFinite(params.supplier_id)) {
     qs.set("supplier_id", String(Math.trunc(params.supplier_id)))
   }
@@ -5292,6 +5315,7 @@ export async function getProductsMaster(
     return {
       items: data.items,
       photo_inventory: data.photo_inventory,
+      stock_inventory: data.stock_inventory,
       total: Number(data.total) || 0,
       limit: Number(data.limit) || limit,
       offset: Number(data.offset) ?? offset,

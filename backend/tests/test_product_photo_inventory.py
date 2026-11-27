@@ -126,3 +126,25 @@ def test_management_required_for_photo_inventory(client):
     app.dependency_overrides[pm.require_management_access] = denied
     assert http.get("/products-master/management-page").status_code == 403
     inventory.get_inventory.assert_not_called()
+
+
+def test_stock_filter_only_management_and_valid_values(client):
+    _, http = client
+    base = "/products-master/management-page"
+    assert http.get(base, params={"stock_status": "invalid"}).status_code == 422
+    assert http.get(base, params={"include_stock": "true", "stock_status": "with"}).status_code == 200
+    kwargs = pm._list_master_page.call_args.kwargs
+    assert kwargs["include_stock"] is True
+    assert kwargs["stock_status"] == "with"
+    assert kwargs["stock_company_ids"] is None
+
+
+def test_stock_unavailable_all_falls_back_but_with_fails(client):
+    _, http = client
+    pm._list_master_page.side_effect = [HTTPException(403, "Acceso restringido"), {"items": [], "total": 0}]
+    result = http.get("/products-master/management-page", params={"include_stock": "true"})
+    assert result.status_code == 200
+    assert result.json()["stock_inventory"]["available"] is False
+    assert "include_stock" not in pm._list_master_page.call_args.kwargs
+    pm._list_master_page.side_effect = HTTPException(403, "Acceso restringido")
+    assert http.get("/products-master/management-page", params={"stock_status": "with"}).status_code == 403

@@ -23,6 +23,8 @@ import {
   getProductMasterTypes,
   type ProductPhotoFilter,
   type ProductPhotoInventoryStatus,
+  type ProductStockFilter,
+  type ProductStockInventoryStatus,
   getProductsMasterLogisticsStats,
   getSuppliers,
   patchProductMasterById,
@@ -149,6 +151,8 @@ export default function MaestroLogisticoPage() {
   const [filterSupplierId, setFilterSupplierId] = useState<string>(FILTER_ALL_SUPPLIERS)
   const [filterType, setFilterType] = useState(FILTER_ALL_TYPES)
   const [filterPhoto, setFilterPhoto] = useState<ProductPhotoFilter>("all")
+  const [filterStock, setFilterStock] = useState<ProductStockFilter>("all")
+  const [stockInventory, setStockInventory] = useState<ProductStockInventoryStatus | null>(null)
   const [productTypes, setProductTypes] = useState<string[]>([])
   const [typesLoading, setTypesLoading] = useState(true)
   const [typesError, setTypesError] = useState("")
@@ -273,18 +277,18 @@ export default function MaestroLogisticoPage() {
     const p: GetProductsMasterParams = {}
     if (debouncedSearch) p.search = debouncedSearch
     if (filterType !== FILTER_ALL_TYPES) p.product_type = filterType.slice(5)
-    if (photoAccess) { p.management_page = true; p.photo_status = filterPhoto }
+    if (photoAccess) { p.management_page = true; p.photo_status = filterPhoto; p.include_stock = true; p.stock_status = filterStock }
     if (filterLogisticsIncomplete) p.logistics_incomplete = true
     if (filterSupplierId !== FILTER_ALL_SUPPLIERS) {
       const id = Number.parseInt(filterSupplierId, 10)
       if (Number.isFinite(id)) p.supplier_id = id
     }
     return p
-  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId, filterType, filterPhoto, photoAccess])
+  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId, filterType, filterPhoto, filterStock, photoAccess])
 
   useEffect(() => {
     setPage(0)
-  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId, filterType, filterPhoto, pageSize, photoAccess])
+  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId, filterType, filterPhoto, filterStock, pageSize, photoAccess])
 
   useEffect(() => {
     let cancelled = false
@@ -302,12 +306,14 @@ export default function MaestroLogisticoPage() {
           setRows(data.items)
           setTotal(data.total)
           setInventory(data.photo_inventory ?? null)
+          setStockInventory(data.stock_inventory ?? null)
           if (page > 0 && page * pageSize >= data.total) setPage(Math.max(0, Math.ceil(data.total / pageSize) - 1))
         }
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "No se pudieron cargar los productos")
           setInventory(null)
+          setStockInventory(null)
           setRows([])
           setTotal(0)
         }
@@ -588,6 +594,13 @@ export default function MaestroLogisticoPage() {
                 <SelectContent><SelectItem value="all">Todas</SelectItem><SelectItem value="with">Con foto</SelectItem><SelectItem value="without">Sin foto</SelectItem></SelectContent>
               </Select>
             </div> : null}
+            {photoAccess ? <div className="flex min-w-[180px] flex-1 flex-col gap-1.5 sm:max-w-[220px]">
+              <Label className="text-xs text-muted-foreground">Stock consolidado</Label>
+              <Select value={filterStock} onValueChange={v => { setPage(0); setFilterStock(v as ProductStockFilter) }}>
+                <SelectTrigger aria-label="Filtrar stock consolidado" className="h-9 w-full"><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="all">Todos</SelectItem><SelectItem value="with">Con stock</SelectItem><SelectItem value="without">Saldo cero o negativo</SelectItem><SelectItem value="unknown">Sin datos de stock</SelectItem></SelectContent>
+              </Select>
+            </div> : null}
             <div className="flex min-w-[220px] flex-1 flex-col gap-1.5 sm:max-w-md">
               <Label htmlFor="logistics-search" className="text-xs text-muted-foreground">
                 Buscar producto, SKU, variante o código de barras
@@ -610,6 +623,9 @@ export default function MaestroLogisticoPage() {
             <div><span className="font-medium">Fotos del catálogo · GitHub</span><p className="mt-0.5 text-muted-foreground">{loading ? "Consultando inventario…" : inventory?.available ? `${formatCount(inventory.file_count ?? 0)} archivos WebP · Verificado ${formatSyncAt(inventory.checked_at)}` : "Inventario no verificado. No se puede confirmar qué productos tienen foto."}</p><p className="text-muted-foreground">Coincidencia por código de barras. No confirma que la imagen esté visible en el sitio publicado.</p></div>
             <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => setListRevision(v => v + 1)}>Volver a consultar</Button>
           </div> : null}
+          {photoAccess ? <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2 text-xs">
+            <div><span className="font-medium">Stock consolidado · todas las empresas activas y sucursales</span><p className="mt-0.5 text-muted-foreground">{loading ? "Consultando existencias…" : stockInventory?.available ? `${stockInventory.companies_with_data} de ${stockInventory.companies_total} empresas con datos · Última actualización registrada: ${formatSyncAt(stockInventory.latest_sync_at)}` : stockInventory?.reason || "Stock no verificado."}</p><p className="text-muted-foreground">Suma de unidades disponibles de Bsale por código de barras, según la última sincronización; incluye saldos negativos y oficinas auxiliares.</p>{stockInventory?.available && stockInventory.companies_with_data !== stockInventory.companies_total ? <p className="mt-1 text-amber-600 dark:text-amber-300">Cobertura parcial: faltan datos de una o más empresas; el saldo puede estar incompleto.</p> : null}</div>
+          </div> : null}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">Resultados paginados en servidor · filtros sobre todo el maestro</p>
             <div className="flex items-center gap-2"><Label className="text-xs">Filas por página</Label><Select value={String(pageSize)} onValueChange={v => { setPage(0); setPageSize(Number(v)) }}><SelectTrigger aria-label="Filas por página" className="h-9 w-24"><SelectValue /></SelectTrigger><SelectContent>{[25, 50, 100].map(n => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}</SelectContent></Select></div>
@@ -622,6 +638,7 @@ export default function MaestroLogisticoPage() {
                 <tr className="border-b border-border text-left text-sm font-medium text-muted-foreground">
                   <th className="pb-3 pr-3">Producto</th>
                   <th className="pb-3 pr-3">Código barra</th>
+                  {photoAccess ? <th className="pb-3 pr-3">Stock total (un.)</th> : null}
                   <th className="pb-3 pr-3">CxC</th>
                   {photoAccess ? <th className="pb-3 pr-3">Cajas / pallet</th> : null}
                   <th className="pb-3 pr-3">Peso caja (kg)</th>
@@ -635,13 +652,13 @@ export default function MaestroLogisticoPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={photoAccess ? 10 : 9} className="py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={photoAccess ? 11 : 9} className="py-6 text-center text-sm text-muted-foreground">
                       Cargando…
                     </td>
                   </tr>
                 ) : rows.length === 0 ? (
                   <tr>
-                    <td colSpan={photoAccess ? 10 : 9} className="py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={photoAccess ? 11 : 9} className="py-6 text-center text-sm text-muted-foreground">
                       No hay productos para mostrar
                     </td>
                   </tr>
@@ -686,6 +703,11 @@ export default function MaestroLogisticoPage() {
                         <td className="py-2.5 pr-3 align-middle font-mono text-xs">
                           {row.barcode}
                         </td>
+                        {photoAccess ? <td className="py-2.5 pr-3 align-middle tabular-nums">
+                          {row.stock_consolidated == null ? <span className="text-xs text-muted-foreground">Sin dato</span> : <span className={cn("font-semibold whitespace-nowrap", row.stock_consolidated > 0 ? "text-emerald-700 dark:text-emerald-300" : row.stock_consolidated < 0 ? "text-destructive" : "text-muted-foreground")}>{row.stock_consolidated.toLocaleString("es-CL", { maximumFractionDigits: 4 })}</span>}
+                          {row.stock_shared_barcode ? <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-300">Barcode compartido</p> : null}
+                          {row.stock_partial ? <p className="text-[11px] text-amber-600 dark:text-amber-300">Datos parciales</p> : null}
+                        </td> : null}
                         <td className="py-2.5 pr-3 align-middle">
                           <InlineNumberInput
                             value={row.units_per_box}

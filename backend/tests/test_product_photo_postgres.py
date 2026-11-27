@@ -55,13 +55,25 @@ def database():
                        (9,'00456',222,'Duplicate demo','6 units','QA-00456',6,3);
                 UPDATE bsale.products_master SET product_type=' CERVEZAS ' WHERE id=8;
                 UPDATE bsale.products_master SET product_type='BEBIDAS' WHERE id=9;
+                CREATE TABLE bsale.companies (company_id bigint PRIMARY KEY, active boolean NOT NULL);
+                INSERT INTO bsale.companies VALUES (1,true),(2,true),(3,true),(4,false);
+                CREATE TABLE bsale.stocks (
+                    company_id bigint, variant_id bigint, office_id bigint,
+                    quantity_available numeric, quantity_reserved numeric,
+                    updated_at timestamptz DEFAULT now(),
+                    PRIMARY KEY (company_id, variant_id, office_id)
+                );
                 CREATE TABLE bsale.variants (
                     company_id integer, bsale_id bigint, bar_code text,
                     PRIMARY KEY (company_id, bsale_id)
                 );
                 INSERT INTO bsale.variants VALUES
-                    (1,111,'00123'),(3,500,'00123'),
-                    (3,501,'00456'),(3,502,'00456');
+                    (1,111,'00123'),(2,111,'00123'),(3,500,'00123'),
+                    (3,501,'00456'),(3,502,'00456'),(4,111,'00123');
+                INSERT INTO bsale.stocks (company_id,variant_id,office_id,quantity_available,quantity_reserved) VALUES
+                    (1,111,1,100,20),(1,111,2,25,5),(2,111,1,40,10),(3,500,1,-5,0),
+                    (3,501,1,0,0),(3,502,1,-2,0),(4,111,1,999,0),
+                    (2,999,1,777,0);
                 CREATE TABLE bsale.product_master_variants (
                     product_master_id integer, company_id integer, mapping_status text,
                     variant_id bigint, barcode text,
@@ -174,3 +186,66 @@ def test_type_and_photo_filter_count_and_pagination_on_postgres(services, monkey
                                        inventory=snap)
     assert second_page["total"] == 2 and len(second_page["items"]) == 1
     assert pm.list_product_master_types({"id": 42}) == {"items": ["BEBIDAS", "CERVEZAS"]}
+
+
+def test_consolidated_stock_across_companies_offices_filters_before_pagination(services, monkeypatch):
+    monkeypatch.setattr(pm, "get_connection", services)
+    snap = PhotoInventory(frozenset({"00123"}), "a"*40, "2026-11-27T00:00:00+00:00")
+    positive = pm._list_master_page(None, False, "CERVEZAS", None, False, 1, 0,
+        inventory=snap, photo_status="with", include_stock=True, stock_status="with")
+    assert positive["total"] == 1
+    item = positive["items"][0]
+    assert item["barcode"] == "00123"
+    # Same variant ID in companies 1 & 2; multiple offices; negative included;
+    # reserved not subtracted twice; inactive company 4 and orphan ignored.
+    assert item["stock_consolidated"] == 160
+    assert item["stock_companies"] == 3
+    assert item["stock_shared_barcode"] is False
+    assert positive["stock_inventory"]["companies_total"] == 3
+    assert positive["stock_inventory"]["companies_with_data"] == 3
+    negative = pm._list_master_page(None, False, None, None, False, 1, 0,
+        inventory=snap, photo_status="without", include_stock=True, stock_status="without")
+    assert negative["total"] == 1
+    assert negative["items"][0]["stock_consolidated"] == -2
+    assert negative["items"][0]["stock_shared_barcode"] is True
+    no_match = pm._list_master_page(None, False, None, None, False, 1, 0,
+        inventory=snap, photo_status="without", include_stock=True, stock_status="with")
+    assert no_match["total"] == 0
+    second = pm._list_master_page(None, False, None, None, False, 1, 1, include_stock=True)
+    assert second["total"] == 2 and len(second["items"]) == 1
+
+
+def test_consolidated_scope_requires_access_to_all_active_companies(services, monkeypatch):
+    monkeypatch.setattr(pm, "get_connection", services)
+    with pytest.raises(HTTPException) as exc:
+        pm._list_master_page(None, False, None, None, False, 50, 0,
+            include_stock=True, stock_company_ids=[3], stock_status="with")
+    assert exc.value.status_code == 403
+    allowed = pm._list_master_page(None, False, None, None, False, 50, 0,
+        include_stock=True, stock_company_ids=[1,2,3], stock_status="with")
+    assert allowed["total"] == 1
+
+
+def test_missing_stock_distinguished_from_zero_and_negative(services, monkeypatch):
+    monkeypatch.setattr(pm, "get_connection", services)
+    with closing(services()) as conn, conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO bsale.products_master(id, barcode, product_name)
+            VALUES (10,'00999','QA sin stock sincronizado');
+            INSERT INTO bsale.variants VALUES (1,9999,'00999');
+            INSERT INTO bsale.stocks(company_id,variant_id,office_id,quantity_available) VALUES (1,9999,1,NULL);
+        """)
+        conn.commit()
+    try:
+        missing = pm._list_master_page(None, False, None, None, False, 50, 0,
+            include_stock=True, stock_status="unknown")
+        assert [r["barcode"] for r in missing["items"]] == ["00999"]
+        assert missing["items"][0]["stock_consolidated"] is None
+        assert missing["items"][0]["stock_partial"] is True
+        without = pm._list_master_page(None, False, None, None, False, 50, 0,
+            include_stock=True, stock_status="without")
+        assert [r["barcode"] for r in without["items"]] == ["00456"]
+    finally:
+        with closing(services()) as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM bsale.stocks WHERE company_id=1 AND variant_id=9999; DELETE FROM bsale.variants WHERE company_id=1 AND bsale_id=9999; DELETE FROM bsale.products_master WHERE id=10")
+            conn.commit()

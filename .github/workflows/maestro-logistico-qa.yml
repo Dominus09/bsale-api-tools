@@ -5,6 +5,7 @@ on:
     paths:
       - 'backend/routers/products_master.py'
       - 'backend/services/catalog_photo_inventory.py'
+      - 'backend/services/product_master_stock.py'
       - 'frontend/lib/api.ts'
       - 'backend/routers/product_photos.py'
       - 'backend/routers/product_pallets.py'

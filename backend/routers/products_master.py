@@ -9,6 +9,8 @@ from backend.db import get_connection
 from backend.auth.multiapp import require_erp_app
 from backend.auth.permissions import require_management_access
 from backend.services import catalog_photo_inventory as photo_inventory
+from backend.services import product_master_stock as master_stock
+from psycopg2 import Error as DatabaseError
 from backend.utils.product_logistics import (
     calc_volume_m3,
     calc_weight_unit_kg,
@@ -255,7 +257,8 @@ def list_products_master(
 
 def _list_master_page(supplier_id, without_supplier, product_type, search,
                       logistics_incomplete, limit, offset, *,
-                      inventory=None, photo_status="all") -> Dict[str, Any]:
+                      inventory=None, photo_status="all", include_stock=False,
+                      stock_status="all", stock_company_ids=None) -> Dict[str, Any]:
     where_sql, params = _products_master_where(
         supplier_id, without_supplier, product_type, search, logistics_incomplete
     )
@@ -267,20 +270,35 @@ def _list_master_page(supplier_id, without_supplier, product_type, search,
             predicate = "NOT (" + predicate + ")"
         where_sql += (" AND " if where_sql else " WHERE ") + predicate
         params.append(sorted(inventory.barcodes))
-    base = "FROM bsale.products_master"
-
-    count_sql = f"SELECT COUNT(*)::bigint {base}{where_sql}"
-    data_sql = f"""
-        SELECT {_PM_SELECT}
-        {base}{where_sql}
-        ORDER BY product_name ASC NULLS LAST, barcode ASC, id ASC
-        LIMIT %s OFFSET %s
-    """
-    data_params = list(params) + [limit, offset]
-
     conn = get_connection()
+    stock_meta = None
     try:
+        if include_stock:
+            # Coverage, count and page observe the same committed stock snapshot.
+            conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
         cur = conn.cursor()
+        base = "FROM bsale.products_master"
+        cte = ""
+        select = _PM_SELECT
+        if include_stock:
+            stock_meta = master_stock.stock_coverage(cur, stock_company_ids)
+            if stock_status != "all" and not stock_meta["available"]:
+                raise HTTPException(503, "No hay datos de stock sincronizados para filtrar.")
+            base += master_stock.STOCK_JOIN
+            cte = master_stock.STOCK_CTE
+            select += master_stock.STOCK_SELECT
+            clause = master_stock.stock_filter_sql(stock_status)
+            if clause:
+                where_sql += (" AND " if where_sql else " WHERE ") + clause
+        count_sql = f"{cte} SELECT COUNT(*)::bigint {base}{where_sql}"
+        data_sql = f"""
+            {cte}
+            SELECT {select}
+            {base}{where_sql}
+            ORDER BY product_name ASC NULLS LAST, barcode ASC, id ASC
+            LIMIT %s OFFSET %s
+        """
+        data_params = list(params) + [limit, offset]
         cur.execute(count_sql, tuple(params))
         total_row = cur.fetchone()
         total = int(total_row[0]) if total_row and total_row[0] is not None else 0
@@ -296,12 +314,15 @@ def _list_master_page(supplier_id, without_supplier, product_type, search,
     finally:
         conn.close()
 
-    return {
+    response = {
         "items": result,
         "total": total,
         "limit": limit,
         "offset": offset,
     }
+    if stock_meta is not None:
+        response["stock_inventory"] = stock_meta
+    return response
 
 
 @router.get("/products-master/types")
@@ -329,6 +350,8 @@ def list_products_master_management(
     search: Optional[str] = Query(None),
     logistics_incomplete: bool = Query(False),
     photo_status: Literal["all", "with", "without"] = Query("all"),
+    include_stock: bool = Query(False),
+    stock_status: Literal["all", "with", "without", "unknown"] = Query("all"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     user: dict = Depends(require_management_access),
@@ -340,9 +363,30 @@ def list_products_master_management(
     except HTTPException:
         if photo_status != "all":
             raise HTTPException(503, "No se pudo verificar el inventario de fotos. Reintenta o selecciona Todas.") from None
-    result = _list_master_page(supplier_id, without_supplier, product_type, search,
-                               logistics_incomplete, limit, offset,
-                               inventory=inventory, photo_status=photo_status)
+    wants_stock = include_stock or stock_status != "all"
+    kwargs = {"inventory": inventory, "photo_status": photo_status}
+    if wants_stock:
+        kwargs.update(include_stock=True, stock_status=stock_status,
+                      stock_company_ids=user.get("company_ids"))
+    try:
+        result = _list_master_page(supplier_id, without_supplier, product_type, search,
+                                   logistics_incomplete, limit, offset, **kwargs)
+    except (HTTPException, DatabaseError) as exc:
+        if not wants_stock:
+            raise
+        if stock_status != "all":
+            if isinstance(exc, HTTPException):
+                raise
+            raise HTTPException(503, "No se pudo verificar el stock consolidado.") from None
+        # Stock source or permissions must not break ordinary logistics work.
+        result = _list_master_page(supplier_id, without_supplier, product_type, search,
+                                   logistics_incomplete, limit, offset,
+                                   inventory=inventory, photo_status=photo_status)
+        result["stock_inventory"] = {"available": False, "companies_total": None,
+                                     "companies_with_data": None, "latest_sync_at": None,
+                                     "source": "bsale.stocks.quantity_available",
+                                     "scope": "all_active_companies_all_offices",
+                                     "reason": str(exc.detail) if isinstance(exc, HTTPException) else "No se pudo verificar el stock consolidado."}
     result["photo_inventory"] = inventory.status() if inventory else {
         "available": False, "checked_at": None, "file_count": None, "source": "github_webp",
     }
