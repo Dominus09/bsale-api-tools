@@ -121,3 +121,67 @@ def test_heic_can_be_converted_without_browser_support():
     with Image.open(io.BytesIO(prepared)) as img:
         assert img.format == "WEBP"
         assert img.size == (1000, 1000)
+
+
+def _sample_with_sidebar():
+    image = Image.new("RGB", (200, 200), "white")
+    from PIL import ImageDraw
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((30, 20, 65, 179), fill=(100, 35, 20))
+    draw.rectangle((110, 0, 199, 199), fill=(240, 90, 10))
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    return out.getvalue()
+
+
+def test_manual_crop_excludes_side_banner_and_enlarges_bottle():
+    raw = _sample_with_sidebar()
+    data = p.prepare_photo(raw, "white", '{"left":0.1,"top":0.05,"right":0.4,"bottom":0.95}')
+    p.validate_prepared(data)
+    with Image.open(io.BytesIO(data)) as im:
+        im = im.convert("RGB")
+        # The brown subject should extend far beyond its original 160 px height.
+        assert im.getpixel((500, 150))[0] < 150
+        assert im.getpixel((500, 850))[0] < 150
+        assert min(im.getpixel((950, 500))) > 240
+        assert min(im.getpixel((50, 500))) > 240
+        # No orange sidebar survived the selection.
+        assert not any(r > 210 and 30 < g < 150 and b < 50
+                       for r, g, b in im.resize((100, 100)).getdata())
+
+
+def test_small_source_scaled_without_distortion():
+    out = io.BytesIO()
+    Image.new("RGB", (100, 200), (100, 35, 20)).save(out, "PNG")
+    data = p.prepare_photo(out.getvalue(), "white")
+    with Image.open(io.BytesIO(data)) as im:
+        im = im.convert("RGB")
+        assert im.getpixel((500, 100))[0] < 150
+        assert im.getpixel((300, 500))[0] < 150
+        assert min(im.getpixel((150, 500))) > 240
+
+
+@pytest.mark.parametrize("crop", [
+    "not json", "null", "[]", '{"left":0}',
+    '{"left":0,"top":0,"right":1.1,"bottom":1}',
+    '{"left":0.5,"top":0,"right":0.4,"bottom":1}',
+    '{"left":0,"top":0,"right":0.01,"bottom":1}',
+    '{"left":false,"top":0,"right":1,"bottom":1}',
+    '{"left":NaN,"top":0,"right":1,"bottom":1}',
+])
+def test_bad_crop_rejected(crop):
+    with pytest.raises(HTTPException) as exc:
+        p.prepare_photo(_sample_with_sidebar(), "white", crop)
+    assert exc.value.status_code == 422
+
+
+def test_source_preview_preserves_exif_orientation_for_manual_crop():
+    image = Image.new("RGB", (1600, 800), "white")
+    exif = Image.Exif()
+    exif[274] = 6
+    raw = io.BytesIO()
+    image.save(raw, "JPEG", exif=exif)
+    with Image.open(io.BytesIO(p.source_preview(raw.getvalue()))) as preview:
+        assert preview.size == (600, 1200)
+    with Image.open(io.BytesIO(p.prepare_photo(raw.getvalue(), "original"))) as result:
+        assert result.getchannel("A").getbbox() == (275, 50, 725, 950)
