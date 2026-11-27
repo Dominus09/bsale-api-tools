@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from backend.auth.permissions import require_management_access
 from backend.db import get_connection
 from backend.services import product_photo_service as photos
+from backend.services import catalog_photo_inventory
 from backend.services import product_master_admin_service as admin
 from backend.services.catalog_v2.source_flag import resolve_catalog_source
 
@@ -160,6 +161,7 @@ def commit(row_id: int, preview_token: str = Form(..., max_length=2048),
         except Exception:
             logger.error("catalog_photo_audit_finalize_pending audit=%s", audit_id)
         raise
+    catalog_photo_inventory.invalidate_inventory()
     audit_pending = False
     try:
         admin.finish_photo_audit(audit_id, result)

@@ -1,11 +1,14 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.db import get_connection
+from backend.auth.multiapp import require_erp_app
+from backend.auth.permissions import require_management_access
+from backend.services import catalog_photo_inventory as photo_inventory
 from backend.utils.product_logistics import (
     calc_volume_m3,
     calc_weight_unit_kg,
@@ -118,7 +121,7 @@ def _products_master_where(
         where_parts.append("supplier_id IS NULL")
 
     if product_type is not None and product_type.strip():
-        where_parts.append("product_type = %s")
+        where_parts.append("BTRIM(product_type) = %s")
         params.append(product_type.strip())
 
     if search is not None and search.strip():
@@ -246,9 +249,24 @@ def list_products_master(
     limit: int = Query(_DEFAULT_PAGE_SIZE, ge=1, le=_MAX_PAGE_SIZE),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
+    return _list_master_page(supplier_id, without_supplier, product_type, search,
+                             logistics_incomplete, limit, offset)
+
+
+def _list_master_page(supplier_id, without_supplier, product_type, search,
+                      logistics_incomplete, limit, offset, *,
+                      inventory=None, photo_status="all") -> Dict[str, Any]:
     where_sql, params = _products_master_where(
         supplier_id, without_supplier, product_type, search, logistics_incomplete
     )
+    if photo_status != "all":
+        if inventory is None:
+            raise HTTPException(503, "No se pudo verificar el inventario de fotografías. Intenta nuevamente.")
+        predicate = "BTRIM(COALESCE(barcode, '')) = ANY(%s::text[])"
+        if photo_status == "without":
+            predicate = "NOT (" + predicate + ")"
+        where_sql += (" AND " if where_sql else " WHERE ") + predicate
+        params.append(sorted(inventory.barcodes))
     base = "FROM bsale.products_master"
 
     count_sql = f"SELECT COUNT(*)::bigint {base}{where_sql}"
@@ -271,6 +289,9 @@ def list_products_master(
         rows = cur.fetchall()
         columns = [desc[0] for desc in cur.description]
         result = [_serialize_pm_row(dict(zip(columns, row))) for row in rows]
+        if inventory is not None:
+            for item in result:
+                item["has_catalog_photo"] = str(item.get("barcode") or "").strip(" ") in inventory.barcodes
         cur.close()
     finally:
         conn.close()
@@ -281,6 +302,51 @@ def list_products_master(
         "limit": limit,
         "offset": offset,
     }
+
+
+@router.get("/products-master/types")
+def list_product_master_types(user: dict = Depends(require_erp_app)) -> Dict[str, Any]:
+    """All real product types; independent of pagination and photo availability."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT BTRIM(product_type) AS product_type
+                FROM bsale.products_master
+                WHERE NULLIF(BTRIM(product_type), '') IS NOT NULL
+                ORDER BY product_type
+            """)
+            return {"items": [r[0] for r in cur.fetchall()]}
+    finally:
+        conn.close()
+
+
+@router.get("/products-master/management-page")
+def list_products_master_management(
+    supplier_id: Optional[str] = Query(None),
+    without_supplier: bool = Query(False),
+    product_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    logistics_incomplete: bool = Query(False),
+    photo_status: Literal["all", "with", "without"] = Query("all"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    user: dict = Depends(require_management_access),
+) -> Dict[str, Any]:
+    """Management-only photo inventory; legacy list consumers never call GitHub."""
+    inventory = None
+    try:
+        inventory = photo_inventory.get_inventory()
+    except HTTPException:
+        if photo_status != "all":
+            raise HTTPException(503, "No se pudo verificar el inventario de fotos. Reintenta o selecciona Todas.") from None
+    result = _list_master_page(supplier_id, without_supplier, product_type, search,
+                               logistics_incomplete, limit, offset,
+                               inventory=inventory, photo_status=photo_status)
+    result["photo_inventory"] = inventory.status() if inventory else {
+        "available": False, "checked_at": None, "file_count": None, "source": "github_webp",
+    }
+    return result
 
 
 @router.get("/products-master/count-without-supplier")

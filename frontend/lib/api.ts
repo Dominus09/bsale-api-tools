@@ -293,6 +293,7 @@ export interface ProductMasterRow {
   product_name: string | null
   variant_name: string | null
   product_type: string | null
+  has_catalog_photo?: boolean
   supplier_id: number | null
   units_per_box?: number | null
   weight_box_kg?: number | null
@@ -5176,14 +5177,26 @@ export async function deletePurchaseManualItem(itemId: number): Promise<void> {
 /** Tamaño de página por defecto (alineado con el backend). */
 export const PRODUCTS_MASTER_PAGE_SIZE = 500
 
+export type ProductPhotoFilter = "all" | "with" | "without"
+export interface ProductPhotoInventoryStatus {
+  available: boolean
+  checked_at: string | null
+  file_count: number | null
+  source: "github_webp"
+}
+
 export interface ProductsMasterPage {
   items: ProductMasterRow[]
+  photo_inventory?: ProductPhotoInventoryStatus
   total: number
   limit: number
   offset: number
 }
 
 export interface GetProductsMasterParams {
+  product_type?: string
+  photo_status?: ProductPhotoFilter
+  management_page?: boolean
   without_supplier?: boolean
   supplier_id?: number
   search?: string
@@ -5248,6 +5261,8 @@ export async function getProductsMaster(
   if (params?.without_supplier) {
     qs.set("without_supplier", "true")
   }
+  if (params?.product_type?.trim()) qs.set("product_type", params.product_type.trim())
+  if (params?.management_page) qs.set("photo_status", params.photo_status ?? "all")
   if (params?.supplier_id != null && Number.isFinite(params.supplier_id)) {
     qs.set("supplier_id", String(Math.trunc(params.supplier_id)))
   }
@@ -5262,23 +5277,34 @@ export async function getProductsMaster(
   qs.set("limit", String(limit))
   qs.set("offset", String(offset))
   const suffix = qs.toString() ? `?${qs.toString()}` : ""
-  const res = await fetch(`${API_URL}/products-master${suffix}`, {
+  const endpoint = params?.management_page ? "/products-master/management-page" : "/products-master"
+  const res = await fetch(`${API_URL}${endpoint}${suffix}`, {
     headers: getAuthHeaders(),
     signal,
+    cache: "no-store",
   })
   if (!res.ok) {
-    throw new Error("Error al cargar productos maestros")
+    const error = await res.json().catch(() => null)
+    throw new Error(typeof error?.detail === "string" ? error.detail : "Error al cargar productos maestros")
   }
   const data = await res.json()
   if (data && Array.isArray(data.items)) {
     return {
       items: data.items,
+      photo_inventory: data.photo_inventory,
       total: Number(data.total) || 0,
       limit: Number(data.limit) || limit,
       offset: Number(data.offset) ?? offset,
     }
   }
   return { items: [], total: 0, limit, offset }
+}
+
+export async function getProductMasterTypes(signal?: AbortSignal): Promise<string[]> {
+  const res = await fetch(`${API_URL}/products-master/types`, { headers: getAuthHeaders(), signal, cache: "no-store" })
+  if (!res.ok) throw new Error("No se pudieron cargar los tipos de producto")
+  const data = await res.json()
+  return Array.isArray(data.items) ? data.items : []
 }
 
 /** Total de productos con supplier_id IS NULL (COUNT en servidor, sin traer filas). */

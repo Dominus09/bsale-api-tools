@@ -1,0 +1,7 @@
+# Filtros del maestro logístico
+
+Tipo de producto: lista SQL de los tipos reales de bsale.products_master, sin depender de la página visible. Combina con proveedor, búsqueda e incompletitud.
+
+Fotografía WebP: Todas / Con foto / Sin foto, por coincidencia exacta de barcode (preserva ceros iniciales) con public/products/{barcode}.webp en main del repositorio del catálogo. No significa que la fotografía ya esté desplegada, que sea visualmente correcta ni que una imagen externa de la API no exista. El estado se muestra por fila y la cantidad de archivos es del repositorio, no un conteo de productos del ERP.
+
+Una lectura completa del Git tree, con caché en memoria durante cinco minutos por worker y backoff de 30 segundos ante error. No usar Contents directory listing (límite 1000), no realizar una petición por producto. No marcar fotos faltantes si el inventario no pudo verificarse. La opción Todas permite seguir trabajando sin estado de fotos. La publicación confirmada invalida el inventario del worker; otros workers actualizan al vencer la caché. Volver a consultar usa la caché vigente. Sin migración adicional, cambios en Bsale, activación de escrituras ni cambios en catálogo público. Endpoint de inventario combinado solo gerencia. Endpoint original preservado para otros consumidores.

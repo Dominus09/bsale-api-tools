@@ -20,6 +20,9 @@ import {
 } from "@/components/ui/select"
 import {
   getProductsMaster,
+  getProductMasterTypes,
+  type ProductPhotoFilter,
+  type ProductPhotoInventoryStatus,
   getProductsMasterLogisticsStats,
   getSuppliers,
   patchProductMasterById,
@@ -34,6 +37,7 @@ import { cn } from "@/lib/utils"
 
 const NONE_SELECT = "__none__"
 const FILTER_ALL_SUPPLIERS = "__all__"
+const FILTER_ALL_TYPES = "__all_types__"
 
 type LogisticsField =
   | "units_per_box"
@@ -143,6 +147,13 @@ export default function MaestroLogisticoPage() {
 
   const [filterLogisticsIncomplete, setFilterLogisticsIncomplete] = useState(false)
   const [filterSupplierId, setFilterSupplierId] = useState<string>(FILTER_ALL_SUPPLIERS)
+  const [filterType, setFilterType] = useState(FILTER_ALL_TYPES)
+  const [filterPhoto, setFilterPhoto] = useState<ProductPhotoFilter>("all")
+  const [productTypes, setProductTypes] = useState<string[]>([])
+  const [typesLoading, setTypesLoading] = useState(true)
+  const [typesError, setTypesError] = useState("")
+  const [inventory, setInventory] = useState<ProductPhotoInventoryStatus | null>(null)
+  const [listRevision, setListRevision] = useState(0)
   const [searchInput, setSearchInput] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [page, setPage] = useState(0)
@@ -249,20 +260,31 @@ export default function MaestroLogisticoPage() {
     return () => window.clearTimeout(t)
   }, [searchInput])
 
+  useEffect(() => {
+    const controller = new AbortController()
+    void getProductMasterTypes(controller.signal).then(types => {
+      if (!controller.signal.aborted) setProductTypes(types)
+    }).catch(e => { if (!controller.signal.aborted) setTypesError(e instanceof Error ? e.message : "Tipos no disponibles") })
+      .finally(() => { if (!controller.signal.aborted) setTypesLoading(false) })
+    return () => controller.abort()
+  }, [])
+
   const filterQueryParams = useMemo((): GetProductsMasterParams => {
     const p: GetProductsMasterParams = {}
     if (debouncedSearch) p.search = debouncedSearch
+    if (filterType !== FILTER_ALL_TYPES) p.product_type = filterType.slice(5)
+    if (photoAccess) { p.management_page = true; p.photo_status = filterPhoto }
     if (filterLogisticsIncomplete) p.logistics_incomplete = true
     if (filterSupplierId !== FILTER_ALL_SUPPLIERS) {
       const id = Number.parseInt(filterSupplierId, 10)
       if (Number.isFinite(id)) p.supplier_id = id
     }
     return p
-  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId])
+  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId, filterType, filterPhoto, photoAccess])
 
   useEffect(() => {
     setPage(0)
-  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId, pageSize])
+  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId, filterType, filterPhoto, pageSize, photoAccess])
 
   useEffect(() => {
     let cancelled = false
@@ -279,10 +301,13 @@ export default function MaestroLogisticoPage() {
         if (!cancelled) {
           setRows(data.items)
           setTotal(data.total)
+          setInventory(data.photo_inventory ?? null)
+          if (page > 0 && page * pageSize >= data.total) setPage(Math.max(0, Math.ceil(data.total / pageSize) - 1))
         }
-      } catch {
+      } catch (e) {
         if (!cancelled) {
-          setError("No se pudieron cargar los productos")
+          setError(e instanceof Error ? e.message : "No se pudieron cargar los productos")
+          setInventory(null)
           setRows([])
           setTotal(0)
         }
@@ -295,7 +320,7 @@ export default function MaestroLogisticoPage() {
       cancelled = true
       controller.abort()
     }
-  }, [filterQueryParams, page, pageSize])
+  }, [filterQueryParams, page, pageSize, listRevision])
 
   useEffect(() => {
     let cancelled = false
@@ -545,6 +570,24 @@ export default function MaestroLogisticoPage() {
               </Select>
             </div>
 
+            <div className="flex min-w-[190px] flex-1 flex-col gap-1.5 sm:max-w-xs">
+              <Label className="text-xs text-muted-foreground">Tipo de producto</Label>
+              <Select value={filterType} onValueChange={setFilterType} disabled={typesLoading || !!typesError}>
+                <SelectTrigger aria-label="Tipo de producto" className="h-9 w-full"><SelectValue placeholder="Todos los tipos" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={FILTER_ALL_TYPES}>Todos los tipos</SelectItem>
+                  {productTypes.map(type => <SelectItem key={type} value={"type:" + type}>{type}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {typesError ? <p className="text-xs text-destructive">{typesError}</p> : null}
+            </div>
+            {photoAccess ? <div className="flex min-w-[180px] flex-1 flex-col gap-1.5 sm:max-w-[220px]">
+              <Label className="text-xs text-muted-foreground">Fotografía WebP</Label>
+              <Select value={filterPhoto} onValueChange={v => setFilterPhoto(v as ProductPhotoFilter)}>
+                <SelectTrigger aria-label="Filtrar fotografías" className="h-9 w-full"><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value="all">Todas</SelectItem><SelectItem value="with">Con foto</SelectItem><SelectItem value="without">Sin foto</SelectItem></SelectContent>
+              </Select>
+            </div> : null}
             <div className="flex min-w-[220px] flex-1 flex-col gap-1.5 sm:max-w-md">
               <Label htmlFor="logistics-search" className="text-xs text-muted-foreground">
                 Buscar producto, SKU, variante o código de barras
@@ -563,8 +606,12 @@ export default function MaestroLogisticoPage() {
             </div>
           </div>
 
+          {photoAccess ? <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/20 px-3 py-2 text-xs">
+            <div><span className="font-medium">Fotos del catálogo · GitHub</span><p className="mt-0.5 text-muted-foreground">{loading ? "Consultando inventario…" : inventory?.available ? `${formatCount(inventory.file_count ?? 0)} archivos WebP · Verificado ${formatSyncAt(inventory.checked_at)}` : "Inventario no verificado. No se puede confirmar qué productos tienen foto."}</p><p className="text-muted-foreground">Coincidencia por código de barras. No confirma que la imagen esté visible en el sitio publicado.</p></div>
+            <Button type="button" variant="outline" size="sm" disabled={loading} onClick={() => setListRevision(v => v + 1)}>Volver a consultar</Button>
+          </div> : null}
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">Resultados paginados en servidor · selección de fotografía por producto</p>
+            <p className="text-xs text-muted-foreground">Resultados paginados en servidor · filtros sobre todo el maestro</p>
             <div className="flex items-center gap-2"><Label className="text-xs">Filas por página</Label><Select value={String(pageSize)} onValueChange={v => { setPage(0); setPageSize(Number(v)) }}><SelectTrigger aria-label="Filas por página" className="h-9 w-24"><SelectValue /></SelectTrigger><SelectContent>{[25, 50, 100].map(n => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}</SelectContent></Select></div>
           </div>
           {photoAccess ? <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/20 p-3 text-sm"><strong>Cobertura de pallet</strong><span className="text-muted-foreground">{palletCoverage?.with_boxes_per_pallet != null ? `${palletCoverage.with_boxes_per_pallet.toLocaleString("es-CL")} de ${palletCoverage.total?.toLocaleString("es-CL")} productos activos` : "Sin datos verificados / migración pendiente"}</span>{palletReady && !palletWrites ? <span className="text-xs text-muted-foreground">Edición deshabilitada</span> : null}</div> : null}
@@ -621,7 +668,7 @@ export default function MaestroLogisticoPage() {
                             <p className="text-sm font-medium leading-snug">
                               {productLabel(row)}
                             </p>
-                            {photoAccess ? <Button type="button" variant="outline" size="sm" className="mt-2 h-8 gap-1.5 text-xs" onClick={() => setPhotoProduct(row)}><ImagePlus className="size-3.5" /> Gestionar foto</Button> : null}
+                            {photoAccess ? <div className="mt-2 flex flex-wrap items-center gap-1.5"><Badge variant="outline" className={cn("text-[11px]", row.has_catalog_photo === true ? "border-emerald-500/30 text-emerald-700 dark:text-emerald-300" : row.has_catalog_photo === false ? "border-amber-500/30 text-amber-700 dark:text-amber-300" : "text-muted-foreground")}>{row.has_catalog_photo === true ? "Con foto" : row.has_catalog_photo === false ? "Sin foto" : "Sin verificar"}</Badge><Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setPhotoProduct(row)}><ImagePlus className="size-3.5" /> Gestionar foto</Button></div> : null}
                             {row.product_type ? <p className="mt-1 text-xs font-medium text-muted-foreground">{row.product_type}</p> : null}
                             {row.sku ? <p className="mt-1 text-xs text-muted-foreground">SKU {row.sku}</p> : null}
                             {row.weight_unit_kg != null ? (
@@ -777,7 +824,7 @@ export default function MaestroLogisticoPage() {
           </div>
         </CardContent>
       </Card>
-      {photoProduct ? <ProductPhotoDialog key={photoProduct.id} product={photoProduct} onClose={() => setPhotoProduct(null)} /> : null}
+      {photoProduct ? <ProductPhotoDialog key={photoProduct.id} product={photoProduct} onPublished={() => setListRevision(v => v + 1)} onClose={() => setPhotoProduct(null)} /> : null}
     </div>
   )
 }
