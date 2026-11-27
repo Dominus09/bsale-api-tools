@@ -12,6 +12,8 @@ import pytest
 from fastapi import HTTPException
 
 from backend.routers import product_photos as routes
+from backend.routers import products_master as pm
+from backend.services.catalog_photo_inventory import PhotoInventory
 from backend.services import product_master_admin_service as admin
 
 pytestmark = pytest.mark.skipif(
@@ -42,12 +44,17 @@ def database():
                     variant_id bigint, product_name text, variant_name text, sku text,
                     is_active boolean NOT NULL DEFAULT true,
                     units_per_box integer, weight_box_kg numeric(12,4),
+                    product_id bigint, product_type text, companies jsonb, supplier_id integer,
+                    sale_type text, quantity_step integer, height_cm numeric, width_cm numeric, length_cm numeric,
+                    logistics_completed boolean DEFAULT false, last_bsale_sync_at timestamptz, created_at timestamptz,
                     updated_at timestamptz NOT NULL DEFAULT now()
                 );
                 INSERT INTO bsale.products_master
                   (id, barcode, variant_id, product_name, variant_name, sku, units_per_box, weight_box_kg)
                 VALUES (8,'00123',111,'Demo product','24 units','QA-00123',24,12.5),
                        (9,'00456',222,'Duplicate demo','6 units','QA-00456',6,3);
+                UPDATE bsale.products_master SET product_type=' CERVEZAS ' WHERE id=8;
+                UPDATE bsale.products_master SET product_type='BEBIDAS' WHERE id=9;
                 CREATE TABLE bsale.variants (
                     company_id integer, bsale_id bigint, bar_code text,
                     PRIMARY KEY (company_id, bsale_id)
@@ -145,3 +152,25 @@ def test_photo_audit_private_and_durable_without_github(services):
         assert cur.fetchone() == (42, 500, "published", "b"*40)
         cur.execute("SELECT status, error_status FROM app.catalog_photo_audit WHERE audit_id=%s", (failed,))
         assert cur.fetchone() == ("needs_review", 503)
+
+
+def test_type_and_photo_filter_count_and_pagination_on_postgres(services, monkeypatch):
+    monkeypatch.setattr(pm, "get_connection", services)
+    snap = PhotoInventory(frozenset({"00123"}), "a"*40, "2026-11-27T00:00:00+00:00")
+    with_photo = pm._list_master_page(None, False, "CERVEZAS", None, False, 1, 0,
+                                      inventory=snap, photo_status="with")
+    assert with_photo["total"] == 1
+    assert with_photo["items"][0]["barcode"] == "00123"
+    assert with_photo["items"][0]["has_catalog_photo"] is True
+    without_photo = pm._list_master_page(None, False, None, None, False, 1, 0,
+                                         inventory=snap, photo_status="without")
+    assert without_photo["total"] == 1
+    assert without_photo["items"][0]["barcode"] == "00456"
+    assert without_photo["items"][0]["has_catalog_photo"] is False
+    wrong_type = pm._list_master_page(None, False, "BEBIDAS", None, False, 1, 0,
+                                      inventory=snap, photo_status="with")
+    assert wrong_type["total"] == 0 and not wrong_type["items"]
+    second_page = pm._list_master_page(None, False, None, None, False, 1, 1,
+                                       inventory=snap)
+    assert second_page["total"] == 2 and len(second_page["items"]) == 1
+    assert pm.list_product_master_types({"id": 42}) == {"items": ["BEBIDAS", "CERVEZAS"]}

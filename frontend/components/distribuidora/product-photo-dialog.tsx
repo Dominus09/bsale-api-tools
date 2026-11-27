@@ -35,7 +35,7 @@ function webpBlob(base64: string) {
   return new Blob([bytes], { type: "image/webp" })
 }
 
-export function ProductPhotoDialog({ product, onClose }: { product: ProductMasterRow; onClose: () => void }) {
+export function ProductPhotoDialog({ product, onClose, onPublished }: { product: ProductMasterRow; onClose: () => void; onPublished?: () => void }) {
   const [state, setState] = useState<PhotoState | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [original, setOriginal] = useState<string | null>(null)
@@ -100,7 +100,11 @@ export function ProductPhotoDialog({ product, onClose }: { product: ProductMaste
     const body = new FormData()
     body.append("image", webpBlob(preview.data_base64), preview.filename)
     body.append("preview_token", preview.preview_token)
-    try { setPublished(await request<Published>(product.id, "/commit", body)) }
+    try {
+      const result = await request<Published>(product.id, "/commit", body)
+      setPublished(result)
+      onPublished?.()
+    }
     catch (e) {
       setError((e instanceof Error ? e.message : "Error al publicar.") + " Comprueba el estado antes de reintentar.")
       setPreview(null); setConfirmed(false)

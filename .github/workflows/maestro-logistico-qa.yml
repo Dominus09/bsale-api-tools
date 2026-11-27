@@ -3,6 +3,9 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'backend/routers/products_master.py'
+      - 'backend/services/catalog_photo_inventory.py'
+      - 'frontend/lib/api.ts'
       - 'backend/routers/product_photos.py'
       - 'backend/routers/product_pallets.py'
       - 'backend/services/product_photo_service.py'
@@ -36,7 +39,7 @@ jobs:
       - name: Install isolated test dependencies
         run: python -m pip install -r requirements.txt pytest httpx
       - name: Photo and pallet HTTP contracts
-        run: python -m pytest -q backend/tests/test_product_photo_service.py backend/tests/test_product_photo_routes.py
+        run: python -m pytest -q backend/tests/test_product_photo_service.py backend/tests/test_product_photo_routes.py backend/tests/test_product_photo_inventory.py
   erp-build:
     runs-on: ubuntu-latest
     timeout-minutes: 25
