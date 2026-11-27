@@ -26,3 +26,9 @@ Repositorio inspeccionado: Dominus09/cat-quillotana, main, public/products/{barc
 
 ## Catalog companion PR
 The companion cat-quillotana branch `feat/catalog-verified-local-photos` builds a verified filename/content-version manifest. Enable `NEXT_PUBLIC_CATALOG_LOCAL_PHOTOS_ENABLED=1` only after catalog QA; confirm it is deployed before enabling ERP publication. ERP blocks an API image pointing to an unrelated file; no implicit override. Missing/known placeholder images may use a newly deployed local file. The catalog and ERP switches remain OFF by default.
+
+## Second QA pass
+- Preparation works even when GitHub is unavailable, publication blocked, or a barcode mapping requires review. No signed token is issued while blocked.
+- Publication requires active product, legacy public source, one matching company-3 variant in the legacy catalog and canonical product_master_variants mapping (AUTO_EXACT/MANUAL), compatible URL, and signed exact catalog variant id. A changed variant invalidates the token. V2 publication remains intentionally blocked until its mapping is separately validated.
+- ERP CSP admits only the additional exact origin https://cat.quillotana.cl for images; photo preview uses data/blob already allowed. No connect-src or script-src relaxation.
+- SQL 070 includes transaction-local timeouts to avoid prolonged lock waits. Verify destination and schema, take backup, and run manually only after authorization.

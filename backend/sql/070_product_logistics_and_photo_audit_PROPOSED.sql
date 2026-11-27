@@ -1,6 +1,9 @@
 -- PROPOSAL. Do not apply automatically.
 -- Target analytics; verify actual ERP/API DB and obtain approval before execution.
 BEGIN;
+-- Abort safely instead of waiting indefinitely for a busy master table.
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '60s';
 
 ALTER TABLE bsale.products_master ADD COLUMN IF NOT EXISTS boxes_per_pallet integer;
 DO $$

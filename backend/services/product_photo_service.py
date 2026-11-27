@@ -217,20 +217,21 @@ def _sign(payload: str) -> str:
     return hmac.new(key.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
-def sign_preview(*, user_id: int, row_id: int, barcode: str, old_sha: str | None, raw: bytes) -> str:
-    body = {"u": user_id, "r": row_id, "b": safe_barcode(barcode), "old": old_sha,
+def sign_preview(*, user_id: int, row_id: int, barcode: str, variant_id: int, old_sha: str | None, raw: bytes) -> str:
+    body = {"u": user_id, "r": row_id, "b": safe_barcode(barcode), "v": variant_id, "old": old_sha,
             "sha256": digest(raw), "exp": int(time.time()) + TTL}
     payload = base64.urlsafe_b64encode(json.dumps(body, separators=(",", ":")).encode()).decode()
     return payload + "." + _sign(payload)
 
 
-def verify_preview(token: str, *, user_id: int, row_id: int, barcode: str, raw: bytes) -> str | None:
+def verify_preview(token: str, *, user_id: int, row_id: int, barcode: str, variant_id: int, raw: bytes) -> str | None:
     try:
         payload, signature = token.split(".")
         if len(token) > 2048 or not hmac.compare_digest(signature, _sign(payload)):
             raise ValueError()
         body = json.loads(base64.urlsafe_b64decode(payload))
-        if body["u"] != user_id or body["r"] != row_id or body["b"] != safe_barcode(barcode):
+        if (body["u"] != user_id or body["r"] != row_id or body["b"] != safe_barcode(barcode)
+                or body["v"] != variant_id):
             raise ValueError()
         if body["sha256"] != digest(raw) or body["exp"] < int(time.time()):
             raise ValueError()
@@ -238,7 +239,7 @@ def verify_preview(token: str, *, user_id: int, row_id: int, barcode: str, raw: 
         if old is not None and (not isinstance(old, str) or not _SHA.fullmatch(old)):
             raise ValueError()
         return old
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, UnicodeError):
         raise HTTPException(409, "La previsualización expiró o cambió. Prepárala nuevamente.") from None
 
 

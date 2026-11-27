@@ -43,10 +43,10 @@ def test_bad_input_and_disabled_ai(monkeypatch):
 def test_token_binds_exact_content_product_user_and_sha(monkeypatch):
     monkeypatch.setenv("CATALOG_PHOTO_PREVIEW_SECRET", "test-secret-" * 4)
     data = p.prepare_photo(image_bytes(), "original")
-    args = dict(user_id=42, row_id=8, barcode="00123", raw=data)
+    args = dict(user_id=42, row_id=8, barcode="00123", variant_id=500, raw=data)
     token = p.sign_preview(**args, old_sha="a" * 40)
     assert p.verify_preview(token, **args) == "a" * 40
-    for change in ({"user_id": 43}, {"row_id": 9}, {"barcode": "00456"}, {"raw": b"changed"}):
+    for change in ({"user_id": 43}, {"row_id": 9}, {"barcode": "00456"}, {"variant_id": 501}, {"raw": b"changed"}):
         with pytest.raises(HTTPException):
             p.verify_preview(token, **(args | change))
 
@@ -94,7 +94,7 @@ def test_publish_mocked_github_success_exact_bytes(monkeypatch):
 def test_expired_preview_rejected(monkeypatch):
     monkeypatch.setenv("CATALOG_PHOTO_PREVIEW_SECRET", "test-secret-" * 4)
     data = p.prepare_photo(image_bytes(), "original")
-    args = dict(user_id=42, row_id=8, barcode="00123", raw=data)
+    args = dict(user_id=42, row_id=8, barcode="00123", variant_id=500, raw=data)
     with patch.object(p.time, "time", return_value=100):
         token = p.sign_preview(**args, old_sha=None)
     with patch.object(p.time, "time", return_value=100 + p.TTL + 1):

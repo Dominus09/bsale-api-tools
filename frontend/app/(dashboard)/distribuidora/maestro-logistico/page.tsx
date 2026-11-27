@@ -622,6 +622,7 @@ export default function MaestroLogisticoPage() {
                               {productLabel(row)}
                             </p>
                             {photoAccess ? <Button type="button" variant="outline" size="sm" className="mt-2 h-8 gap-1.5 text-xs" onClick={() => setPhotoProduct(row)}><ImagePlus className="size-3.5" /> Gestionar foto</Button> : null}
+                            {row.product_type ? <p className="mt-1 text-xs font-medium text-muted-foreground">{row.product_type}</p> : null}
                             {row.sku ? <p className="mt-1 text-xs text-muted-foreground">SKU {row.sku}</p> : null}
                             {row.weight_unit_kg != null ? (
                               <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
