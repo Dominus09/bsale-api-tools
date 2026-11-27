@@ -49,9 +49,13 @@ def pallet_data(ids: list[int]) -> dict:
                 SELECT id, boxes_per_pallet, units_per_box, weight_box_kg
                 FROM bsale.products_master WHERE id = ANY(%s)
             """, (ids,))
+            # Materialize the product result before the feature lookup executes
+            # its own SQL on this cursor. Otherwise that query replaces the rows.
+            items = [_pallet_row(row) for row in cur.fetchall()]
+            writes_enabled = controls.enabled("product_master_pallet_writes", cur=cur)
             return {"schema_ready": True,
-                    "writes_enabled": controls.enabled("product_master_pallet_writes", cur=cur),
-                    "items": [_pallet_row(row) for row in cur.fetchall()]}
+                    "writes_enabled": writes_enabled,
+                    "items": items}
     finally:
         conn.close()
 

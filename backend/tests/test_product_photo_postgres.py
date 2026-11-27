@@ -117,7 +117,9 @@ def test_migration_twice_preserves_existing_columns_and_checks_positive(services
             cur.execute("UPDATE bsale.products_master SET boxes_per_pallet=0 WHERE id=8")
         conn.rollback()
     assert admin.photo_audit_ready()
-    assert admin.pallet_data([8])["schema_ready"]
+    data = admin.pallet_data([8])
+    assert data["schema_ready"] and data["writes_enabled"]
+    assert data["items"] == [{"id": 8, "boxes_per_pallet": None, "units_per_pallet": None, "load_weight_kg": None}]
 
 
 def test_pallet_edit_audit_and_clear_preserve_units_and_weights(services):
@@ -288,7 +290,9 @@ def test_owner_controls_migration_and_pallet_integration(services, monkeypatch):
         item = next(i for i in disabled["items"] if i["key"] == key)
         assert item["row_version"] == 1 and item["configured_enabled"] is False
         assert controls.enabled(key) is False
-        assert admin.pallet_data([8])["writes_enabled"] is False
+        data = admin.pallet_data([8, 9])
+        assert data["writes_enabled"] is False
+        assert sorted(row["id"] for row in data["items"]) == [8, 9]
         with pytest.raises(HTTPException) as exc:
             admin.set_pallet_boxes(8, 50, 42)
         assert exc.value.status_code == 503
@@ -299,7 +303,12 @@ def test_owner_controls_migration_and_pallet_integration(services, monkeypatch):
         monkeypatch.delenv("PRODUCT_MASTER_PALLET_WRITES_ENABLED", raising=False)
         enabled = controls.set_override(key, override=True, expected_version=1, actor=42)
         assert next(i for i in enabled["items"] if i["key"] == key)["effective_enabled"]
-        assert admin.pallet_data([8])["writes_enabled"] is True
+        data = admin.pallet_data([8, 9])
+        assert data["writes_enabled"] is True
+        assert sorted(row["id"] for row in data["items"]) == [8, 9]
+        # Both settings reads and subsequent pallet writes must retain real rows.
+        # This regression must not be masked by checking the flag alone.
+        assert all(row["boxes_per_pallet"] is None for row in data["items"])
         no_change = controls.set_override(key, override=True, expected_version=2, actor=42)
         assert len(no_change["history"]) == 2
 
