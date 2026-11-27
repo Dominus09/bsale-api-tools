@@ -1,0 +1,88 @@
+name: Maestro logistico QA
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/routers/product_photos.py'
+      - 'backend/routers/product_pallets.py'
+      - 'backend/services/product_photo_service.py'
+      - 'backend/services/product_master_admin_service.py'
+      - 'backend/tests/test_product_photo*.py'
+      - 'backend/sql/070_product_logistics_and_photo_audit_PROPOSED.sql'
+      - 'frontend/app/(dashboard)/distribuidora/maestro-logistico/**'
+      - 'frontend/components/distribuidora/product-photo-dialog.tsx'
+      - 'frontend/lib/product-pallets.ts'
+      - 'frontend/middleware.ts'
+      - 'requirements.txt'
+      - '.github/workflows/maestro-logistico-qa.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  photo-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CATALOG_PHOTO_WRITES_ENABLED: '0'
+      PRODUCT_MASTER_PALLET_WRITES_ENABLED: '0'
+      CATALOG_PHOTO_AI_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated test dependencies
+        run: python -m pip install -r requirements.txt pytest httpx
+      - name: Photo and pallet HTTP contracts
+        run: python -m pytest -q backend/tests/test_product_photo_service.py backend/tests/test_product_photo_routes.py
+  erp-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      NODE_OPTIONS: '--max-old-space-size=4096'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+  postgres-migration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      LQ_PRODUCT_MASTER_PG_QA: '1'
+      CATALOG_PHOTO_WRITES_ENABLED: '0'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lq_qa
+          POSTGRES_PASSWORD: qa_only_not_production
+          POSTGRES_DB: lq_product_master_qa
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U lq_qa -d lq_product_master_qa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt pytest httpx
+      - run: python -m pytest -q backend/tests/test_product_photo_postgres.py

@@ -1,7 +1,9 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Check, Loader2, Search } from "lucide-react"
+import { Check, ImagePlus, Loader2, Search } from "lucide-react"
+import { ProductPhotoDialog } from "@/components/distribuidora/product-photo-dialog"
+import { getPalletData, getPalletStats, patchPalletBoxes, type ProductPalletData } from "@/lib/product-pallets"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,8 +22,8 @@ import {
   getProductsMaster,
   getProductsMasterLogisticsStats,
   getSuppliers,
-  patchProductMaster,
-  PRODUCTS_MASTER_PAGE_SIZE,
+  patchProductMasterById,
+  getAuthMe,
   type GetProductsMasterParams,
   type ProductMasterLogisticsPatch,
   type ProductMasterRow,
@@ -144,7 +146,55 @@ export default function MaestroLogisticoPage() {
   const [searchInput, setSearchInput] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(50)
+  const [photoProduct, setPhotoProduct] = useState<ProductMasterRow | null>(null)
+  const [photoAccess, setPhotoAccess] = useState(false)
+  const [palletRows, setPalletRows] = useState<Record<number, ProductPalletData>>({})
+  const [palletReady, setPalletReady] = useState(false)
+  const [palletWrites, setPalletWrites] = useState(false)
+  const [palletCoverage, setPalletCoverage] = useState<{ total: number | null; with_boxes_per_pallet: number | null } | null>(null)
+  const [palletError, setPalletError] = useState("")
+  const [palletRevision, setPalletRevision] = useState(0)
+  const [palletSaving, setPalletSaving] = useState<number | null>(null)
+  useEffect(() => {
+    let active = true
+    void getAuthMe().then(me => { if (active) setPhotoAccess(me.management_access === true && (!me.apps || me.apps.includes("erp"))) }).catch(() => undefined)
+    return () => { active = false }
+  }, [])
   const [total, setTotal] = useState(0)
+  // One request per page; no per-row fetches. Keep legacy API unchanged.
+  const rowIds = useMemo(() => rows.map(row => row.id).join(","), [rows])
+  useEffect(() => {
+    if (!photoAccess || !rowIds) { setPalletRows({}); return }
+    const controller = new AbortController()
+    setPalletRows({}); setPalletReady(false); setPalletWrites(false); setPalletError("")
+    void getPalletData(rowIds, controller.signal).then(data => {
+      if (controller.signal.aborted) return
+      setPalletReady(data.schema_ready); setPalletWrites(data.writes_enabled)
+      setPalletRows(Object.fromEntries(data.items.map(item => [item.id, item])))
+    }).catch(e => { if (!controller.signal.aborted) setPalletError(e instanceof Error ? e.message : "No se pudieron cargar cajas por pallet.") })
+    return () => controller.abort()
+  }, [photoAccess, rowIds])
+  useEffect(() => {
+    if (!photoAccess) return
+    const controller = new AbortController()
+    void getPalletStats(controller.signal).then(data => { if (!controller.signal.aborted) setPalletCoverage(data) }).catch(() => undefined)
+    return () => controller.abort()
+  }, [photoAccess, palletRevision])
+  async function savePallet(row: ProductMasterRow, raw: string) {
+    const clean = raw.trim()
+    const value = clean === "" ? null : Number(clean)
+    if (value !== null && (!/^\d+$/.test(clean) || !Number.isSafeInteger(value) || value < 1 || value > 2147483647)) {
+      setPalletError("Cajas por pallet debe ser un número entero positivo."); setPalletRevision(v => v + 1); return
+    }
+    if (!palletWrites || palletSaving !== null || palletRows[row.id]?.boxes_per_pallet === value) return
+    setPalletSaving(row.id); setPalletError("")
+    try {
+      const result = await patchPalletBoxes(row.id, value)
+      setPalletRows(prev => ({ ...prev, [row.id]: result })); setPalletRevision(v => v + 1)
+    } catch (e) { setPalletError(e instanceof Error ? e.message : "No se pudo guardar el pallet."); setPalletRevision(v => v + 1) }
+    finally { setPalletSaving(null) }
+  }
 
   const [stats, setStats] = useState<ProductsMasterLogisticsStats | null>(null)
   const [statsLoading, setStatsLoading] = useState(true)
@@ -212,19 +262,20 @@ export default function MaestroLogisticoPage() {
 
   useEffect(() => {
     setPage(0)
-  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId])
+  }, [debouncedSearch, filterLogisticsIncomplete, filterSupplierId, pageSize])
 
   useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
     async function load() {
       setLoading(true)
       setError("")
       try {
         const data = await getProductsMaster({
           ...filterQueryParams,
-          limit: PRODUCTS_MASTER_PAGE_SIZE,
-          offset: page * PRODUCTS_MASTER_PAGE_SIZE,
-        })
+          limit: pageSize,
+          offset: page * pageSize,
+        }, controller.signal)
         if (!cancelled) {
           setRows(data.items)
           setTotal(data.total)
@@ -242,8 +293,9 @@ export default function MaestroLogisticoPage() {
     load()
     return () => {
       cancelled = true
+      controller.abort()
     }
-  }, [filterQueryParams, page])
+  }, [filterQueryParams, page, pageSize])
 
   useEffect(() => {
     let cancelled = false
@@ -314,23 +366,23 @@ export default function MaestroLogisticoPage() {
     ) => {
       setRowErrors((e) => {
         const copy = { ...e }
-        delete copy[row.barcode]
+        delete copy[String(row.id)]
         return copy
       })
-      clearSaveSuccessFlash(row.barcode)
-      setPending(row.barcode, true)
+      clearSaveSuccessFlash(String(row.id))
+      setPending(String(row.id), true)
       const prev = row
       setRows((rs) =>
-        rs.map((r) => (r.barcode === row.barcode ? { ...r, ...optimistic } : r)),
+        rs.map((r) => (r.id === row.id ? { ...r, ...optimistic } : r)),
       )
       try {
-        const updated = await patchProductMaster(row.barcode, patch)
+        const updated = await patchProductMasterById(row.id, patch)
         setRows((rs) =>
           rs.map((r) =>
-            r.barcode === row.barcode
+            r.id === row.id
               ? {
                   ...r,
-                  supplier_id: updated.supplier_id ?? r.supplier_id,
+                  supplier_id: updated.supplier_id,
                   units_per_box: updated.units_per_box ?? r.units_per_box,
                   weight_box_kg: updated.weight_box_kg ?? r.weight_box_kg,
                   height_cm: updated.height_cm ?? r.height_cm,
@@ -345,17 +397,17 @@ export default function MaestroLogisticoPage() {
               : r,
           ),
         )
-        flashSaveSuccess(row.barcode)
+        flashSaveSuccess(String(row.id))
       } catch {
         setRows((rs) =>
-          rs.map((r) => (r.barcode === row.barcode ? prev : r)),
+          rs.map((r) => (r.id === row.id ? prev : r)),
         )
         setRowErrors((e) => ({
           ...e,
-          [row.barcode]: "No se pudo guardar",
+          [String(row.id)]: "No se pudo guardar",
         }))
       } finally {
-        setPending(row.barcode, false)
+        setPending(String(row.id), false)
       }
     },
     [clearSaveSuccessFlash, flashSaveSuccess, setPending],
@@ -388,10 +440,10 @@ export default function MaestroLogisticoPage() {
     [patchRow],
   )
 
-  const pageFrom = total === 0 ? 0 : page * PRODUCTS_MASTER_PAGE_SIZE + 1
-  const pageTo = Math.min((page + 1) * PRODUCTS_MASTER_PAGE_SIZE, total)
+  const pageFrom = total === 0 ? 0 : page * pageSize + 1
+  const pageTo = Math.min((page + 1) * pageSize, total)
   const canPrev = page > 0 && !loading
-  const canNext = !loading && (page + 1) * PRODUCTS_MASTER_PAGE_SIZE < total
+  const canNext = !loading && (page + 1) * pageSize < total
   const selectDisabled = suppliersLoading || !!suppliersError || suppliers.length === 0
 
   return (
@@ -495,14 +547,14 @@ export default function MaestroLogisticoPage() {
 
             <div className="flex min-w-[220px] flex-1 flex-col gap-1.5 sm:max-w-md">
               <Label htmlFor="logistics-search" className="text-xs text-muted-foreground">
-                Buscar producto o código de barras
+                Buscar producto, SKU, variante o código de barras
               </Label>
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   id="logistics-search"
                   className="h-9 pl-9"
-                  placeholder="Nombre o barcode…"
+                  placeholder="Nombre, SKU, ID o barcode…"
                   value={searchInput}
                   onChange={(e) => setSearchInput(e.target.value)}
                   autoComplete="off"
@@ -511,6 +563,12 @@ export default function MaestroLogisticoPage() {
             </div>
           </div>
 
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Resultados paginados en servidor · selección de fotografía por producto</p>
+            <div className="flex items-center gap-2"><Label className="text-xs">Filas por página</Label><Select value={String(pageSize)} onValueChange={v => { setPage(0); setPageSize(Number(v)) }}><SelectTrigger aria-label="Filas por página" className="h-9 w-24"><SelectValue /></SelectTrigger><SelectContent>{[25, 50, 100].map(n => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}</SelectContent></Select></div>
+          </div>
+          {photoAccess ? <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/20 p-3 text-sm"><strong>Cobertura de pallet</strong><span className="text-muted-foreground">{palletCoverage?.with_boxes_per_pallet != null ? `${palletCoverage.with_boxes_per_pallet.toLocaleString("es-CL")} de ${palletCoverage.total?.toLocaleString("es-CL")} productos activos` : "Sin datos verificados / migración pendiente"}</span>{palletReady && !palletWrites ? <span className="text-xs text-muted-foreground">Edición deshabilitada</span> : null}</div> : null}
+          {palletError ? <p role="alert" className="text-sm text-destructive">{palletError}</p> : null}
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1100px]">
               <thead>
@@ -518,6 +576,7 @@ export default function MaestroLogisticoPage() {
                   <th className="pb-3 pr-3">Producto</th>
                   <th className="pb-3 pr-3">Código barra</th>
                   <th className="pb-3 pr-3">CxC</th>
+                  {photoAccess ? <th className="pb-3 pr-3">Cajas / pallet</th> : null}
                   <th className="pb-3 pr-3">Peso caja (kg)</th>
                   <th className="pb-3 pr-3">Alto (cm)</th>
                   <th className="pb-3 pr-3">Ancho (cm)</th>
@@ -529,20 +588,20 @@ export default function MaestroLogisticoPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={photoAccess ? 10 : 9} className="py-6 text-center text-sm text-muted-foreground">
                       Cargando…
                     </td>
                   </tr>
                 ) : rows.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={photoAccess ? 10 : 9} className="py-6 text-center text-sm text-muted-foreground">
                       No hay productos para mostrar
                     </td>
                   </tr>
                 ) : (
                   rows.map((row) => {
-                    const pending = pendingBarcodes.has(row.barcode)
-                    const showSaved = saveSuccessBarcodes.has(row.barcode)
+                    const pending = pendingBarcodes.has(String(row.id))
+                    const showSaved = saveSuccessBarcodes.has(String(row.id))
                     const supplierValue =
                       row.supplier_id != null ? String(row.supplier_id) : NONE_SELECT
                     const orphanSupplier =
@@ -562,6 +621,9 @@ export default function MaestroLogisticoPage() {
                             <p className="text-sm font-medium leading-snug">
                               {productLabel(row)}
                             </p>
+                            {photoAccess ? <Button type="button" variant="outline" size="sm" className="mt-2 h-8 gap-1.5 text-xs" onClick={() => setPhotoProduct(row)}><ImagePlus className="size-3.5" /> Gestionar foto</Button> : null}
+                            {row.product_type ? <p className="mt-1 text-xs font-medium text-muted-foreground">{row.product_type}</p> : null}
+                            {row.sku ? <p className="mt-1 text-xs text-muted-foreground">SKU {row.sku}</p> : null}
                             {row.weight_unit_kg != null ? (
                               <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
                                 Peso unit. ≈ {row.weight_unit_kg.toFixed(4)} kg
@@ -590,6 +652,11 @@ export default function MaestroLogisticoPage() {
                             }}
                           />
                         </td>
+                        {photoAccess ? <td className="py-2.5 pr-3 align-middle">
+                          <Input key={`${row.id}-${palletRows[row.id]?.boxes_per_pallet ?? "empty"}-${palletRevision}`} type="text" inputMode="numeric" className="h-8 w-24 tabular-nums" aria-label={`Cajas por pallet de ${productLabel(row)}`} placeholder="Sin dato" defaultValue={palletRows[row.id]?.boxes_per_pallet ?? ""} disabled={!palletReady || !palletWrites || palletSaving !== null || pending} onBlur={e => void savePallet(row, e.currentTarget.value)} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur() }} />
+                          {palletRows[row.id]?.boxes_per_pallet && row.units_per_box && row.units_per_box > 0 ? <p className="mt-1 text-[11px] text-muted-foreground">{(palletRows[row.id].boxes_per_pallet! * row.units_per_box).toLocaleString("es-CL")} un.</p> : null}
+                          {palletRows[row.id]?.boxes_per_pallet && row.weight_box_kg && row.weight_box_kg > 0 ? <p className="text-[11px] text-muted-foreground">{(palletRows[row.id].boxes_per_pallet! * row.weight_box_kg).toLocaleString("es-CL", { maximumFractionDigits: 2 })} kg carga</p> : null}
+                        </td> : null}
                         <td className="py-2.5 pr-3 align-middle">
                           <InlineNumberInput
                             value={row.weight_box_kg}
@@ -662,9 +729,9 @@ export default function MaestroLogisticoPage() {
                               ) : null}
                             </span>
                           </div>
-                          {rowErrors[row.barcode] ? (
+                          {rowErrors[String(row.id)] ? (
                             <p className="mt-0.5 text-xs text-destructive">
-                              {rowErrors[row.barcode]}
+                              {rowErrors[String(row.id)]}
                             </p>
                           ) : null}
                         </td>
@@ -710,6 +777,7 @@ export default function MaestroLogisticoPage() {
           </div>
         </CardContent>
       </Card>
+      {photoProduct ? <ProductPhotoDialog key={photoProduct.id} product={photoProduct} onClose={() => setPhotoProduct(null)} /> : null}
     </div>
   )
 }
