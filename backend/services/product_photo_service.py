@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import threading
@@ -123,11 +124,51 @@ def decode_image(raw: bytes) -> Image.Image:
         raise HTTPException(415, "No se pudo leer la imagen. Comprueba el formato.") from None
 
 
-def prepare_photo(raw: bytes, mode: str) -> bytes:
+def source_preview(raw: bytes) -> bytes:
+    """Display the entire EXIF-oriented image so crop coordinates match server pixels."""
+    image = decode_image(raw)
+    image.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+    for quality in (85, 70, 50, 35):
+        out = io.BytesIO()
+        image.save(out, "WEBP", quality=quality, method=4)
+        if out.tell() <= MAX_WEBP:
+            return out.getvalue()
+    raise HTTPException(422, "No se pudo preparar la imagen original para recortarla.")
+
+
+def _crop_image(image: Image.Image, crop: str | None) -> Image.Image:
+    if crop is None:
+        return image
+    try:
+        if len(crop) > 512:
+            raise ValueError()
+        rect = json.loads(crop)
+        keys = ("left", "top", "right", "bottom")
+        if not isinstance(rect, dict) or set(rect) != set(keys):
+            raise ValueError()
+        vals = [rect[k] for k in keys]
+        if any(type(v) not in (int, float) or not math.isfinite(v) for v in vals):
+            raise ValueError()
+        left, top, right, bottom = vals
+        if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
+            raise ValueError()
+        if right - left < 0.019999 or bottom - top < 0.019999:
+            raise ValueError()
+        # Round inward so pixels excluded by the rectangle are never brought back.
+        box = (math.ceil(left * image.width), math.ceil(top * image.height),
+               math.floor(right * image.width), math.floor(bottom * image.height))
+        if box[2] <= box[0] or box[3] <= box[1]:
+            raise ValueError()
+        return image.crop(box)
+    except (ValueError, TypeError, OverflowError):
+        raise HTTPException(422, "Recorte no válido. Selecciona un área de al menos 2% de ancho y alto.") from None
+
+
+def prepare_photo(raw: bytes, mode: str, crop: str | None = None) -> bytes:
     if mode not in {"original", "white", "remove", "remove_white"}:
         raise HTTPException(422, "Modo de fondo no válido.")
-    image = decode_image(raw)
-    # Bound model input, preserve proportions; no invented product pixels.
+    image = _crop_image(decode_image(raw), crop)
+    # Crop at original resolution before segmentation, preserve proportions.
     image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
     if mode.startswith("remove"):
         image = _remove_background(image)
@@ -135,7 +176,10 @@ def prepare_photo(raw: bytes, mode: str) -> bytes:
         if not box:
             raise HTTPException(422, "No se detectó el producto. Conserva el fondo original.")
         image = image.crop(box)
-    image.thumbnail((900, 900), Image.Resampling.LANCZOS)
+    # thumbnail() never enlarges a small source, which previously left tiny products.
+    # Fit the selected image to 90% of the canvas even when the source is small.
+    scale = 900 / max(image.size)
+    image = image.resize(tuple(max(1, min(900, round(n * scale))) for n in image.size), Image.Resampling.LANCZOS)
     canvas = Image.new("RGBA", (SIZE, SIZE), (255, 255, 255, 255) if mode in {"white", "remove_white"} else (0, 0, 0, 0))
     canvas.alpha_composite(image, ((SIZE - image.width) // 2, (SIZE - image.height) // 2))
     for quality in (88, 80, 70, 55, 40):

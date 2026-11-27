@@ -105,8 +105,22 @@ def get_photo(row_id: int, user: dict = Depends(require_management_access)):
             "ai_enabled": photos.ai_enabled()}
 
 
+@router.post("/{row_id}/photo/source-preview")
+def crop_source(row_id: int, image: UploadFile = File(...),
+                user: dict = Depends(require_management_access)):
+    _actor(user)
+    _product(row_id)
+    try:
+        raw = image.file.read(photos.MAX_UPLOAD + 1)
+    finally:
+        image.file.close()
+    data = photos.source_preview(raw)
+    return {"data_base64": base64.b64encode(data).decode()}
+
+
 @router.post("/{row_id}/photo/prepare")
 def prepare(row_id: int, mode: str = Form("original"), image: UploadFile = File(...),
+            crop: str | None = Form(None, max_length=512),
             user: dict = Depends(require_management_access)):
     actor = _actor(user)
     p = _product(row_id)
@@ -115,7 +129,7 @@ def prepare(row_id: int, mode: str = Form("original"), image: UploadFile = File(
         raw = image.file.read(photos.MAX_UPLOAD + 1)
     finally:
         image.file.close()
-    data = photos.prepare_photo(raw, mode)
+    data = photos.prepare_photo(raw, mode, crop=crop)
     sha = None
     enabled = not p["blocked_reason"] and _writes_enabled()
     publication_reason = p["blocked_reason"]

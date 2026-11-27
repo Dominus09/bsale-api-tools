@@ -1,0 +1,7 @@
+# Manual crop for catalog photographs
+
+- Source-preview is management-only, uses the same EXIF-aware decoder as preparation, and returns a bounded full-image WebP. HEIC works even when the browser cannot render the original. No repository writes or persistent preview files.
+- Select an area by dragging or adjusting four percentage borders. Crop applies at original resolution, before optional background removal. Validate normalized bounds, finite numbers and minimum 2% size on server. Changing the selection invalidates the prepared result and signed publish token.
+- Fit the selected subject proportionally into 900 x 900 of the 1000 x 1000 canvas, including enlargement of small sources. This is interpolation, not detail restoration. Keep product/label pixels, no image generation. White canvas and original modes remain available without AI. AI optional and disabled until its deployment is configured and verified.
+- Existing publication confirmation, feature flags, private audit and GitHub SHA guards unchanged. No migrations, no catalog changes, no automatic deploy.
+- QA: synthetic product with side banner, invalid crop coordinates, EXIF rotation, small image enlargement and existing HTTP contract tests. Validate browser crop on actual product and verify the prepared image before publishing.
