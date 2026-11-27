@@ -12,7 +12,7 @@ const font = Plus_Jakarta_Sans({
 
 export const metadata: Metadata = {
   title: "Quillotana Operativa",
-  description: "Despachos del chofer — Grupo La Quillotana",
+  description: "Gestión integral de operaciones — Grupo La Quillotana",
   applicationName: "Quillotana Operativa",
   appleWebApp: {
     capable: true,

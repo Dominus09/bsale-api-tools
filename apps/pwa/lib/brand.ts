@@ -12,7 +12,7 @@ export const QUILLOTANA_EMBLEM_URL =
 
 export const BRAND = {
   name: "Quillotana Operativa",
-  subtitle: "Gestión de despachos",
+  subtitle: "Gestión integral de operaciones",
   /** Rojo institucional ERP (--lq-brand). */
   accent: "#c4293c",
   accentStrong: "#a42032",
