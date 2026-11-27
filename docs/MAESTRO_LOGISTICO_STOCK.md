@@ -1,0 +1,9 @@
+# Stock consolidado del maestro logístico
+
+Fuente: bsale.stocks.quantity_available (sync_stock.py, snapshot por empresa). No mezclar RAW con legacy. Alcance: todas las empresas activas en bsale.companies y todas sus oficinas, incluso auxiliares. Suma algebraica de unidades disponibles (no restar reservas nuevamente). Unión exacta de variante por company_id+bsale_id, luego agrupar por barcode sin perder ceros iniciales. Cada fila de inventario de la clave empresa/variante/oficina se suma una vez; si varias variantes de la misma empresa comparten barcode se marca aviso, no se afirma identidad física. No modifica ni consulta Bsale en vivo.
+
+Filtros SQL antes de COUNT/LIMIT: Todos, Con stock (>0), Saldo cero o negativo (<=0), Sin datos (NULL). Combinables con fotos, tipo, proveedor, búsqueda e incompletitud. Cobertura de empresas y última actualización registrada (no garantía de actualización de todas las oficinas). Dato faltante no es cero. Si alguna empresa no tiene datos o hay filas nulas, advertencia de cobertura parcial. Foto y stock son lecturas independientes.
+
+Solo endpoint gerencial y alcance completo de empresas según permisos existentes; si no hay acceso completo no expone stock ni cobertura del grupo. Endpoint legacy permanece sin JOIN ni cambios de contrato. No SQL nuevo, cambios de crons, escritura de stock ni deploy automático.
+
+QA: PostgreSQL desechable con IDs de variante repetidos entre empresas, oficinas múltiples, negativos, nulos, empresa inactiva, reservas y variantes con barcode compartido; comprobar combinación foto/tipo y paginación. Build ERP y contratos HTTP en GitHub Actions. Comprobar muestra real del stock en ERP vs Bsale antes de darlo por validado.
