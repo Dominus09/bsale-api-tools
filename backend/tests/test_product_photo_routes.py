@@ -110,6 +110,7 @@ def test_denied_management_dependency_blocks_routes(app_client, status):
     app.dependency_overrides[r.require_management_access] = denied
     assert client.get("/products-master/id/8/photo").status_code == status
     assert prepare(client).status_code == status
+    assert client.post("/products-master/id/8/photo/source-preview", files={"image": ("example.png", png(), "image/png")}).status_code == status
     assert client.get("/products-master/pallets?ids=8").status_code == status
 
 
@@ -129,3 +130,32 @@ def test_pallet_calculations_use_manual_boxes_only():
     assert r.admin._pallet_row((8, 50, 24, 12.5)) == {
         "id": 8, "boxes_per_pallet": 50, "units_per_pallet": 1200, "load_weight_kg": 625.0}
     assert r.admin._pallet_row((8, None, 24, 12.5))["units_per_pallet"] is None
+
+
+def test_source_preview_and_manual_crop_are_read_only(app_client):
+    _, client, _ = app_client
+    from PIL import ImageDraw
+    image = Image.new("RGB", (200, 200), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((20, 20, 75, 179), fill=(100,35,20))
+    draw.rectangle((110, 0, 199, 199), fill=(240,90,10))
+    out = io.BytesIO()
+    image.save(out, "PNG")
+    files = {"image": ("product.png", out.getvalue(), "image/png")}
+    src = client.post("/products-master/id/8/photo/source-preview", files=files)
+    assert src.status_code == 200
+    assert "preview_token" not in src.json()
+    with Image.open(io.BytesIO(base64.b64decode(src.json()["data_base64"]))) as im:
+        assert im.size == (200, 200)
+    result = client.post("/products-master/id/8/photo/prepare",
+                         data={"mode": "white", "crop": '{"left":0.05,"top":0.05,"right":0.45,"bottom":0.95}'},
+                         files=files)
+    assert result.status_code == 200
+    data = result.json()
+    assert data["preview_token"] is None
+    p.validate_prepared(base64.b64decode(data["data_base64"]))
+    with Image.open(io.BytesIO(base64.b64decode(data["data_base64"]))) as im:
+        assert im.convert("RGB").getpixel((500,150))[0] < 150
+    p.photo_sha.assert_not_called()
+    assert client.post("/products-master/id/8/photo/prepare",
+                       data={"mode": "white", "crop": '{"left":0}'}, files=files).status_code == 422
