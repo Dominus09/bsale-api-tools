@@ -161,3 +161,47 @@ def test_source_preview_and_manual_crop_are_read_only(app_client):
     p.photo_sha.assert_not_called()
     assert client.post("/products-master/id/8/photo/prepare",
                        data={"mode": "white", "crop": '{"left":0}'}, files=files).status_code == 422
+
+
+def test_system_features_require_real_owner_and_erp_access(monkeypatch):
+    from backend.routers import system_feature_controls as settings
+    app = FastAPI()
+    app.include_router(settings.router)
+    monkeypatch.setenv("AUTH_OWNER_USER_IDS", "42")
+    fake_state = {"schema_ready": True, "items": [], "history": []}
+    get = Mock(return_value=fake_state)
+    write = Mock(return_value=fake_state)
+    monkeypatch.setattr(controls, "get_state", get)
+    monkeypatch.setattr(controls, "set_override", write)
+    http = TestClient(app)
+    route = "/admin/system-features"
+    patch = {"enabled_override": True, "expected_version": 0}
+    for role in ("gerencia", "adm", "operativo"):
+        app.dependency_overrides[settings.require_erp_app] = lambda: {"id": 99, "role": role, "is_owner": True}
+        assert http.get(route).status_code == 403
+        assert http.patch(route + "/product_master_pallet_writes", json=patch).status_code == 403
+    def deny_erp():
+        raise HTTPException(403, "PWA-only")
+    app.dependency_overrides[settings.require_erp_app] = deny_erp
+    assert http.get(route).status_code == 403
+    assert http.patch(route + "/product_master_pallet_writes", json=patch).status_code == 403
+    get.assert_not_called()
+    write.assert_not_called()
+    app.dependency_overrides[settings.require_erp_app] = lambda: {"id": 42, "role": "gerencia"}
+    response = http.get(route)
+    assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
+    assert http.patch(route + "/product_master_pallet_writes", json=patch).status_code == 200
+    write.assert_called_once_with("product_master_pallet_writes", override=True, expected_version=0, actor=42)
+    for invalid in ({"enabled_override": "true", "expected_version": 0},
+                    {"enabled_override": True, "expected_version": True},
+                    {"enabled_override": True, "expected_version": -1},
+                    {"expected_version": 0},
+                    {"enabled_override": True, "expected_version": 0, "actor": 99}):
+        assert http.patch(route + "/product_master_pallet_writes", json=invalid).status_code == 422
+    assert write.call_count == 1
+
+
+def test_system_feature_registry_rejects_arbitrary_env_keys_without_db():
+    with pytest.raises(HTTPException) as exc:
+        controls.set_override("AUTH_OWNER_USER_IDS", override=True, expected_version=0, actor=42)
+    assert exc.value.status_code == 404

@@ -86,7 +86,7 @@ export default function SystemConfigurationPage() {
             </div>
             <div className="flex items-center gap-3 sm:flex-col sm:items-end">
               <div className="flex items-center gap-2"><span className="text-sm">{stateLabel(item.configured_enabled)}</span><Switch aria-label={item.title} checked={item.configured_enabled} disabled={!data.schema_ready || loading || !!saving || (!item.configured_enabled && !item.requirements_ready)} onCheckedChange={value => void change(item, value)} /></div>
-              {saving === item.key ? <span className="flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" /> Guardando…</span> : item.enabled_override !== null ? <Button variant="ghost" size="sm" disabled={!data.schema_ready || loading || !!saving || (item.environment_default && !item.requirements_ready)} onClick={() => void change(item, null)}>Usar valor del servidor</Button> : null}
+              {saving === item.key ? <span className="flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" /> Guardando…</span> : item.enabled_override !== null ? <Button variant="ghost" size="sm" disabled={!data.schema_ready || loading || !!saving || (item.environment_default && !item.requirements_ready)} onClick={() => void change(item, null)}>Usar valor del servidor</Button> : <Button variant="ghost" size="sm" disabled={!data.schema_ready || loading || !!saving || (item.configured_enabled && !item.requirements_ready)} onClick={() => void change(item, item.configured_enabled)}>Controlar desde ERP</Button>}
             </div>
           </div>)}
         </CardContent>

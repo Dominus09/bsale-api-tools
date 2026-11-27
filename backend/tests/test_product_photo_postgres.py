@@ -251,3 +251,105 @@ def test_missing_stock_distinguished_from_zero_and_negative(services, monkeypatc
         with closing(services()) as conn, conn.cursor() as cur:
             cur.execute("DELETE FROM bsale.stocks WHERE company_id=1 AND variant_id=9999; DELETE FROM bsale.variants WHERE company_id=1 AND bsale_id=9999; DELETE FROM bsale.products_master WHERE id=10")
             conn.commit()
+
+
+def test_owner_controls_migration_and_pallet_integration(services, monkeypatch):
+    key = "product_master_pallet_writes"
+    photo_key = "catalog_photo_writes"
+    ai_key = "catalog_photo_ai"
+    monkeypatch.setenv("PRODUCT_MASTER_PALLET_WRITES_ENABLED", "1")
+    monkeypatch.setenv("CATALOG_PHOTO_WRITES_ENABLED", "1")
+    monkeypatch.setenv("CATALOG_PHOTO_GITHUB_TOKEN", "fake-private-token-do-not-return")
+    monkeypatch.setenv("CATALOG_PHOTO_PREVIEW_SECRET", "private-test-key-" * 4)
+    monkeypatch.setenv("CATALOG_PHOTO_AI_ENABLED", "1")
+    monkeypatch.setattr(controls, "ai_model_ready", lambda: True)
+    # Before migration, existing env behavior is unchanged and the panel is read-only.
+    assert controls.enabled(key) is True
+    assert controls.get_state()["schema_ready"] is False
+    with pytest.raises(HTTPException) as exc:
+        controls.set_override(key, override=False, expected_version=0, actor=42)
+    assert exc.value.status_code == 503
+    sql = (Path(__file__).resolve().parents[1] / "sql" /
+           "071_system_feature_controls_PROPOSED.sql").read_text()
+    with closing(services()) as conn:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            cur.execute(sql)
+    try:
+        initial = controls.get_state()
+        assert initial["schema_ready"] is True
+        assert all(item["configured_enabled"] for item in initial["items"])
+        assert all(item["source"] == "environment" for item in initial["items"])
+        assert "fake-private-token" not in str(initial)
+        assert "private-test-key" not in str(initial)
+
+        disabled = controls.set_override(key, override=False, expected_version=0, actor=42)
+        item = next(i for i in disabled["items"] if i["key"] == key)
+        assert item["row_version"] == 1 and item["configured_enabled"] is False
+        assert controls.enabled(key) is False
+        assert admin.pallet_data([8])["writes_enabled"] is False
+        with pytest.raises(HTTPException) as exc:
+            admin.set_pallet_boxes(8, 50, 42)
+        assert exc.value.status_code == 503
+        with pytest.raises(HTTPException) as exc:
+            controls.set_override(key, override=True, expected_version=0, actor=42)
+        assert exc.value.status_code == 409
+        # A database override also enables a function with ENV absent/false.
+        monkeypatch.delenv("PRODUCT_MASTER_PALLET_WRITES_ENABLED", raising=False)
+        enabled = controls.set_override(key, override=True, expected_version=1, actor=42)
+        assert next(i for i in enabled["items"] if i["key"] == key)["effective_enabled"]
+        assert admin.pallet_data([8])["writes_enabled"] is True
+        no_change = controls.set_override(key, override=True, expected_version=2, actor=42)
+        assert len(no_change["history"]) == 2
+
+        from backend.services import product_photo_service as photos
+        assert photos.writes_enabled() and photos.ai_enabled()
+        controls.set_override(photo_key, override=False, expected_version=0, actor=42)
+        controls.set_override(ai_key, override=False, expected_version=0, actor=42)
+        assert not photos.writes_enabled() and not photos.ai_enabled()
+        # The migration remains idempotent even after configuration changes.
+        with closing(services()) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(sql)
+        assert controls.enabled(key) and not controls.enabled(photo_key)
+        restored = controls.set_override(key, override=None, expected_version=2, actor=42)
+        item = next(i for i in restored["items"] if i["key"] == key)
+        assert item["source"] == "environment" and not item["configured_enabled"]
+        assert not controls.enabled(key)
+        assert len(restored["history"]) == 5
+
+        # Enabling cannot bypass hard prerequisites. Rejected change rolls back.
+        monkeypatch.delenv("CATALOG_PHOTO_GITHUB_TOKEN", raising=False)
+        with pytest.raises(HTTPException) as exc:
+            controls.set_override(photo_key, override=True, expected_version=1, actor=42)
+        assert exc.value.status_code == 409
+        monkeypatch.setattr(controls, "ai_model_ready", lambda: False)
+        with pytest.raises(HTTPException) as exc:
+            controls.set_override(ai_key, override=True, expected_version=1, actor=42)
+        assert exc.value.status_code == 409
+        assert len(controls.get_state()["history"]) == 5
+        assert not photos.writes_enabled() and not photos.ai_enabled()
+        with closing(services()) as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT before_override, after_override, actor_user_id, row_version
+                FROM app.system_feature_control_audit WHERE feature_key=%s ORDER BY id
+            """, (key,))
+            assert cur.fetchall() == [(None, False, 42, 1), (False, True, 42, 2), (True, None, 42, 3)]
+    finally:
+        # Dedicated test database only. Restore fixture for unrelated tests.
+        with closing(services()) as conn, conn.cursor() as cur:
+            cur.execute("DROP TABLE app.system_feature_control_audit; DROP TABLE app.system_feature_controls")
+            conn.commit()
+
+
+def test_feature_controls_do_not_fall_back_to_enabled_env_on_db_error(services, monkeypatch):
+    monkeypatch.setenv("PRODUCT_MASTER_PALLET_WRITES_ENABLED", "1")
+    def unavailable():
+        raise psycopg2.OperationalError("fake database unavailable")
+    monkeypatch.setattr(controls, "get_connection", unavailable)
+    assert controls.enabled("product_master_pallet_writes") is False
+    with pytest.raises(HTTPException) as exc:
+        controls.get_state()
+    assert exc.value.status_code == 503
