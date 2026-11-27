@@ -95,7 +95,7 @@ function LoginForm() {
         )
         return
       }
-      // Chofer único → /despachos (sin fricción). Varios perfiles → selector.
+      // Todos los usuarios autorizados eligen su módulo; sin salto automático.
       router.replace(resolvePostLoginPath(me.profiles || []))
     } catch (err) {
       clearSession()

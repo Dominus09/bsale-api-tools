@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { AppLink } from "@/components/app-link"
 import { useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import { usePathname } from "next/navigation"
@@ -52,7 +53,9 @@ export function AppMenu() {
             ? "bodega"
             : pathname?.startsWith("/supervision")
               ? "supervision"
-              : getActiveModuleId()
+              : pathname === "/modulos" || pathname?.startsWith("/modulos/")
+                ? null
+                : getActiveModuleId()
     setModuleName(moduleLabel(id))
   }, [open, pathname])
 
@@ -116,7 +119,7 @@ export function AppMenu() {
                 <section className="drawer-section">
                   <h3>Navegación</h3>
                   <div className="drawer-actions">
-                    <Link
+                    <AppLink
                       className="drawer-item"
                       href="/modulos"
                       onClick={() => {
@@ -125,7 +128,7 @@ export function AppMenu() {
                       }}
                     >
                       Cambiar módulo
-                    </Link>
+                    </AppLink>
                     {inChofer ? (
                       <Link
                         className="drawer-item"

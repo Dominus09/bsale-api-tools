@@ -4,7 +4,9 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Quillotana Operativa",
     short_name: "Operativa",
-    description: "PWA operativa de Grupo La Quillotana — choferes y terreno",
+    description: "Gestión integral de operaciones — Grupo La Quillotana",
+    // Mantener identidad y arranque offline ya instalado hasta validar arranque
+    // frío del selector en iOS. Login y menú navegan siempre a /modulos.
     id: "/despachos",
     start_url: "/despachos",
     scope: "/",

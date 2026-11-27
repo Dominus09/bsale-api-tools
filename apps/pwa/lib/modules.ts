@@ -13,7 +13,7 @@ export type PwaModuleDef = {
   profile: string
   title: string
   description: string
-  /** Ruta al entrar (solo si status === ready) */
+  /** Ruta operativa o información de estado de un módulo autorizado. */
   href: string
   status: PwaModuleStatus
   statusLabel: string
@@ -99,21 +99,10 @@ export function moduleLabel(id: PwaModuleId | null | undefined): string {
 }
 
 /**
- * Destino post-login.
- * Chofer único → /despachos (sin fricción).
- * Varios módulos o sin chofer ready → selector.
+ * Toda sesión autenticada y con perfil operativo comienza en el selector,
+ * aunque solo exista un módulo listo. La elección es explícita.
+ * No concede permisos ni cambia el módulo activo por cuenta propia.
  */
 export function resolvePostLoginPath(profiles: string[]): string {
-  const mods = modulesForProfiles(profiles)
-  if (mods.length === 0) return "/login?denied=profile"
-  const ready = mods.filter((m) => m.status === "ready")
-  if (ready.length === 1 && ready[0].id === "choferes") {
-    setActiveModuleId("choferes")
-    return "/despachos"
-  }
-  if (mods.length === 1 && mods[0].status === "ready") {
-    setActiveModuleId(mods[0].id)
-    return mods[0].href
-  }
-  return "/modulos"
+  return hasAnyPwaModule(profiles) ? "/modulos" : "/login?denied=profile"
 }
