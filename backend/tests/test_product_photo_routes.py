@@ -11,11 +11,13 @@ from PIL import Image
 from backend.routers import product_photos as r
 from backend.routers import product_pallets as pallets
 from backend.services import product_photo_service as p
+from backend.services import system_feature_controls as controls
 
 
 @pytest.fixture
 def app_client(monkeypatch):
     app = FastAPI()
+    monkeypatch.setattr(controls, "enabled", lambda key, **_: controls.env_default(key))
     app.include_router(r.router)
     app.include_router(pallets.router)
     app.dependency_overrides[r.require_management_access] = lambda: {"id": 42}

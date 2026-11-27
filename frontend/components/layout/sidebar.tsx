@@ -274,7 +274,10 @@ function buildNavSectionsForRole(
           icon: Users,
         })
       }
-      adminItems.push(...section.items)
+      if (authMeStaff?.is_owner === true) {
+        adminItems.push({ href: "/admin/configuracion-sistema", label: "Configuración del sistema", icon: Settings })
+      }
+      adminItems.push(...section.items.filter(item => item.label !== "Configuración"))
       if (diagnostics) {
         adminItems.push({
           href: "/admin/diagnostico",

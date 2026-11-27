@@ -15,6 +15,7 @@ from backend.routers import product_photos as routes
 from backend.routers import products_master as pm
 from backend.services.catalog_photo_inventory import PhotoInventory
 from backend.services import product_master_admin_service as admin
+from backend.services import system_feature_controls as controls
 
 pytestmark = pytest.mark.skipif(
     os.getenv("LQ_PRODUCT_MASTER_PG_QA") != "1",
@@ -99,6 +100,7 @@ def database():
 @pytest.fixture
 def services(database, monkeypatch):
     monkeypatch.setattr(admin, "get_connection", database)
+    monkeypatch.setattr(controls, "get_connection", database)
     monkeypatch.setattr(routes, "get_connection", database)
     monkeypatch.setenv("PRODUCT_MASTER_PALLET_WRITES_ENABLED", "1")
     monkeypatch.setenv("CATALOG_SOURCE_PUBLIC", "legacy")
