@@ -1,0 +1,106 @@
+name: Inteligencia de Bodega QA
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/main.py'
+      - 'backend/routers/warehouse*.py'
+      - 'backend/services/warehouse/**'
+      - 'backend/sql/warehouse/**'
+      - 'backend/tests/test_warehouse*.py'
+      - 'frontend/app/(dashboard)/inteligencia-bodega/**'
+      - 'frontend/components/warehouse/**'
+      - 'frontend/components/layout/sidebar.tsx'
+      - 'frontend/lib/warehouse/**'
+      - 'frontend/package*.json'
+      - 'requirements.txt'
+      - '.github/workflows/warehouse-qa.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backend-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt pytest httpx
+      - name: Warehouse unit regression
+        run: python -m pytest -q backend/tests/test_warehouse*unit.py
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lq_qa
+          POSTGRES_PASSWORD: qa_local_ci_only
+          POSTGRES_DB: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U lq_qa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      WAREHOUSE_TEST_DSN: 'host=127.0.0.1 port=55432 dbname=warehouse_layout_test_ci user=lq_qa password=qa_local_ci_only'
+      WAREHOUSE_PALLETS_TEST_DSN: 'host=127.0.0.1 port=55432 dbname=warehouse_pallets_test_ci user=lq_qa password=qa_local_ci_only'
+      WAREHOUSE_PLANNER_TEST_DSN: 'host=127.0.0.1 port=55432 dbname=warehouse_pallets_test_planner_ci user=lq_qa password=qa_local_ci_only'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt pytest httpx
+      - name: Create three disposable databases
+        run: |
+          python - <<'PY'
+          import psycopg2
+          conn = psycopg2.connect(host="127.0.0.1", port=55432, dbname="postgres", user="lq_qa", password="qa_local_ci_only")
+          conn.autocommit = True
+          with conn.cursor() as cur:
+              for db in ("warehouse_layout_test_ci", "warehouse_pallets_test_ci", "warehouse_pallets_test_planner_ci"):
+                  cur.execute("CREATE DATABASE " + db)
+          conn.close()
+          PY
+      - name: Planner migrations and persistence
+        run: python -m pytest -q backend/tests/test_warehouse_storage_planner_isolated_pg.py
+      - name: Existing warehouse PostgreSQL regression
+        run: |
+          for file in backend/tests/test_warehouse_layout_isolated_pg.py backend/tests/test_warehouse_publish_isolated_pg.py backend/tests/test_warehouse_006_fix_isolated_pg.py backend/tests/test_warehouse_007_fix_isolated_pg.py backend/tests/test_warehouse_pallet_register_isolated_pg.py; do
+            python -m pytest -q "$file" || exit 1
+          done
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      NODE_OPTIONS: '--max-old-space-size=4096'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Warehouse frontend tests including real PDF generation
+        run: node --experimental-strip-types --test lib/warehouse/*.test.mjs
+      - name: Planner ESLint
+        run: npx eslint components/warehouse/StoragePlanner*.tsx lib/warehouse/storagePlanner*.ts 'app/(dashboard)/inteligencia-bodega/planificador/page.tsx'
+      - name: ERP build
+        run: npm run build

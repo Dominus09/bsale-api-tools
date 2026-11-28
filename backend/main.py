@@ -23,6 +23,7 @@ from backend.routers import alerts
 from backend.routers import analytics_v2
 from backend.routers import gondolas
 from backend.routers import warehouse
+from backend.routers import warehouse_storage_planner
 from backend.routers import companies
 from backend.routers import dashboard
 from backend.routers import distribuidora
@@ -160,6 +161,7 @@ app.include_router(analytics_v2.router)
 app.include_router(gondolas.router)
 # Inteligencia de Bodega (layout físico; schema warehouse; sin stock Bsale).
 app.include_router(warehouse.router)
+app.include_router(warehouse_storage_planner.router)
 
 # --- Distribuidora ---
 app.include_router(distribuidora.router)

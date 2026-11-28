@@ -168,6 +168,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
         icon: Warehouse,
       },
       { href: "/inteligencia-bodega/pallets", label: "Registro de pallets", icon: Package },
+      { href: "/inteligencia-bodega/planificador", label: "Planificador de almacenamiento", icon: Warehouse },
     ],
   },
   {
