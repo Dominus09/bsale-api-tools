@@ -40,7 +40,7 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: lq_qa
-          POSTGRES_PASSWORD: qa_only_not_production
+          POSTGRES_PASSWORD: qa_local_ci_only
           POSTGRES_DB: postgres
         ports:
           - 55432:5432
@@ -50,9 +50,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      WAREHOUSE_TEST_DSN: 'host=127.0.0.1 port=55432 dbname=warehouse_layout_test_ci user=lq_qa password=qa_only_not_production'
-      WAREHOUSE_PALLETS_TEST_DSN: 'host=127.0.0.1 port=55432 dbname=warehouse_pallets_test_ci user=lq_qa password=qa_only_not_production'
-      WAREHOUSE_PLANNER_TEST_DSN: 'host=127.0.0.1 port=55432 dbname=warehouse_pallets_test_planner_ci user=lq_qa password=qa_only_not_production'
+      WAREHOUSE_TEST_DSN: 'host=127.0.0.1 port=55432 dbname=warehouse_layout_test_ci user=lq_qa password=qa_local_ci_only'
+      WAREHOUSE_PALLETS_TEST_DSN: 'host=127.0.0.1 port=55432 dbname=warehouse_pallets_test_ci user=lq_qa password=qa_local_ci_only'
+      WAREHOUSE_PLANNER_TEST_DSN: 'host=127.0.0.1 port=55432 dbname=warehouse_pallets_test_planner_ci user=lq_qa password=qa_local_ci_only'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,7 +65,7 @@ jobs:
         run: |
           python - <<'PY'
           import psycopg2
-          conn = psycopg2.connect(host="127.0.0.1", port=55432, dbname="postgres", user="lq_qa", password="qa_only_not_production")
+          conn = psycopg2.connect(host="127.0.0.1", port=55432, dbname="postgres", user="lq_qa", password="qa_local_ci_only")
           conn.autocommit = True
           with conn.cursor() as cur:
               for db in ("warehouse_layout_test_ci", "warehouse_pallets_test_ci", "warehouse_pallets_test_planner_ci"):
@@ -99,7 +99,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci --no-audit --no-fund
       - name: Warehouse frontend tests including real PDF generation
-        run: node --experimental-strip-types --experimental-specifier-resolution=node --test lib/warehouse/*.test.mjs
+        run: node --experimental-strip-types --test lib/warehouse/*.test.mjs
       - name: Planner ESLint
         run: npx eslint components/warehouse/StoragePlanner*.tsx lib/warehouse/storagePlanner*.ts 'app/(dashboard)/inteligencia-bodega/planificador/page.tsx'
       - name: ERP build
