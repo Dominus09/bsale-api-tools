@@ -23,6 +23,33 @@ export function compactFormat(p?:PalletProduct){
 }
 export const groupKey = (v:{variant_id:number;kind:Kind}) => v.variant_id+":"+v.kind
 export const slotKey = (p:{floor_id:number;position_id:number;level:number}) => p.floor_id+":"+p.position_id+":"+p.level
+/** Plan-only base identity: never combine equal position IDs from different floors. */
+export const baseKey = (p:{floor_id:number;position_id:number}) => p.floor_id+":"+p.position_id
+export function baseAssignments(slots:readonly Slot[]):Map<string,Slot[]>{
+  const bases=new Map<string,Slot[]>()
+  for(const slot of slots){
+    const key=baseKey(slot)
+    const list=bases.get(key)??[]
+    list.push(slot);bases.set(key,list)
+  }
+  for(const list of bases.values())list.sort((a,b)=>a.level-b.level)
+  return bases
+}
+export function summarizeAssignments(slots:readonly Slot[]){
+  const bases=baseAssignments(slots)
+  const n1=slots.filter(s=>s.level===1).length
+  const n2=slots.filter(s=>s.level===2).length
+  const doubleBases=[...bases.values()].filter(s=>s.some(p=>p.level===1)&&s.some(p=>p.level===2)).length
+  return {pallets:slots.length,bases:bases.size,n1,n2,doubleBases,singleBases:bases.size-doubleBases}
+}
+export const baseBadge = (slots:readonly Slot[]) => "x"+slots.length+" PAL"
+export function describeLevel(slots:readonly Slot[],level:number,products:PlanDocument["products"]){
+  const slot=slots.find(s=>s.level===level)
+  if(!slot)return "N"+level+": sin asignar"
+  const product=products.find(p=>p.variant_id===slot.variant_id)
+  return "N"+level+": "+productLabel(product)+" · "+(product?.product_type??"Tipo pendiente")+" · "+kindLabel(slot.kind)+" · "+methodLabel(slot.method)
+}
+
 export const palette = ["#C6A465","#88B2D6","#83C0A0","#E2A5AA","#B3A1D2","#91C7CB","#D9BA8D","#A7AEE3","#C1C985","#E3AE82","#9DBAD2","#C5B0C9"]
 export const productColor = (id:number) => palette[Math.abs(id)%palette.length]
 export function groups(doc:PlanDocument):Group[]{
