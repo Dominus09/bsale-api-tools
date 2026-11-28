@@ -1,0 +1,45 @@
+name: Public catalog performance QA
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/routers/catalog.py'
+      - 'backend/tests/test_catalog*.py'
+      - 'backend/utils/sale_quantity.py'
+      - '.github/workflows/catalog-performance-qa.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-pg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LQ_CATALOG_PG_QA: '1'
+      CATALOG_SOURCE_PUBLIC: 'legacy'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: lq_qa
+          POSTGRES_PASSWORD: qa_only_not_production
+          POSTGRES_DB: lq_catalog_qa
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U lq_qa -d lq_catalog_qa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements.txt pytest httpx
+      - name: PostgreSQL parity and timings
+        run: python -m pytest -q -s backend/tests/test_catalog_performance_pg.py
+      - name: Catalog, price, sale-rule and source contracts
+        run: python -m pytest -q backend/tests/test_catalog.py backend/tests/test_catalog_price_lists.py backend/tests/test_catalog_v2_source_flag_and_contract.py backend/tests/test_catalog_v2_projection.py backend/tests/test_sale_quantity.py backend/tests/test_order_pricing.py

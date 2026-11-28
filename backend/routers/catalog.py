@@ -1,5 +1,6 @@
 from decimal import Decimal
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -17,6 +18,19 @@ _DISCONTINUED_PRICE_LISTS = frozenset({"comoditi", "14"})
 _CATALOG_COMPANY_ID = 3
 
 _CATALOG_QUERY = """
+WITH pm_by_barcode AS (
+    SELECT DISTINCT ON (BTRIM(barcode))
+        BTRIM(barcode) AS barcode_key, id, units_per_box, sale_type, quantity_step
+    FROM bsale.products_master
+    WHERE NULLIF(BTRIM(barcode), '') IS NOT NULL
+    ORDER BY BTRIM(barcode), updated_at DESC NULLS LAST, id DESC
+), pm_by_variant AS (
+    SELECT DISTINCT ON (variant_id)
+        variant_id, units_per_box, sale_type, quantity_step
+    FROM bsale.products_master
+    WHERE variant_id IS NOT NULL
+    ORDER BY variant_id, updated_at DESC NULLS LAST, id DESC
+)
 SELECT
     cv.variant_id AS id,
     TRIM(cv.product || ' ' || COALESCE(cv.variant, '')) AS name,
@@ -33,37 +47,21 @@ SELECT
     v.description AS variant_description,
     COALESCE(
         NULLIF(v.units_per_box, 0),
-        NULLIF(pm.units_per_box, 0),
+        NULLIF(COALESCE(pm_bar.units_per_box, pm_var.units_per_box), 0),
         (regexp_match(UPPER(COALESCE(v.description, '')),
                       'SEC[[:space:]]*([0-9]+)'))[1]::integer
     ) AS units_per_box,
-    pm.sale_type AS pm_sale_type,
-    pm.quantity_step AS pm_quantity_step
+    COALESCE(pm_bar.sale_type, pm_var.sale_type) AS pm_sale_type,
+    COALESCE(pm_bar.quantity_step, pm_var.quantity_step) AS pm_quantity_step
 FROM bsale.catalog_view cv
 LEFT JOIN bsale.variants v
     ON v.company_id = %s
    AND v.bsale_id = cv.variant_id
-LEFT JOIN LATERAL (
-    SELECT pm_inner.*
-    FROM bsale.products_master pm_inner
-    WHERE (
-        NULLIF(BTRIM(cv.bar_code), '') IS NOT NULL
-        AND BTRIM(pm_inner.barcode) = BTRIM(cv.bar_code)
-    )
-    OR pm_inner.variant_id = cv.variant_id
-    ORDER BY
-        CASE
-            WHEN NULLIF(BTRIM(cv.bar_code), '') IS NOT NULL
-             AND BTRIM(pm_inner.barcode) = BTRIM(cv.bar_code)
-                THEN 0
-            WHEN pm_inner.variant_id = cv.variant_id
-                THEN 1
-            ELSE 2
-        END,
-        pm_inner.updated_at DESC NULLS LAST,
-        pm_inner.id DESC
-    LIMIT 1
-) pm ON TRUE
+LEFT JOIN pm_by_barcode pm_bar
+    ON pm_bar.barcode_key = NULLIF(BTRIM(cv.bar_code), '')
+LEFT JOIN pm_by_variant pm_var
+    ON pm_bar.id IS NULL
+   AND pm_var.variant_id = cv.variant_id
 ORDER BY
     cv.product_type ASC,
     cv.product ASC,
@@ -151,11 +149,12 @@ def get_catalog(
 
     if in_stock is True:
         query = query.replace(
-            ") pm ON TRUE\nORDER BY",
-            ") pm ON TRUE\nWHERE COALESCE(cv.stock, 0) > 0\nORDER BY",
+            "AND pm_var.variant_id = cv.variant_id\nORDER BY",
+            "AND pm_var.variant_id = cv.variant_id\nWHERE COALESCE(cv.stock, 0) > 0\nORDER BY",
             1,
         )
 
+    started = time.perf_counter()
     conn = get_connection()
 
     try:
@@ -169,6 +168,8 @@ def get_catalog(
     finally:
         conn.close()
 
+    db_ms = (time.perf_counter() - started) * 1000
+    map_started = time.perf_counter()
     out = []
 
     for r in rows:
@@ -216,4 +217,8 @@ def get_catalog(
             }
         )
 
+    logger.info(
+        "catalog_source=legacy consumer=public_web price_list=%s in_stock=%s count=%s db_ms=%.1f map_ms=%.1f",
+        key, in_stock is True, len(out), db_ms, (time.perf_counter() - map_started) * 1000,
+    )
     return out
