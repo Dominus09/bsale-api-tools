@@ -21,6 +21,7 @@ from urllib.parse import urljoin, urlsplit
 import requests
 from PIL import Image, ImageOps, UnidentifiedImageError
 from fastapi import HTTPException
+from backend.services import system_feature_controls as controls
 
 REPO = "Dominus09/cat-quillotana"
 BRANCH = "main"
@@ -36,14 +37,8 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 _PLACEHOLDER = re.compile(r"(?:icon\.svg|logo-seal\.png|placeholder(?:2)?\.(?:png|webp)|(?:sin[-_]?foto|no[-_]?image|no[-_]?foto|default|generico|imagen[-_]?default|sin[-_]?imagen)\.(?:png|jpg|jpeg|webp|svg))", re.IGNORECASE)
 
 
-def flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def writes_enabled() -> bool:
-    return bool(flag("CATALOG_PHOTO_WRITES_ENABLED")
-                and os.getenv("CATALOG_PHOTO_GITHUB_TOKEN", "").strip()
-                and len(os.getenv("CATALOG_PHOTO_PREVIEW_SECRET", "")) >= 32)
+    return controls.enabled("catalog_photo_writes") and controls.photo_credentials_ready()
 
 
 def safe_barcode(value: str) -> str:
@@ -71,7 +66,7 @@ def digest(data: bytes) -> str:
 
 
 def ai_enabled() -> bool:
-    return flag("CATALOG_PHOTO_AI_ENABLED")
+    return controls.enabled("catalog_photo_ai") and controls.ai_model_ready()
 
 
 @lru_cache(maxsize=1)

@@ -6,6 +6,14 @@ from fastapi import HTTPException
 from PIL import Image
 
 from backend.services import product_photo_service as p
+from backend.services import system_feature_controls as controls
+
+
+@pytest.fixture(autouse=True)
+def environment_defaults_without_database(monkeypatch):
+    # This is image/GitHub unit QA. DB gates are covered in PostgreSQL tests.
+    monkeypatch.setattr(controls, "enabled", lambda key, **_: controls.env_default(key))
+
 
 
 def image_bytes(fmt="PNG"):

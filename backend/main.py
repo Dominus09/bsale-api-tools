@@ -62,7 +62,7 @@ from backend.routers import price_lists
 from backend.routers import promotions
 from backend.routers import products
 from backend.routers import products_master
-from backend.routers import product_photos, product_pallets
+from backend.routers import product_photos, product_pallets, system_feature_controls
 from backend.routers import purchases
 from backend.routers import suppliers
 from backend.routers import summary
@@ -150,6 +150,7 @@ app.include_router(products.router)
 app.include_router(products_master.router)
 app.include_router(product_photos.router)
 app.include_router(product_pallets.router)
+app.include_router(system_feature_controls.router)
 app.include_router(suppliers.router)
 app.include_router(purchases.router)
 app.include_router(uploads.router)

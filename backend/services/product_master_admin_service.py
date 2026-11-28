@@ -1,14 +1,10 @@
 """New ERP administrative data; schema readiness is checked before any mutation."""
 from __future__ import annotations
 
-import os
 import uuid
 from fastapi import HTTPException
 from backend.db import get_connection
-
-
-def flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in {"1", "true", "on", "yes"}
+from backend.services import system_feature_controls as controls
 
 
 def actor_id(user: dict) -> int:
@@ -53,9 +49,13 @@ def pallet_data(ids: list[int]) -> dict:
                 SELECT id, boxes_per_pallet, units_per_box, weight_box_kg
                 FROM bsale.products_master WHERE id = ANY(%s)
             """, (ids,))
+            # Materialize the product result before the feature lookup executes
+            # its own SQL on this cursor. Otherwise that query replaces the rows.
+            items = [_pallet_row(row) for row in cur.fetchall()]
+            writes_enabled = controls.enabled("product_master_pallet_writes", cur=cur)
             return {"schema_ready": True,
-                    "writes_enabled": flag("PRODUCT_MASTER_PALLET_WRITES_ENABLED"),
-                    "items": [_pallet_row(row) for row in cur.fetchall()]}
+                    "writes_enabled": writes_enabled,
+                    "items": items}
     finally:
         conn.close()
 
@@ -84,7 +84,7 @@ def pallet_stats() -> dict:
 
 
 def set_pallet_boxes(row_id: int, value: int | None, actor: int) -> dict:
-    if not flag("PRODUCT_MASTER_PALLET_WRITES_ENABLED"):
+    if not controls.enabled("product_master_pallet_writes"):
         raise HTTPException(503, "La edición de cajas por pallet está deshabilitada.")
     conn = get_connection()
     try:
