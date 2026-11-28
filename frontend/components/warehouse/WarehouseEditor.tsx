@@ -750,7 +750,7 @@ export function WarehouseEditor() {
   return (
     <div
       className={cn(
-        "flex flex-col gap-2",
+        "flex min-w-0 w-full max-w-full flex-col gap-2",
         wide ? "fixed inset-0 z-40 bg-card p-3" : "h-[calc(100vh-7rem)]",
       )}
     >
@@ -760,6 +760,7 @@ export function WarehouseEditor() {
             value={facilityId != null ? String(facilityId) : undefined}
             onValueChange={(v) => {
               if (dirty && !confirm("Hay cambios sin guardar. ¿Continuar?")) return
+              setViewOrientationDeg(0)
               setFacilityId(Number(v))
             }}
           >
@@ -887,10 +888,12 @@ export function WarehouseEditor() {
       </div>
 
       <div className="rounded-md border border-lq-warning/30 bg-lq-warning/10 px-3 py-2 text-xs text-lq-warning">
-        Plano provisional seed BC (pending_validation). Oficina, escalera y portón son referencias — no
-        es un plano arquitectónico definitivo. Origen métrico SW (+X largo hacia el fondo, +Y ancho
-        hacia DER). Vista canónica longitudinal: entrada abajo, IZ izquierda.
-        Publicar no certifica seguridad ni autoriza apilamiento.
+        {facility?.code === "BL"
+          ? "Bodega de Lata · Plano provisional: 17,60 × 6,00 m; 5,50 m útiles de referencia. Filas 01–12 de izquierda a derecha desde el patio. A = frente, E = fondo. BL01A: espacio muerto. BL01E: retirar mueble y verificar antes de ocupar. Postes, sensores y accesos por confirmar."
+          : facility?.code === "BC"
+            ? "Bodega Central · Plano de referencia. Oficina, escalera y portón requieren verificación. Origen métrico: +X hacia el fondo, +Y hacia DER. Vista canónica: entrada abajo, IZ izquierda."
+            : "Plano de referencia: confirmar dimensiones, obstáculos y accesos en terreno."}
+        {" "}Publicar no certifica seguridad ni autoriza apilamiento.
       </div>
 
       {error ? (
@@ -912,7 +915,7 @@ export function WarehouseEditor() {
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 gap-2">
+      <div className="flex min-h-0 min-w-0 flex-1 gap-2">
         <aside className="flex w-12 shrink-0 flex-col items-center gap-1 rounded-lg border border-border bg-card py-2 shadow-sm">
           <ToolBtn label="Seleccionar" active={tool === "select"} onClick={() => setTool("select")}>
             <MousePointer2 className="h-4 w-4" />
@@ -998,6 +1001,7 @@ export function WarehouseEditor() {
 
         <main className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-border bg-card shadow-sm">
           <WarehouseCanvas
+            key={floorId ?? "no-floor"}
             elements={visibleElements}
             floorLengthM={floorLengthM}
             floorWidthM={floorWidthM}

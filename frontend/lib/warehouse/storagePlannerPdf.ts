@@ -84,7 +84,7 @@ export function storagePlanPdf(name:string,version:number,doc:PlanDocument,maps:
       pdf.text(bc?"FONDO IZQUIERDA · ENTRADA DERECHA":"FONDO ARRIBA · PATIO ABAJO · FILA 1 IZQUIERDA",14,bottom+7)
       pdf.text("x1 PAL / x2 PAL: total de la base (N1 + N2). No sumar distintivos entre los planos de niveles.",14,bottom+13)
       pdf.text("Blanco: sin asignar en el nivel visible, no necesariamente libre | Rosa: restringido | Ver detalle de productos y métodos en listado.",14,bottom+19)
-      if(!bc)pdf.text("BL provisional: confirmar postes, banda de sensores, acceso y dimensiones en terreno antes de ejecutar.",14,bottom+25)
+      if(!bc)pdf.text("BL provisional: A frente, E fondo. BL01A restringida; retirar mueble de BL01E y verificar accesos antes de ocupar.",14,bottom+25)
       if(bc)pdf.text("IZ: doble altura prevista para completos compatibles. El distintivo indica asignación, no autorización de apilamiento.",14,bottom+25)
     }
   }

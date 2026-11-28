@@ -115,6 +115,8 @@ function priority(item: CanvasLabelInput): number {
  * No modifica el código físico. La selección/zoom muestran el código completo.
  */
 export function compactPositionCode(code: string): string {
+  // BL already has short unique location codes; never collapse different rows.
+  if (/^BL(?:0[1-9]|1[0-2])[A-E]$/.test(code)) return code
   const paired = code.match(/-(\d+)-(D|A)$/i)
   if (paired) return paired[1] + paired[2].toUpperCase()
   const numbered = code.match(/-(\d+)$/)

@@ -38,7 +38,7 @@ export function StoragePlannerMap({maps,doc,chosen,onAssign,onRemove,onSuggest}:
       <select aria-label="Nivel" className={selectClass} value={level} onChange={e=>{setLevel(Number(e.target.value));setSelected([])}}><option value={1}>Nivel 1</option><option value={2}>Nivel 2 (simulación)</option></select>
       <select aria-label="Sistema" className={selectClass} value={method} onChange={e=>setMethod(e.target.value as Method)}><option value="floor">Piso</option><option value="direct">Directo simulado</option><option value="rack">Rack proyectado</option></select>
     </div>
-    <p className="text-xs text-muted-foreground">{bc?"BC: fondo izquierda, entrada derecha.":"BL: fila 1 izquierda, patio abajo; geometría provisional."} Nivel 2 no autorizado por el sistema. Fechas individuales pendientes.</p>
+    <p className="text-xs text-muted-foreground">{bc?"BC: fondo izquierda, entrada derecha.":"BL: filas 01–12 de izquierda a derecha; A frente, E fondo. BL01A restringida; BL01E requiere retirar mueble. Geometría provisional."} Nivel 2 no autorizado por el sistema. Fechas individuales pendientes.</p>
     {bc&&sectorName==="IZ"&&<p className="rounded-md border bg-muted/40 px-3 py-2 text-xs"><strong>BC / IZ · Doble altura prevista (x2)</strong> para pallets completos compatibles. El distintivo de cada base refleja lo efectivamente asignado, no su capacidad. Apilamiento sujeto a validación.</p>}
     <div className="rounded-md border bg-muted/30 p-3" aria-label="Resumen de asignaciones de ambos niveles">
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs"><strong>{sectorName??map.bundle.facility?.name} · Ambos niveles</strong><span className="text-muted-foreground">Mostrando N{level} · distintivos de base N1 + N2</span></div>
@@ -58,7 +58,7 @@ export function StoragePlannerMap({maps,doc,chosen,onAssign,onRemove,onSuggest}:
           const base=allBases.get(baseKey({floor_id:fid,position_id:e.physical.id}))??[]
           const badgeWidth=Math.min(g.w-6,44)
           const badgeY=g.y+g.h-18
-          const title=e.physical.code+" | "+(base.length?baseBadge(base)+" (total de la base) | "+describeLevel(base,1,doc.products)+" | "+describeLevel(base,2,doc.products):"Sin asignar en este escenario")
+          const title=e.physical.code+(p?.physical_meta_snap?.requires_furniture_removal===true?" | Retirar mueble y verificar antes de ocupar":"")+" | "+(base.length?baseBadge(base)+" (total de la base) | "+describeLevel(base,1,doc.products)+" | "+describeLevel(base,2,doc.products):"Sin asignar en este escenario")
           return <g key={e.physical.id} style={{cursor:selectable?"pointer":"default",opacity:typ==="position"&&area&&!eligible.has(e.physical.id)?0.5:1}} onClick={selectable?()=>toggle(e.physical.id):undefined} role={selectable?"button":undefined} tabIndex={selectable?0:undefined} onKeyDown={selectable?ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();toggle(e.physical.id)}}:undefined} aria-label={selectable?title:undefined}>
             <title>{title}</title><polygon points={g.points.map(p=>p.x+","+p.y).join(" ")} fill={fill} stroke={sel?"#B91C1C":"#84909E"} strokeWidth={sel?3:typ==="position"?1:0.7}/>
             {typ==="position"&&<>

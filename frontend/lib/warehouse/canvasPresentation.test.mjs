@@ -179,3 +179,10 @@ test("at closer zoom, compact positions show their full codes",()=>{
     assert.equal(label.callout,false)
   }
 })
+
+
+test("BL codes stay short and distinct in compact view",()=>{
+  const codes=Array.from({length:12},(_,i)=>Array.from("ABCDE",d=>"BL"+String(i+1).padStart(2,"0")+d)).flat()
+  assert.equal(new Set(codes.map(compactPositionCode)).size,60)
+  for(const code of codes)assert.equal(compactPositionCode(code),code)
+})
