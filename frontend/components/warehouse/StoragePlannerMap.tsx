@@ -1,6 +1,6 @@
 "use client"
 import {Button} from "@/components/ui/button"
-import {type PlanMap,type PlanDocument,type Method,type Group,orderedPositions,restrictedPosition,mapViewport,projectedGeometry,sortedElements,structureFill,productColor,productLabel,kindLabel,methodLabel} from "@/lib/warehouse/storagePlanner"
+import {type PlanMap,type PlanDocument,type Method,type Group,orderedPositions,restrictedPosition,mapViewport,projectedGeometry,sortedElements,structureFill,compactFormat,productColor,productLabel,kindLabel,methodLabel} from "@/lib/warehouse/storagePlanner"
 import {useState} from "react"
 
 type Props={maps:PlanMap[];doc:PlanDocument;chosen:Group|undefined;onAssign:(map:PlanMap,ids:number[],level:number,method:Method)=>void;onRemove:(map:PlanMap,ids:number[],level:number)=>void;onSuggest:(map:PlanMap,area:string,method:Method)=>void}
@@ -44,7 +44,7 @@ export function StoragePlannerMap({maps,doc,chosen,onAssign,onRemove,onSuggest}:
           const title=e.physical.code+(slot?" | "+productLabel(prod)+" | "+kindLabel(slot.kind)+" | "+methodLabel(slot.method):" | Sin asignar en este escenario")
           return <g key={e.physical.id} style={{cursor:selectable?"pointer":"default",opacity:typ==="position"&&area&&!eligible.has(e.physical.id)?0.5:1}} onClick={selectable?()=>toggle(e.physical.id):undefined} role={selectable?"button":undefined} tabIndex={selectable?0:undefined} onKeyDown={selectable?ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();toggle(e.physical.id)}}:undefined} aria-label={selectable?title:undefined}>
             <title>{title}</title><polygon points={g.points.map(p=>p.x+","+p.y).join(" ")} fill={fill} stroke={sel?"#B91C1C":"#84909E"} strokeWidth={sel?3:typ==="position"?1:0.7}/>
-            {typ==="position"&&<><text x={g.center.x} y={g.center.y-4} fontSize={Math.min(11,g.w/Math.max(4,e.physical.code.length)*1.6)} fontWeight="bold" textAnchor="middle" fill="#182432">{e.physical.code}</text>{slot&&<><text x={g.center.x} y={g.center.y+9} fontSize="8" textAnchor="middle" fill="#182432">{productLabel(prod).slice(0,Math.max(6,Math.floor(g.w/4.4)))}</text><text x={g.center.x} y={g.center.y+19} fontSize="8" textAnchor="middle" fill="#182432">{slot.kind==="partial"?"M":"C"} · {slot.method==="rack"?"R":slot.method==="direct"?"D":"P"}</text></>}</>}
+            {typ==="position"&&<><text x={g.center.x} y={g.center.y-12} fontSize={Math.min(11,g.w/Math.max(4,e.physical.code.length)*1.6)} fontWeight="bold" textAnchor="middle" fill="#182432">{e.physical.code}</text>{slot&&<><text x={g.center.x} y={g.center.y} fontSize="8" textAnchor="middle" fill="#182432">{(prod?.product_name??"SKU").slice(0,Math.max(6,Math.floor(g.w/4.4)))}</text><text x={g.center.x} y={g.center.y+10} fontSize="8" textAnchor="middle" fill="#182432">{compactFormat(prod).slice(0,Math.max(6,Math.floor(g.w/4.4)))}</text><text x={g.center.x} y={g.center.y+20} fontSize="8" textAnchor="middle" fill="#182432">{slot.kind==="partial"?"M":"C"} · {slot.method==="rack"?"R":slot.method==="direct"?"D":"P"}</text></>}</>}
             {!["facility_boundary","sector","aisle","position"].includes(typ)&&g.w>28&&g.h>18&&<text x={g.center.x} y={g.center.y} fontSize="9" textAnchor="middle" fill="#394655">{e.physical.code.slice(0,18)}</text>}
           </g>
         })}

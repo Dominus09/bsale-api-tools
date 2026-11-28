@@ -34,11 +34,13 @@ export function StoragePlanner(){
   const [version,setVersion]=useState(0)
   const [dirty,setDirty]=useState(false)
   const [busy,setBusy]=useState(false)
+  const [countBusy,setCountBusy]=useState(false)
   const [loading,setLoading]=useState(true)
   const [error,setError]=useState("")
   const [notice,setNotice]=useState("")
   const [selectedGroup,setSelectedGroup]=useState("")
   const catalogFloor=maps.find(m=>m.locations.floor.facility_code==="BC")?.locations.floor.floor_id??maps[0]?.locations.floor.floor_id
+  const origins=maps.flatMap(m=>m.bundle.elements.filter(e=>["sector","aisle"].includes(e.physical.element_type)&&m.bundle.elements.some(x=>x.physical.parent_id===e.physical.id&&x.physical.element_type==="position")).map(e=>m.locations.floor.facility_code+" / "+e.physical.code.replace(/^BL-/,"")))
   const consolidated=useMemo(()=>groups(doc),[doc])
   const stale=doc.slots.filter(s=>!isCurrent(s,maps))
   const total=consolidated.reduce((n,g)=>n+g.total,0)
@@ -97,7 +99,7 @@ export function StoragePlanner(){
     if(dirty||!version)throw Error("Guarde el escenario antes de generar el PDF.")
     if(!maps.some(m=>m.locations.floor.facility_code==="BL"))throw Error("Falta el plano de Bodega de Lata.")
     const fresh=await loadMaps()
-    if(doc.slots.some(s=>!isCurrent(s,fresh)))throw Error("Cambió el plano. Actualice y revise el escenario.")
+    if(doc.slots.some(s=>!isCurrent(s,fresh))){setMaps(fresh);throw Error("Cambió el plano. Revise el escenario.")}
     const {storagePlanPdf}=await import("@/lib/warehouse/storagePlannerPdf")
     storagePlanPdf(name,version,doc,fresh).save("Quillotana-mapa-objetivo-v"+version+".pdf")
   })
@@ -107,18 +109,18 @@ export function StoragePlanner(){
     {error&&<div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
     {notice&&<div role="status" className="rounded-lg border bg-muted p-3 text-sm">{notice}</div>}
     {!maps.length&&<Button variant="outline" onClick={()=>window.location.reload()}>Recargar planos y escenarios</Button>}
-    <fieldset disabled={busy||!maps.length} className="space-y-4 disabled:opacity-70">
+    <fieldset disabled={busy||countBusy||!maps.length} className="space-y-4 disabled:opacity-70">
       <section className="space-y-2 rounded-lg border bg-card p-3">
         <div className="flex flex-wrap items-center gap-2">
           <select aria-label="Escenario guardado" className="h-9 rounded-md border border-input bg-background px-2 text-sm" value={version?id:""} onChange={e=>void open(e.target.value)}><option value="">Escenario nuevo</option>{plans.map(p=><option key={p.id} value={p.id}>{p.name} · v{p.row_version}</option>)}</select>
           <Input aria-label="Nombre del escenario" className="max-w-xs" value={name} maxLength={120} onChange={e=>{setName(e.target.value);setDirty(true)}}/>
-          <Button variant="outline" onClick={create}>Nuevo</Button><Button onClick={()=>void save()}>{busy?"Procesando…":"Guardar escenario"}</Button><Button variant="outline" onClick={()=>void save(true)}>Guardar copia</Button><Button variant="outline" disabled={dirty||!version||!!stale.length} onClick={()=>void print()}>Descargar mapa PDF A3</Button>
+          <Button variant="outline" onClick={create}>Nuevo</Button><Button onClick={()=>void save()}>{busy?"Procesando…":"Guardar escenario"}</Button><Button variant="outline" onClick={()=>void save(true)}>Guardar copia</Button><Button variant="outline" onClick={()=>void run(async()=>setMaps(await loadMaps()))}>Actualizar planos</Button><Button variant="outline" disabled={dirty||!version||!!stale.length} onClick={()=>void print()}>Descargar mapa PDF A3</Button>
           <span className="text-xs text-muted-foreground">{dirty?"Cambios sin guardar":version?"Guardado · v"+version:"Sin guardar"}</span>
         </div>
         <div className="grid grid-cols-3 gap-2">{[["Pallets contados",total],["Asignados",doc.slots.length],["Por asignar",total-doc.slots.length]].map(([l,n])=><div className="rounded-md border p-2" key={l}><div className="text-xs text-muted-foreground">{l}</div><div className="text-xl font-semibold">{n}</div></div>)}</div>
         {!!stale.length&&<div className="space-y-2 rounded-md border border-amber-500/50 p-2 text-sm"><p>{stale.length} asignaciones usan un plano anterior. No imprimir hasta revisar.</p><Button variant="outline" onClick={()=>{if(window.confirm("¿Retirar únicamente las asignaciones obsoletas?")){const invalid=new Set(stale.map(s=>s.floor_id+":"+s.position_id));update({...doc,slots:doc.slots.filter(s=>!invalid.has(s.floor_id+":"+s.position_id))})}}}>Retirar posiciones desactualizadas</Button><Button variant="outline" onClick={()=>void run(async()=>setMaps(await loadMaps()))}>Recargar planos</Button></div>}
       </section>
-      {catalogFloor&&<StoragePlannerCount key={id} doc={doc} floorId={catalogFloor} onChange={update}/>}
+      {catalogFloor&&<StoragePlannerCount key={id} doc={doc} floorId={catalogFloor} onChange={update} onBusy={setCountBusy} origins={origins}/>}
       <section className="grid gap-3 xl:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
         <div className="space-y-2 rounded-lg border bg-card p-3"><h2 className="font-semibold">2. Consolidado por volumen</h2><p className="text-xs text-muted-foreground">Seleccione variante y condición a asignar.</p><div className="max-h-[560px] space-y-1 overflow-auto">{consolidated.map(g=><button type="button" key={groupKey(g)} onClick={()=>setSelectedGroup(groupKey(g))} className={"w-full rounded-md border p-2 text-left text-sm "+(selectedGroup===groupKey(g)?"border-primary bg-muted":"hover:bg-muted/50")}><div className="flex items-start gap-2"><span className="mt-1 h-3 w-3 shrink-0 rounded" style={{backgroundColor:productColor(g.variant_id)}}/><span className="font-medium">{productLabel(g.product)}</span></div><div className="text-xs text-muted-foreground">{g.product?.product_type??"Tipo pendiente"} · {kindLabel(g.kind)}</div><div className="mt-1 flex justify-between text-xs"><span>{g.total} contados</span><strong>{g.remaining} pendientes</strong></div></button>)}</div>{!consolidated.length&&<p className="text-sm text-muted-foreground">Ingrese productos para comenzar.</p>}</div>
         <StoragePlannerMap key={id} maps={maps} doc={doc} chosen={chosen} onAssign={assign} onRemove={remove} onSuggest={auto}/>

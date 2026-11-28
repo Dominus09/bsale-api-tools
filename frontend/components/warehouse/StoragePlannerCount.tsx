@@ -5,9 +5,9 @@ import {Input} from "@/components/ui/input"
 import {searchPalletProducts,type PalletProduct} from "@/lib/warehouse/api"
 import {type PlanDocument,changeCount,groupKey,kindLabel,productLabel} from "@/lib/warehouse/storagePlanner"
 
-type Props={doc:PlanDocument;floorId:number;onChange:(doc:PlanDocument)=>void}
+type Props={doc:PlanDocument;floorId:number;onChange:(doc:PlanDocument)=>void;onBusy:(busy:boolean)=>void;origins:string[]}
 const msg=(e:unknown)=>e instanceof Error?e.message:"Operación fallida."
-export function StoragePlannerCount({doc,floorId,onChange}:Props){
+export function StoragePlannerCount({doc,floorId,onChange,onBusy,origins}:Props){
   const [source,setSource]=useState("BC / IZ")
   const [query,setQuery]=useState("")
   const [results,setResults]=useState<PalletProduct[]>([])
@@ -29,7 +29,7 @@ export function StoragePlannerCount({doc,floorId,onChange}:Props){
     const found=doc.counts.filter(r=>r.variant_id===p.variant_id&&r.source.toLowerCase()===origin.trim().toLowerCase())
     setComplete(String(found.find(r=>r.kind==="complete")?.count??0));setPartial(String(found.find(r=>r.kind==="partial")?.count??0))
   }
-  const run=async(fn:()=>Promise<void>)=>{setBusy(true);setError("");setNotice("");try{await fn()}catch(e){setError(msg(e))}finally{setBusy(false)}}
+  const run=async(fn:()=>Promise<void>)=>{setBusy(true);onBusy(true);setError("");setNotice("");try{await fn()}catch(e){setError(msg(e))}finally{setBusy(false);onBusy(false)}}
   const search=()=>run(async()=>{
     if(query.trim().length<2)throw Error("Ingrese código o nombre.")
     const found=await searchPalletProducts(floorId,query.trim())
@@ -84,7 +84,7 @@ export function StoragePlannerCount({doc,floorId,onChange}:Props){
     <h2 className="font-semibold">1. Conteo rápido por sector</h2>
     {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
     {notice&&<p role="status" className="text-sm text-muted-foreground">{notice}</p>}
-    <label className="block text-sm">Origen (bodega / pasillo)<Input value={source} maxLength={100} onChange={e=>{setSource(e.target.value);setPicked(null);setResults([])}} placeholder="BC / IZ o BL / P2"/></label>
+    <label className="block text-sm">Origen (bodega / pasillo)<Input list="storage-plan-origins" value={source} maxLength={100} onChange={e=>{setSource(e.target.value);setPicked(null);setResults([])}} placeholder="BC / IZ o BL / P2"/><datalist id="storage-plan-origins">{origins.map(o=><option value={o} key={o}/>)}</datalist></label>
     <div className="flex flex-wrap gap-2">
       <Input ref={input} className="min-w-48 flex-1" aria-label="Código o producto" placeholder="Escanee o busque en catálogo Bsale" value={query} onChange={e=>{setQuery(e.target.value);setPicked(null);setResults([])}} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();void search()}}}/>
       <Button onClick={()=>void search()}>Buscar</Button><Button variant="outline" onClick={()=>setCamera(v=>!v)}>{camera?"Cerrar cámara":"Cámara"}</Button><Button variant="outline" onClick={()=>setShowBulk(v=>!v)}>Pegar códigos</Button>

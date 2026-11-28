@@ -1,5 +1,5 @@
 import {jsPDF} from "jspdf"
-import {type PlanDocument,type PlanMap,groups,isCurrent,kindLabel,methodLabel,mapViewport,productColor,productLabel,projectedGeometry,sortedElements,structureFill} from "./storagePlanner"
+import {type PlanDocument,type PlanMap,groups,isCurrent,restrictedPosition,compactFormat,kindLabel,methodLabel,mapViewport,productColor,productLabel,projectedGeometry,sortedElements,structureFill} from "./storagePlanner"
 
 export function storagePlanPdf(name:string,version:number,doc:PlanDocument,maps:PlanMap[]){
   if(!maps.length||doc.slots.some(s=>!isCurrent(s,maps)))throw Error("Hay referencias de plano pendientes o desactualizadas.")
@@ -37,20 +37,23 @@ export function storagePlanPdf(name:string,version:number,doc:PlanDocument,maps:
       for(const e of sortedElements(map)){
         const g=projectedGeometry(e.geometry,vp),type=e.physical.element_type
         const slot=byPosition.get(e.physical.id)
-        const fill=slot?productColor(slot.variant_id):structureFill(type)
+        const position=map.locations.items.find(p=>p.id===e.physical.id)
+        const blocked=type==="position"&&(!position||restrictedPosition(position)||(position.stack_levels_max!=null&&level>position.stack_levels_max))
+        const fill=slot?productColor(slot.variant_id):blocked?"#DFB8B8":structureFill(type)
         pdf.setFillColor(fill);pdf.setDrawColor("#84909E");pdf.setLineWidth(type==="position"?0.25:0.35)
         const p=g.points
         pdf.lines(p.slice(1).map((q,i)=>[q.x-p[i].x,q.y-p[i].y]),p[0].x,p[0].y,[1,1],"FD",true)
         if(type==="position"){
           pdf.setTextColor(25);pdf.setFont("helvetica","bold");pdf.setFontSize(8)
-          textFit(e.physical.code,g.center.x,g.center.y-1,g.w-1,8)
+          textFit(e.physical.code,g.center.x,g.center.y-3.5,g.w-1,8)
           if(slot){
             const prod=doc.products.find(x=>x.variant_id===slot.variant_id)
             pdf.setFont("helvetica","normal");pdf.setFontSize(7)
-            const short=(prod?.product_name??"SKU "+slot.variant_id)+" "+(prod?.variant_name??"")
-            textFit(short,g.center.x,g.center.y+2.2,g.w-1,7)
+            const short=prod?.product_name??"SKU "+slot.variant_id
+            textFit(short,g.center.x,g.center.y-0.2,g.w-1,7)
+            textFit(compactFormat(prod),g.center.x,g.center.y+2.8,g.w-1,7)
             pdf.setFontSize(6)
-            pdf.text((slot.kind==="partial"?"M":"C")+" · "+(slot.method==="rack"?"R":slot.method==="direct"?"D":"P"),g.center.x,g.center.y+5.1,{align:"center"})
+            pdf.text((slot.kind==="partial"?"M":"C")+" · "+(slot.method==="rack"?"R":slot.method==="direct"?"D":"P"),g.center.x,g.center.y+5.5,{align:"center"})
           }
         }else if(!["facility_boundary","sector","aisle"].includes(type)&&g.w>8&&g.h>5){
           pdf.setFont("helvetica","normal");pdf.setFontSize(7);pdf.setTextColor(45)
@@ -60,7 +63,7 @@ export function storagePlanPdf(name:string,version:number,doc:PlanDocument,maps:
       pdf.setFont("helvetica","normal");pdf.setFontSize(9);pdf.setTextColor(30)
       const bottom=35+(bc?w:l)*scale
       pdf.text(bc?"FONDO IZQUIERDA · ENTRADA DERECHA":"FONDO ARRIBA · PATIO ABAJO · FILA 1 IZQUIERDA",14,bottom+7)
-      pdf.text("C: completo | M: molido | P: piso | D: directo simulado | R: rack proyectado | Blanco: sin asignar, no necesariamente libre",14,bottom+13)
+      pdf.text("C: completo | M: molido | P: piso | D: directo simulado | R: rack proyectado | Blanco: sin asignar | Rosa: restringido | Sin asignar no significa libre",14,bottom+13)
       if(!bc)pdf.text("BL provisional: confirmar postes, banda de sensores, acceso y dimensiones en terreno antes de ejecutar.",14,bottom+19)
     }
   }

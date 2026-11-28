@@ -15,6 +15,12 @@ export const emptyPlan = (): PlanDocument => ({counts:[],slots:[],products:[]})
 export const kindLabel = (k:Kind) => k==="complete"?"Completo":"Molido"
 export const methodLabel = (m:Method) => m==="rack"?"Rack proyectado":m==="direct"?"Apilamiento directo":"Piso"
 export const productLabel = (p?:PalletProduct) => p ? [p.product_name,p.variant_name].filter(Boolean).join(" · ") : "Variante no disponible"
+export function compactFormat(p?:PalletProduct){
+  if(!p)return "SKU pendiente"
+  const s=p.variant_name??""
+  const m=s.match(/\d+(?:[.,]\d+)?\s*(?:CC|ML|LITROS?|LTS?|L|KG|GR|G)\b/i)
+  return m?.[0]??s.slice(0,16)
+}
 export const groupKey = (v:{variant_id:number;kind:Kind}) => v.variant_id+":"+v.kind
 export const slotKey = (p:{floor_id:number;position_id:number;level:number}) => p.floor_id+":"+p.position_id+":"+p.level
 export const palette = ["#C6A465","#88B2D6","#83C0A0","#E2A5AA","#B3A1D2","#91C7CB","#D9BA8D","#A7AEE3","#C1C985","#E3AE82","#9DBAD2","#C5B0C9"]
@@ -67,6 +73,7 @@ export function assignSlots(doc:PlanDocument,map:PlanMap,ids:number[],level:numb
   if(!rev)throw Error("No hay plano vigente.")
   const g=groups(doc).find(x=>x.variant_id===variantId&&x.kind===kind)
   if(!g||g.remaining<1)throw Error("No quedan pallets de esta variante/condición por asignar.")
+  if(new Set(ids).size>g.remaining)throw Error("La selección supera los pallets pendientes.")
   const floor=map.locations.floor.floor_id
   const slots=[...doc.slots]
   for(const id of [...new Set(ids)]){
@@ -79,7 +86,6 @@ export function assignSlots(doc:PlanDocument,map:PlanMap,ids:number[],level:numb
       if(!lower||lower.method!==method||method==="floor")throw Error("Nivel 2 requiere una base del mismo sistema.")
       if(method==="direct"&&(lower.kind!=="complete"||lower.variant_id!==variantId))throw Error("Apilamiento directo: misma variante y ambos completos.")
     }
-    if(slots.length-doc.slots.length>=g.remaining)break
     slots.push({floor_id:floor,revision_id:rev.id,revision_version:rev.row_version,position_id:id,level,variant_id:variantId,kind,method})
   }
   return {...doc,slots}

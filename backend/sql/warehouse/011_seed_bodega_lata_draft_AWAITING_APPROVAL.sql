@@ -7,6 +7,19 @@
 -- Banda sensores 0.50 m en frente es una HIPOTESIS, verificar en terreno.
 -- F1-01 espacio muerto y F1-05 mueble pendiente retiro: excluidos del conteo.
 BEGIN;
+SET LOCAL lock_timeout = '5s';
+DO $guard$
+BEGIN
+    IF current_database() <> 'analytics' AND NOT (
+        left(current_database(),length('warehouse_pallets_test'))='warehouse_pallets_test'
+        AND COALESCE(current_setting('warehouse.pallets_lab',true),'off')='on'
+    ) THEN
+        RAISE EXCEPTION 'Destino no autorizado para planificación warehouse: %',current_database();
+    END IF;
+    IF to_regclass('warehouse.pallets') IS NULL OR to_regclass('warehouse.layout_elements') IS NULL THEN
+        RAISE EXCEPTION 'Aplicar y verificar primero warehouse 001-009.';
+    END IF;
+END $guard$;
 DO $$
 DECLARE
     fac bigint; fl bigint; rev bigint; bnd bigint; parent bigint; pid bigint;
