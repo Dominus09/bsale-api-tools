@@ -111,3 +111,47 @@ def test_auth_guard_and_api(lab,monkeypatch):
     r=client.post("/warehouse/storage-plans",json=body(lab))
     assert r.status_code==200,r.text
     assert client.get("/warehouse/storage-plans/"+r.json()["id"]).status_code==200
+
+
+def test_bl_short_codes_preserve_ids_geometry_and_plans(lab):
+    # Run last against the original 011 fixture. The SQL itself commits atomically.
+    svc,fid,loc=lab
+    old=svc.save_plan(PlanSave(**body(lab)),"lab")
+    old_doc=old["document"]
+    old_version=loc["revision"]["row_version"]
+    old_ids={p["id"] for p in loc["items"]}
+    rev=loc["revision"]["id"]
+    with psycopg2.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT physical_element_id,x_m,y_m,width_m,depth_m,parent_physical_id_snap FROM warehouse.layout_elements WHERE revision_id=%s ORDER BY physical_element_id",(rev,))
+            geom=cur.fetchall()
+            cur.execute("SELECT count(*) FROM warehouse.pallets")
+            pallet_count=cur.fetchone()[0]
+            cur.execute("SET warehouse.pallets_lab='on'")
+            migration=(SQL/"012_bl_short_position_codes_AWAITING_APPROVAL.sql").read_text(encoding="utf-8")
+            cur.execute(migration)
+            cur.execute(migration)
+            cur.execute("SELECT physical_element_id,x_m,y_m,width_m,depth_m,parent_physical_id_snap FROM warehouse.layout_elements WHERE revision_id=%s ORDER BY physical_element_id",(rev,))
+            assert cur.fetchall()==geom
+            cur.execute("SELECT count(*) FROM warehouse.pallets")
+            assert cur.fetchone()[0]==pallet_count
+            cur.execute("SELECT code_snap,element_type_snap FROM warehouse.layout_elements WHERE revision_id=%s AND code_snap IN ('BL01A','BL01E') ORDER BY code_snap",(rev,))
+            assert cur.fetchall()==[("BL01A","unusable"),("BL01E","position")]
+            cur.execute("SELECT count(*) FROM warehouse.layout_audit WHERE floor_id=%s AND action='bl_short_codes_012'",(fid,))
+            assert cur.fetchone()[0]==1
+    current=svc.locations(fid)
+    assert current["revision"]["row_version"]==old_version+1
+    assert len(current["items"])==59
+    assert old_ids < {p["id"] for p in current["items"]}
+    expected={f"BL{i:02d}{d}" for i in range(1,13) for d in "ABCDE"}-{"BL01A"}
+    assert {p["code"] for p in current["items"]}==expected
+    assert next(p for p in current["items"] if p["code"]=="BL01E")["physical_meta_snap"]["requires_furniture_removal"] is True
+    updated=svc.get_plan(old["id"])
+    assert updated["row_version"]==old["row_version"]+1
+    assert updated["document"]["counts"]==old_doc["counts"]
+    assert updated["document"]["products"]==old_doc["products"]
+    assert updated["document"]["slots"]==[{**s,"revision_version":old_version+1} for s in old_doc["slots"]]
+    # The rebased scenario remains saveable without reassigning its pallets.
+    saved=svc.save_plan(PlanSave(id=old["id"],expected_row_version=updated["row_version"],name=updated["name"],
+                                 counts=updated["document"]["counts"],slots=updated["document"]["slots"]),"lab")
+    assert saved["row_version"]==updated["row_version"]+1
